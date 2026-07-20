@@ -217,7 +217,11 @@ const SubscriptionPlansCard = ({
     (allSubscriptions || []).forEach((sub) => {
       const planId = sub?.subscription?.plan_id;
       if (!planId) return;
-      map.set(planId, (map.get(planId) || 0) + 1);
+      const allocationCount = Math.max(
+        1,
+        Number(sub?.subscription?.allocation_count || 1),
+      );
+      map.set(planId, (map.get(planId) || 0) + allocationCount);
     });
     return map;
   }, [allSubscriptions]);

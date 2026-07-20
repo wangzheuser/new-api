@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { type TFunction } from 'i18next'
+import type { TFunction } from 'i18next'
 
 // ============================================================================
 // Duration Unit Options
@@ -38,10 +38,28 @@ export const RESET_PERIODS = [
   { value: 'custom', labelKey: 'Custom (seconds)' },
 ] as const
 
+export const REPEAT_PURCHASE_MODES = [
+  { value: 'independent', labelKey: 'Create independent subscription' },
+  { value: 'extend_time', labelKey: 'Extend validity only' },
+  { value: 'add_quota', labelKey: 'Add quota only' },
+  {
+    value: 'extend_time_add_quota',
+    labelKey: 'Extend validity and add quota',
+  },
+  { value: 'replace', labelKey: 'Replace current subscription' },
+] as const
+
 export function getDurationUnitOptions(t: TFunction) {
   return DURATION_UNITS.map((u) => ({ value: u.value, label: t(u.labelKey) }))
 }
 
 export function getResetPeriodOptions(t: TFunction) {
   return RESET_PERIODS.map((p) => ({ value: p.value, label: t(p.labelKey) }))
+}
+
+export function getRepeatPurchaseModeOptions(t: TFunction) {
+  return REPEAT_PURCHASE_MODES.map((mode) => ({
+    value: mode.value,
+    label: t(mode.labelKey),
+  }))
 }

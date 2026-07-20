@@ -64,6 +64,14 @@ const resetPeriodOptions = [
   { value: 'custom', label: '自定义(秒)' },
 ];
 
+const repeatPurchaseModeOptions = [
+  { value: 'independent', label: '独立创建订阅' },
+  { value: 'extend_time', label: '仅延长有效期' },
+  { value: 'add_quota', label: '仅叠加额度' },
+  { value: 'extend_time_add_quota', label: '延长有效期并叠加额度' },
+  { value: 'replace', label: '覆盖当前订阅' },
+];
+
 const AddEditSubscriptionModal = ({
   visible,
   handleClose,
@@ -93,6 +101,7 @@ const AddEditSubscriptionModal = ({
     enabled: true,
     sort_order: 0,
     max_purchase_per_user: 0,
+    repeat_purchase_mode: 'independent',
     total_amount: 0,
     upgrade_group: '',
     stripe_price_id: '',
@@ -117,6 +126,7 @@ const AddEditSubscriptionModal = ({
       enabled: p.enabled !== false,
       sort_order: Number(p.sort_order || 0),
       max_purchase_per_user: Number(p.max_purchase_per_user || 0),
+      repeat_purchase_mode: p.repeat_purchase_mode || 'independent',
       total_amount: Number(
         quotaToDisplayAmount(p.total_amount || 0).toFixed(2),
       ),
@@ -162,6 +172,7 @@ const AddEditSubscriptionModal = ({
               : 0,
           sort_order: Number(values.sort_order || 0),
           max_purchase_per_user: Number(values.max_purchase_per_user || 0),
+          repeat_purchase_mode: values.repeat_purchase_mode || 'independent',
           total_amount: displayAmountToQuota(values.total_amount),
           upgrade_group: values.upgrade_group || '',
         },
@@ -305,6 +316,25 @@ const AddEditSubscriptionModal = ({
                         rules={[{ required: true, message: t('请输入金额') }]}
                         style={{ width: '100%' }}
                       />
+                    </Col>
+
+                    <Col span={12}>
+                      <Form.Select
+                        field='repeat_purchase_mode'
+                        label={t('重复购买处理')}
+                        extraText={t(
+                          '控制再次获得同一套餐时如何处理有效期和额度',
+                        )}
+                      >
+                        {repeatPurchaseModeOptions.map((option) => (
+                          <Select.Option
+                            key={option.value}
+                            value={option.value}
+                          >
+                            {t(option.label)}
+                          </Select.Option>
+                        ))}
+                      </Form.Select>
                     </Col>
 
                     <Col span={12}>

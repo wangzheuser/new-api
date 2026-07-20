@@ -319,7 +319,7 @@ func migrateDB() error {
 			return err
 		}
 	}
-	return nil
+	return backfillSubscriptionAllocationCount()
 }
 
 func migrateDBFast() error {
@@ -398,6 +398,9 @@ func migrateDBFast() error {
 		if err := DB.AutoMigrate(&SubscriptionPlan{}); err != nil {
 			return err
 		}
+	}
+	if err := backfillSubscriptionAllocationCount(); err != nil {
+		return err
 	}
 	common.SysLog("database migrated")
 	return nil
@@ -527,6 +530,7 @@ func ensureSubscriptionPlanTableSQLite() error {
 ` + "`creem_product_id`" + ` varchar(128) DEFAULT '',
 ` + "`waffo_pancake_product_id`" + ` varchar(128) DEFAULT '',
 ` + "`max_purchase_per_user`" + ` integer DEFAULT 0,
+` + "`repeat_purchase_mode`" + ` varchar(32) NOT NULL DEFAULT 'independent',
 ` + "`upgrade_group`" + ` varchar(64) DEFAULT '',
 ` + "`downgrade_group`" + ` varchar(64) DEFAULT '',
 ` + "`total_amount`" + ` bigint NOT NULL DEFAULT 0,
@@ -564,6 +568,7 @@ PRIMARY KEY (` + "`id`" + `)
 		{Name: "creem_product_id", DDL: "`creem_product_id` varchar(128) DEFAULT ''"},
 		{Name: "waffo_pancake_product_id", DDL: "`waffo_pancake_product_id` varchar(128) DEFAULT ''"},
 		{Name: "max_purchase_per_user", DDL: "`max_purchase_per_user` integer DEFAULT 0"},
+		{Name: "repeat_purchase_mode", DDL: "`repeat_purchase_mode` varchar(32) NOT NULL DEFAULT 'independent'"},
 		{Name: "upgrade_group", DDL: "`upgrade_group` varchar(64) DEFAULT ''"},
 		{Name: "downgrade_group", DDL: "`downgrade_group` varchar(64) DEFAULT ''"},
 		{Name: "total_amount", DDL: "`total_amount` bigint NOT NULL DEFAULT 0"},
@@ -581,6 +586,13 @@ PRIMARY KEY (` + "`id`" + `)
 		}
 	}
 	return nil
+}
+
+// backfillSubscriptionAllocationCount initializes legacy subscription rows after the additive migration.
+func backfillSubscriptionAllocationCount() error {
+	return DB.Model(&UserSubscription{}).
+		Where("allocation_count IS NULL OR allocation_count < ?", 1).
+		Update("allocation_count", 1).Error
 }
 
 // migrateTokenModelLimitsToText migrates model_limits column from varchar(1024) to text

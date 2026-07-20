@@ -70,7 +70,11 @@ import {
   createWaffoPancakeSubscriptionProduct,
   listWaffoPancakeSubscriptionProductOptions,
 } from '../api'
-import { getDurationUnitOptions, getResetPeriodOptions } from '../constants'
+import {
+  getDurationUnitOptions,
+  getRepeatPurchaseModeOptions,
+  getResetPeriodOptions,
+} from '../constants'
 import {
   getPlanFormSchema,
   PLAN_FORM_DEFAULTS,
@@ -495,6 +499,47 @@ export function SubscriptionsMutateDrawer({
                       </FormControl>
                       <FormDescription>
                         {t('0 means unlimited')}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name='repeat_purchase_mode'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Repeat purchase handling')}</FormLabel>
+                      <Select
+                        items={getRepeatPurchaseModeOptions(t)}
+                        value={field.value}
+                        onValueChange={(value) =>
+                          value !== null && field.onChange(value)
+                        }
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent alignItemWithTrigger={false}>
+                          <SelectGroup>
+                            {getRepeatPurchaseModeOptions(t).map((option) => (
+                              <SelectItem
+                                key={option.value}
+                                value={option.value}
+                              >
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                      <FormDescription>
+                        {t(
+                          'Controls how another purchase of this plan changes an active subscription'
+                        )}
                       </FormDescription>
                       <FormMessage />
                     </FormItem>

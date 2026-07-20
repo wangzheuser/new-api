@@ -38,6 +38,15 @@ export const subscriptionPlanSchema = z.object({
   allow_balance_pay: z.boolean().optional().default(true),
   allow_wallet_overflow: z.boolean().optional().default(true),
   max_purchase_per_user: z.number(),
+  repeat_purchase_mode: z
+    .enum([
+      'independent',
+      'extend_time',
+      'add_quota',
+      'extend_time_add_quota',
+      'replace',
+    ])
+    .default('independent'),
   total_amount: z.number(),
   upgrade_group: z.string().optional(),
   downgrade_group: z.string().optional(),
@@ -66,6 +75,7 @@ export const userSubscriptionSchema = z.object({
   end_time: z.number(),
   amount_total: z.number(),
   amount_used: z.number(),
+  allocation_count: z.number().optional().default(1),
   next_reset_time: z.number().optional(),
 })
 
@@ -115,7 +125,16 @@ export interface SubscriptionPayResponse {
 
 export interface CreateUserSubscriptionRequest {
   plan_id: number
+  apply_mode?: SubscriptionApplyMode
 }
+
+export type SubscriptionApplyMode =
+  | 'plan_default'
+  | 'independent'
+  | 'extend_time'
+  | 'add_quota'
+  | 'extend_time_add_quota'
+  | 'replace'
 
 export interface ResetUserSubscriptionsRequest {
   plan_id: number

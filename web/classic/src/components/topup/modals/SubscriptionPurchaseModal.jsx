@@ -74,6 +74,16 @@ const SubscriptionPurchaseModal = ({
   const purchaseCount = Number(purchaseLimitInfo?.count || 0);
   const purchaseLimitReached =
     purchaseLimit > 0 && purchaseCount >= purchaseLimit;
+  const repeatPurchaseModeLabels = {
+    independent: t('独立创建订阅'),
+    extend_time: t('仅延长有效期'),
+    add_quota: t('仅叠加额度'),
+    extend_time_add_quota: t('延长有效期并叠加额度'),
+    replace: t('覆盖当前订阅'),
+  };
+  const repeatPurchaseLabel =
+    repeatPurchaseModeLabels[plan?.repeat_purchase_mode] ||
+    repeatPurchaseModeLabels.independent;
 
   return (
     <Modal
@@ -146,6 +156,16 @@ const SubscriptionPurchaseModal = ({
                   )}
                 </div>
               </div>
+              {purchaseCount > 0 ? (
+                <div className='flex justify-between items-center gap-3'>
+                  <Text strong className='text-slate-700 dark:text-slate-200'>
+                    {t('重复购买处理')}：
+                  </Text>
+                  <Text className='text-right text-slate-900 dark:text-slate-100'>
+                    {repeatPurchaseLabel}
+                  </Text>
+                </div>
+              ) : null}
               {plan?.upgrade_group ? (
                 <div className='flex justify-between items-center'>
                   <Text strong className='text-slate-700 dark:text-slate-200'>

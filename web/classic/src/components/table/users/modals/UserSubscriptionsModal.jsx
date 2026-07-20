@@ -40,6 +40,15 @@ import CardTable from '../../../common/ui/CardTable';
 
 const { Text } = Typography;
 
+const subscriptionApplyModeOptions = [
+  { value: 'plan_default', label: '跟随套餐默认策略' },
+  { value: 'independent', label: '独立创建订阅' },
+  { value: 'extend_time', label: '仅延长有效期' },
+  { value: 'add_quota', label: '仅叠加额度' },
+  { value: 'extend_time_add_quota', label: '延长有效期并叠加额度' },
+  { value: 'replace', label: '覆盖当前订阅' },
+];
+
 function formatTs(ts) {
   if (!ts) return '-';
   return new Date(ts * 1000).toLocaleString();
@@ -81,6 +90,7 @@ const UserSubscriptionsModal = ({ visible, onCancel, user, t, onSuccess }) => {
 
   const [plans, setPlans] = useState([]);
   const [selectedPlanId, setSelectedPlanId] = useState(null);
+  const [applyMode, setApplyMode] = useState('plan_default');
 
   const [subs, setSubs] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
@@ -152,6 +162,7 @@ const UserSubscriptionsModal = ({ visible, onCancel, user, t, onSuccess }) => {
   useEffect(() => {
     if (!visible) return;
     setSelectedPlanId(null);
+    setApplyMode('plan_default');
     setCurrentPage(1);
     loadPlans();
     loadUserSubscriptions();
@@ -161,27 +172,22 @@ const UserSubscriptionsModal = ({ visible, onCancel, user, t, onSuccess }) => {
     setCurrentPage(page);
   };
 
-  const createSubscription = async () => {
-    if (!user?.id) {
-      showError(t('用户信息缺失'));
-      return;
-    }
-    if (!selectedPlanId) {
-      showError(t('请选择订阅套餐'));
-      return;
-    }
+  const submitSubscription = async () => {
+    if (!user?.id || !selectedPlanId) return;
     setCreating(true);
     try {
       const res = await API.post(
         `/api/subscription/admin/users/${user.id}/subscriptions`,
         {
           plan_id: selectedPlanId,
+          apply_mode: applyMode,
         },
       );
       if (res.data?.success) {
         const msg = res.data?.data?.message;
         showSuccess(msg ? msg : t('新增成功'));
         setSelectedPlanId(null);
+        setApplyMode('plan_default');
         await loadUserSubscriptions();
         onSuccess?.();
       } else {
@@ -192,6 +198,35 @@ const UserSubscriptionsModal = ({ visible, onCancel, user, t, onSuccess }) => {
     } finally {
       setCreating(false);
     }
+  };
+
+  const createSubscription = () => {
+    if (!user?.id) {
+      showError(t('用户信息缺失'));
+      return;
+    }
+    if (!selectedPlanId) {
+      showError(t('请选择订阅套餐'));
+      return;
+    }
+    const selectedPlan = (plans || []).find(
+      (record) => record?.plan?.id === selectedPlanId,
+    );
+    const resolvedMode =
+      applyMode === 'plan_default'
+        ? selectedPlan?.plan?.repeat_purchase_mode
+        : applyMode;
+    if (resolvedMode === 'replace') {
+      Modal.confirm({
+        title: t('确认覆盖当前订阅'),
+        content: t('覆盖会重算有效期并清零已用额度，是否继续？'),
+        centered: true,
+        okType: 'danger',
+        onOk: submitSubscription,
+      });
+      return;
+    }
+    submitSubscription();
   };
 
   const invalidateSubscription = (subId) => {
@@ -267,6 +302,10 @@ const UserSubscriptionsModal = ({ visible, onCancel, user, t, onSuccess }) => {
               <div className='font-medium truncate'>{title}</div>
               <div className='text-xs text-gray-500'>
                 {t('来源')}: {sub?.source || '-'}
+              </div>
+              <div className='text-xs text-gray-500'>
+                {t('累计分配')}:{' '}
+                {Math.max(1, Number(sub?.allocation_count || 1))}
               </div>
             </div>
           );
@@ -382,6 +421,15 @@ const UserSubscriptionsModal = ({ visible, onCancel, user, t, onSuccess }) => {
               loading={plansLoading}
               filter
               style={{ minWidth: isMobile ? undefined : 300, flex: 1 }}
+            />
+            <Select
+              optionList={subscriptionApplyModeOptions.map((option) => ({
+                value: option.value,
+                label: t(option.label),
+              }))}
+              value={applyMode}
+              onChange={setApplyMode}
+              style={{ minWidth: isMobile ? undefined : 240 }}
             />
             <Button
               type='primary'

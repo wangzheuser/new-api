@@ -22,7 +22,10 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
-import { DataTableRowActionMenu, StaticDataTable } from '@/components/data-table'
+import {
+  DataTableRowActionMenu,
+  StaticDataTable,
+} from '@/components/data-table'
 import {
   sideDrawerContentClassName,
   sideDrawerFormClassName,
@@ -62,8 +65,13 @@ import {
   deleteUserSubscription,
   resetUserSubscriptionsByPlan,
 } from '../../api'
+import { getRepeatPurchaseModeOptions } from '../../constants'
 import { formatTimestamp } from '../../lib'
-import type { PlanRecord, UserSubscriptionRecord } from '../../types'
+import type {
+  PlanRecord,
+  SubscriptionApplyMode,
+  UserSubscriptionRecord,
+} from '../../types'
 
 interface Props {
   open: boolean
@@ -114,6 +122,9 @@ export function UserSubscriptionsDialog(props: Props) {
   const [plans, setPlans] = useState<PlanRecord[]>([])
   const [subs, setSubs] = useState<UserSubscriptionRecord[]>([])
   const [selectedPlanId, setSelectedPlanId] = useState<string>('')
+  const [applyMode, setApplyMode] =
+    useState<SubscriptionApplyMode>('plan_default')
+  const [replaceConfirmOpen, setReplaceConfirmOpen] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [advanceResetTime, setAdvanceResetTime] = useState(true)
   const [resetAction, setResetAction] = useState<{
@@ -153,23 +164,23 @@ export function UserSubscriptionsDialog(props: Props) {
   useEffect(() => {
     if (props.open && props.user?.id) {
       setSelectedPlanId('')
+      setApplyMode('plan_default')
       loadData()
     }
   }, [props.open, props.user?.id, loadData])
 
-  const handleCreate = async () => {
-    if (!props.user?.id || !selectedPlanId) {
-      toast.error(t('Please select a subscription plan'))
-      return
-    }
+  const createSubscriptionForUser = async () => {
+    if (!props.user?.id || !selectedPlanId) return
     setCreating(true)
     try {
       const res = await createUserSubscription(props.user.id, {
         plan_id: Number(selectedPlanId),
+        apply_mode: applyMode,
       })
       if (res.success) {
         toast.success(res.data?.message || t('Added successfully'))
         setSelectedPlanId('')
+        setApplyMode('plan_default')
         await loadData()
         props.onSuccess?.()
       }
@@ -178,6 +189,25 @@ export function UserSubscriptionsDialog(props: Props) {
     } finally {
       setCreating(false)
     }
+  }
+
+  const handleCreate = async () => {
+    if (!props.user?.id || !selectedPlanId) {
+      toast.error(t('Please select a subscription plan'))
+      return
+    }
+    const selectedPlan = plans.find(
+      (record) => String(record.plan.id) === selectedPlanId
+    )
+    const resolvedMode =
+      applyMode === 'plan_default'
+        ? selectedPlan?.plan.repeat_purchase_mode
+        : applyMode
+    if (resolvedMode === 'replace') {
+      setReplaceConfirmOpen(true)
+      return
+    }
+    await createSubscriptionForUser()
   }
 
   const handleConfirmAction = async () => {
@@ -242,7 +272,7 @@ export function UserSubscriptionsDialog(props: Props) {
           </SheetHeader>
 
           <div className={sideDrawerFormClassName()}>
-            <div className='flex gap-2'>
+            <div className='flex flex-col gap-2 sm:flex-row'>
               <Select
                 items={plans.map((p) => ({
                   value: String(p.plan.id),
@@ -265,6 +295,32 @@ export function UserSubscriptionsDialog(props: Props) {
                       <SelectItem key={p.plan.id} value={String(p.plan.id)}>
                         {p.plan.title} ($
                         {Number(p.plan.price_amount || 0).toFixed(2)})
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <Select
+                items={[
+                  { value: 'plan_default', label: t('Follow plan default') },
+                  ...getRepeatPurchaseModeOptions(t),
+                ]}
+                value={applyMode}
+                onValueChange={(value) =>
+                  value !== null && setApplyMode(value as SubscriptionApplyMode)
+                }
+              >
+                <SelectTrigger className='sm:w-56'>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent alignItemWithTrigger={false}>
+                  <SelectGroup>
+                    <SelectItem value='plan_default'>
+                      {t('Follow plan default')}
+                    </SelectItem>
+                    {getRepeatPurchaseModeOptions(t).map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
                       </SelectItem>
                     ))}
                   </SelectGroup>
@@ -305,6 +361,10 @@ export function UserSubscriptionsDialog(props: Props) {
                         </div>
                         <div className='text-muted-foreground text-sm'>
                           {t('Source')}: {sub.source || '-'}
+                        </div>
+                        <div className='text-muted-foreground text-sm'>
+                          {t('Allocation count')}:{' '}
+                          {Math.max(1, Number(sub.allocation_count || 1))}
                         </div>
                       </div>
                     )
@@ -437,6 +497,24 @@ export function UserSubscriptionsDialog(props: Props) {
           }
           handleConfirm={handleConfirmAction}
           destructive={confirmAction.type === 'delete'}
+        />
+      )}
+
+      {replaceConfirmOpen && (
+        <ConfirmDialog
+          open
+          onOpenChange={(open) => !open && setReplaceConfirmOpen(false)}
+          title={t('Replace current subscription?')}
+          desc={t(
+            'This resets the active subscription validity and used quota to the selected plan. Continue?'
+          )}
+          confirmText={t('Replace subscription')}
+          handleConfirm={async () => {
+            await createSubscriptionForUser()
+            setReplaceConfirmOpen(false)
+          }}
+          isLoading={creating}
+          destructive
         />
       )}
 

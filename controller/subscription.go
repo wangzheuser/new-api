@@ -181,6 +181,14 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "购买上限不能为负数")
 		return
 	}
+	req.Plan.RepeatPurchaseMode = strings.TrimSpace(req.Plan.RepeatPurchaseMode)
+	if req.Plan.RepeatPurchaseMode == "" {
+		req.Plan.RepeatPurchaseMode = model.SubscriptionRepeatPurchaseIndependent
+	}
+	if !model.IsValidSubscriptionRepeatPurchaseMode(req.Plan.RepeatPurchaseMode) {
+		common.ApiErrorMsg(c, "重复购买处理方式无效")
+		return
+	}
 	if req.Plan.TotalAmount < 0 {
 		common.ApiErrorMsg(c, "总额度不能为负数")
 		return
@@ -255,6 +263,14 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "购买上限不能为负数")
 		return
 	}
+	req.Plan.RepeatPurchaseMode = strings.TrimSpace(req.Plan.RepeatPurchaseMode)
+	if req.Plan.RepeatPurchaseMode == "" {
+		req.Plan.RepeatPurchaseMode = model.SubscriptionRepeatPurchaseIndependent
+	}
+	if !model.IsValidSubscriptionRepeatPurchaseMode(req.Plan.RepeatPurchaseMode) {
+		common.ApiErrorMsg(c, "重复购买处理方式无效")
+		return
+	}
 	if req.Plan.TotalAmount < 0 {
 		common.ApiErrorMsg(c, "总额度不能为负数")
 		return
@@ -295,6 +311,7 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 			"creem_product_id":           req.Plan.CreemProductId,
 			"waffo_pancake_product_id":   req.Plan.WaffoPancakeProductId,
 			"max_purchase_per_user":      req.Plan.MaxPurchasePerUser,
+			"repeat_purchase_mode":       req.Plan.RepeatPurchaseMode,
 			"total_amount":               req.Plan.TotalAmount,
 			"upgrade_group":              req.Plan.UpgradeGroup,
 			"downgrade_group":            req.Plan.DowngradeGroup,
@@ -349,8 +366,59 @@ func AdminUpdateSubscriptionPlanStatus(c *gin.Context) {
 }
 
 type AdminBindSubscriptionRequest struct {
-	UserId int `json:"user_id"`
-	PlanId int `json:"plan_id"`
+	UserId    int    `json:"user_id"`
+	PlanId    int    `json:"plan_id"`
+	ApplyMode string `json:"apply_mode"`
+}
+
+// subscriptionAuditSnapshot returns the entitlement fields required by management audit logs.
+func subscriptionAuditSnapshot(sub *model.UserSubscription) map[string]interface{} {
+	if sub == nil {
+		return nil
+	}
+	return map[string]interface{}{
+		"subscription_id":  sub.Id,
+		"start_time":       sub.StartTime,
+		"end_time":         sub.EndTime,
+		"amount_total":     sub.AmountTotal,
+		"amount_used":      sub.AmountUsed,
+		"allocation_count": sub.AllocationCount,
+	}
+}
+
+// handleAdminSubscriptionApply applies one admin grant and records both user and management audit logs.
+func handleAdminSubscriptionApply(c *gin.Context, userId int, planId int, applyMode string) {
+	result, err := model.AdminBindSubscription(userId, planId, applyMode)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if result == nil || result.Subscription == nil {
+		common.ApiErrorMsg(c, "订阅分配结果为空")
+		return
+	}
+	actionLabel := "创建"
+	if result.Action == model.SubscriptionApplyActionMerged {
+		actionLabel = "合并"
+	}
+	message := fmt.Sprintf("已%s订阅 %s，累计分配 %d 次", actionLabel, result.PlanTitle, result.Subscription.AllocationCount)
+	adminInfo := auditOperatorInfo(c)
+	model.RecordLogWithAdminInfo(userId, model.LogTypeManage, message, adminInfo)
+	recordManageAuditFor(c, userId, "subscription.user_grant", map[string]interface{}{
+		"target_user_id": userId,
+		"plan_id":        planId,
+		"plan_title":     result.PlanTitle,
+		"action":         result.Action,
+		"applied_mode":   result.AppliedMode,
+		"before":         subscriptionAuditSnapshot(result.Before),
+		"after":          subscriptionAuditSnapshot(result.Subscription),
+	})
+	common.ApiSuccess(c, gin.H{
+		"message":      message,
+		"action":       result.Action,
+		"applied_mode": result.AppliedMode,
+		"subscription": result.Subscription,
+	})
 }
 
 func AdminBindSubscription(c *gin.Context) {
@@ -363,16 +431,7 @@ func AdminBindSubscription(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-	msg, err := model.AdminBindSubscription(req.UserId, req.PlanId, "")
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	if msg != "" {
-		common.ApiSuccess(c, gin.H{"message": msg})
-		return
-	}
-	common.ApiSuccess(c, nil)
+	handleAdminSubscriptionApply(c, req.UserId, req.PlanId, req.ApplyMode)
 }
 
 // ---- Admin: user subscription management ----
@@ -392,7 +451,8 @@ func AdminListUserSubscriptions(c *gin.Context) {
 }
 
 type AdminCreateUserSubscriptionRequest struct {
-	PlanId int `json:"plan_id"`
+	PlanId    int    `json:"plan_id"`
+	ApplyMode string `json:"apply_mode"`
 }
 
 type AdminResetSubscriptionRequest struct {
@@ -433,16 +493,7 @@ func AdminCreateUserSubscription(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-	msg, err := model.AdminBindSubscription(userId, req.PlanId, "")
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	if msg != "" {
-		common.ApiSuccess(c, gin.H{"message": msg})
-		return
-	}
-	common.ApiSuccess(c, nil)
+	handleAdminSubscriptionApply(c, userId, req.PlanId, req.ApplyMode)
 }
 
 func AdminResetUserSubscriptionsByPlan(c *gin.Context) {

@@ -172,6 +172,9 @@ type SubscriptionPlan struct {
 	// Max purchases per user (0 = unlimited)
 	MaxPurchasePerUser int `json:"max_purchase_per_user" gorm:"type:int;default:0"`
 
+	// How repeated purchases of this plan are applied to an active subscription.
+	RepeatPurchaseMode string `json:"repeat_purchase_mode" gorm:"type:varchar(32);not null;default:'independent'"`
+
 	// Upgrade user group after purchase (empty = no change)
 	UpgradeGroup string `json:"upgrade_group" gorm:"type:varchar(64);default:''"`
 
@@ -208,6 +211,7 @@ func (p *SubscriptionPlan) NormalizeDefaults() {
 	if p.AllowWalletOverflow == nil {
 		p.AllowWalletOverflow = common.GetPointer(true)
 	}
+	p.RepeatPurchaseMode = NormalizeSubscriptionRepeatPurchaseMode(p.RepeatPurchaseMode)
 }
 
 // Subscription order (payment -> webhook -> create UserSubscription)
@@ -257,6 +261,8 @@ type UserSubscription struct {
 
 	AmountTotal int64 `json:"amount_total" gorm:"type:bigint;not null;default:0"`
 	AmountUsed  int64 `json:"amount_used" gorm:"type:bigint;not null;default:0"`
+
+	AllocationCount int64 `json:"allocation_count" gorm:"type:bigint;not null;default:1"`
 
 	StartTime int64  `json:"start_time" gorm:"bigint"`
 	EndTime   int64  `json:"end_time" gorm:"bigint;index;index:idx_user_sub_active,priority:3"`
@@ -410,17 +416,12 @@ func getSubscriptionPlanByIdTx(tx *gorm.DB, id int) (*SubscriptionPlan, error) {
 	return &plan, nil
 }
 
+// CountUserSubscriptionsByPlan returns the number of purchases and admin grants for a plan.
 func CountUserSubscriptionsByPlan(userId int, planId int) (int64, error) {
 	if userId <= 0 || planId <= 0 {
 		return 0, errors.New("invalid userId or planId")
 	}
-	var count int64
-	if err := DB.Model(&UserSubscription{}).
-		Where("user_id = ? AND plan_id = ?", userId, planId).
-		Count(&count).Error; err != nil {
-		return 0, err
-	}
-	return count, nil
+	return countUserSubscriptionAllocationsByPlanTx(DB, userId, planId)
 }
 
 func getUserGroupByIdTx(tx *gorm.DB, userId int) (string, error) {
@@ -481,7 +482,8 @@ func downgradeUserGroupForSubscriptionTx(tx *gorm.DB, sub *UserSubscription, now
 	return target, nil
 }
 
-func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *SubscriptionPlan, source string) (*UserSubscription, error) {
+// CreateUserSubscriptionFromPlanTx creates or merges one plan entitlement in the current transaction.
+func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *SubscriptionPlan, options SubscriptionApplyOptions) (*SubscriptionApplyResult, error) {
 	if tx == nil {
 		return nil, errors.New("tx is nil")
 	}
@@ -491,18 +493,25 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 	if userId <= 0 {
 		return nil, errors.New("invalid user id")
 	}
-	if plan.MaxPurchasePerUser > 0 {
-		var count int64
-		if err := tx.Model(&UserSubscription{}).
-			Where("user_id = ? AND plan_id = ?", userId, plan.Id).
-			Count(&count).Error; err != nil {
+	// Serialize all entitlement changes for the same user, including payment callbacks and admin grants.
+	var lockedUser User
+	if err := lockForUpdate(tx).Select("id").Where("id = ?", userId).First(&lockedUser).Error; err != nil {
+		return nil, err
+	}
+	if options.EnforcePurchaseLimit && plan.MaxPurchasePerUser > 0 {
+		count, err := countUserSubscriptionAllocationsByPlanTx(tx, userId, plan.Id)
+		if err != nil {
 			return nil, err
 		}
 		if count >= int64(plan.MaxPurchasePerUser) {
 			return nil, errors.New("已达到该套餐购买上限")
 		}
 	}
-	nowUnix := GetDBTimestamp()
+	applyMode, err := ResolveSubscriptionApplyMode(options.ApplyMode, plan.RepeatPurchaseMode)
+	if err != nil {
+		return nil, err
+	}
+	nowUnix := getDBTimestampTx(tx)
 	now := time.Unix(nowUnix, 0)
 	endUnix, err := calcPlanEndTime(now, plan)
 	if err != nil {
@@ -541,7 +550,8 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 		StartTime:           now.Unix(),
 		EndTime:             endUnix,
 		Status:              "active",
-		Source:              source,
+		Source:              options.Source,
+		AllocationCount:     1,
 		LastResetTime:       lastReset,
 		NextResetTime:       nextReset,
 		UpgradeGroup:        upgradeGroup,
@@ -551,10 +561,24 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 		CreatedAt:           common.GetTimestamp(),
 		UpdatedAt:           common.GetTimestamp(),
 	}
+	if applyMode != SubscriptionRepeatPurchaseIndependent {
+		result, err := mergeRepeatedUserSubscriptionTx(tx, plan, sub, applyMode)
+		if err != nil {
+			return nil, err
+		}
+		if result != nil {
+			return result, nil
+		}
+	}
 	if err := tx.Create(sub).Error; err != nil {
 		return nil, err
 	}
-	return sub, nil
+	return &SubscriptionApplyResult{
+		Subscription: sub,
+		Action:       SubscriptionApplyActionCreated,
+		AppliedMode:  applyMode,
+		PlanTitle:    plan.Title,
+	}, nil
 }
 
 // Complete a subscription order (idempotent). Creates a UserSubscription snapshot from the plan.
@@ -587,7 +611,7 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 		if order.Status != common.TopUpStatusPending {
 			return ErrSubscriptionOrderStatusInvalid
 		}
-		plan, err := GetSubscriptionPlanById(order.PlanId)
+		plan, err := getSubscriptionPlanByIdTx(tx, order.PlanId)
 		if err != nil {
 			return err
 		}
@@ -595,7 +619,11 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 			// still allow completion for already purchased orders
 		}
 		upgradeGroup = strings.TrimSpace(plan.UpgradeGroup)
-		_, err = CreateUserSubscriptionFromPlanTx(tx, order.UserId, plan, "order")
+		_, err = CreateUserSubscriptionFromPlanTx(tx, order.UserId, plan, SubscriptionApplyOptions{
+			Source:               "order",
+			ApplyMode:            SubscriptionApplyModePlanDefault,
+			EnforcePurchaseLimit: true,
+		})
 		if err != nil {
 			return err
 		}
@@ -693,27 +721,31 @@ func ExpireSubscriptionOrder(tradeNo string, expectedPaymentProvider string) err
 	})
 }
 
-// Admin bind (no payment). Creates a UserSubscription from a plan.
-func AdminBindSubscription(userId int, planId int, sourceNote string) (string, error) {
+// AdminBindSubscription applies a plan without payment and bypasses the user purchase limit.
+func AdminBindSubscription(userId int, planId int, applyMode string) (*SubscriptionApplyResult, error) {
 	if userId <= 0 || planId <= 0 {
-		return "", errors.New("invalid userId or planId")
+		return nil, errors.New("invalid userId or planId")
 	}
 	plan, err := GetSubscriptionPlanById(planId)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
+	var result *SubscriptionApplyResult
 	err = DB.Transaction(func(tx *gorm.DB) error {
-		_, err := CreateUserSubscriptionFromPlanTx(tx, userId, plan, "admin")
+		result, err = CreateUserSubscriptionFromPlanTx(tx, userId, plan, SubscriptionApplyOptions{
+			Source:               "admin",
+			ApplyMode:            applyMode,
+			EnforcePurchaseLimit: false,
+		})
 		return err
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if strings.TrimSpace(plan.UpgradeGroup) != "" {
 		_ = UpdateUserGroupCache(userId, plan.UpgradeGroup)
-		return fmt.Sprintf("用户分组将升级到 %s", plan.UpgradeGroup), nil
 	}
-	return "", nil
+	return result, nil
 }
 
 func calcSubscriptionBalanceQuota(priceAmount float64) (int, error) {
@@ -774,7 +806,11 @@ func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 			}
 		}
 
-		if _, err := CreateUserSubscriptionFromPlanTx(tx, userId, plan, PaymentMethodBalance); err != nil {
+		if _, err := CreateUserSubscriptionFromPlanTx(tx, userId, plan, SubscriptionApplyOptions{
+			Source:               PaymentMethodBalance,
+			ApplyMode:            SubscriptionApplyModePlanDefault,
+			EnforcePurchaseLimit: true,
+		}); err != nil {
 			return err
 		}
 
