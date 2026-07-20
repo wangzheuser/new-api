@@ -2,8 +2,8 @@ name: Publish dev image to GHCR
 
 on:
   push:
-    branches: [dev]
-  workflow_dispatch:
+    tags:
+      - 'dev-*'
 
 permissions:
   contents: read
@@ -15,6 +15,14 @@ jobs:
     steps:
       - name: Check out exact commit
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag targets dev head
+        shell: bash
+        run: |
+          git fetch origin refs/heads/dev:refs/remotes/origin/dev --no-tags
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/dev)"
 
       - name: Resolve immutable image tag
         id: image
@@ -23,6 +31,7 @@ jobs:
           REPOSITORY=$(printf '%s' "ghcr.io/${GITHUB_REPOSITORY_OWNER}/new-api" | tr '[:upper:]' '[:lower:]')
           echo "repository=$REPOSITORY" >> "$GITHUB_OUTPUT"
           echo "tag=dev-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+          echo "git_tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           printf '%s' "dev-${GITHUB_SHA::12}" > VERSION
 
       - name: Set up QEMU
@@ -54,6 +63,7 @@ jobs:
       - name: Publish deployment reference
         run: |
           echo "### Immutable deployment image" >> "$GITHUB_STEP_SUMMARY"
+          echo "Source tag: \`${{ steps.image.outputs.git_tag }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo '```text' >> "$GITHUB_STEP_SUMMARY"
           echo "${{ steps.image.outputs.repository }}@${{ steps.build.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
