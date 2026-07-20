@@ -293,6 +293,8 @@ func migrateDB() error {
 		&SubscriptionPreConsumeRecord{},
 		&CustomOAuthProvider{},
 		&UserOAuthBinding{},
+		&RegistrationCode{},
+		&RegistrationCodeUsage{},
 		&PerfMetric{},
 		&SystemInstance{},
 		&SystemTask{},
@@ -302,6 +304,11 @@ func migrateDB() error {
 	)
 	if err != nil {
 		return err
+	}
+	if os.Getenv("LOG_SQL_DSN") == "" {
+		if err := DB.AutoMigrate(&ConversationLog{}); err != nil {
+			return err
+		}
 	}
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		if err := ensureSubscriptionPlanTableSQLite(); err != nil {
@@ -347,10 +354,18 @@ func migrateDBFast() error {
 		{&SubscriptionPreConsumeRecord{}, "SubscriptionPreConsumeRecord"},
 		{&CustomOAuthProvider{}, "CustomOAuthProvider"},
 		{&UserOAuthBinding{}, "UserOAuthBinding"},
+		{&RegistrationCode{}, "RegistrationCode"},
+		{&RegistrationCodeUsage{}, "RegistrationCodeUsage"},
 		{&PerfMetric{}, "PerfMetric"},
 		{&SystemInstance{}, "SystemInstance"},
 		{&SystemTask{}, "SystemTask"},
 		{&SystemTaskLock{}, "SystemTaskLock"},
+	}
+	if os.Getenv("LOG_SQL_DSN") == "" {
+		migrations = append(migrations, struct {
+			model interface{}
+			name  string
+		}{&ConversationLog{}, "ConversationLog"})
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))
@@ -392,7 +407,7 @@ func migrateLOGDB() error {
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		return migrateClickHouseLogDB()
 	}
-	return LOG_DB.AutoMigrate(&Log{})
+	return LOG_DB.AutoMigrate(&Log{}, &ConversationLog{})
 }
 
 func migrateClickHouseLogDB() error {

@@ -44,6 +44,7 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.POST("/user/reset", middleware.CriticalRateLimit(), anonymousRequestBodyLimit, controller.ResetPassword)
 		// OAuth routes - specific routes must come before :provider wildcard
 		apiRouter.GET("/oauth/state", middleware.CriticalRateLimit(), controller.GenerateOAuthCode)
+		apiRouter.POST("/oauth/state", middleware.CriticalRateLimit(), anonymousRequestBodyLimit, controller.GenerateOAuthCode)
 		apiRouter.POST("/oauth/email/bind", middleware.CriticalRateLimit(), anonymousRequestBodyLimit, controller.EmailBind)
 		// Non-standard OAuth (WeChat, Telegram) - keep original routes
 		apiRouter.GET("/oauth/wechat", middleware.CriticalRateLimit(), controller.WeChatAuth)
@@ -220,6 +221,29 @@ func SetApiRouter(router *gin.Engine) {
 			performanceRoute.POST("/gc", controller.ForceGC)
 			performanceRoute.GET("/logs", controller.GetLogFiles)
 			performanceRoute.DELETE("/logs", controller.CleanupLogFiles)
+		}
+		registrationCodeRoute := apiRouter.Group("/registration_code")
+		registrationCodeRoute.Use(middleware.RootAuth())
+		{
+			registrationCodeRoute.GET("/", controller.GetRegistrationCodes)
+			registrationCodeRoute.GET("/:id/usages", controller.GetRegistrationCodeUsages)
+			registrationCodeRoute.POST("/", controller.AddRegistrationCodes)
+			registrationCodeRoute.POST("/status/batch", controller.BatchUpdateRegistrationCodeStatus)
+			registrationCodeRoute.POST("/batch", controller.BatchDeleteRegistrationCodes)
+			registrationCodeRoute.PUT("/", controller.UpdateRegistrationCode)
+			registrationCodeRoute.PUT("/config", controller.UpdateRegistrationCodeConfig)
+			registrationCodeRoute.DELETE("/:id", controller.DeleteRegistrationCode)
+		}
+		conversationLogRoute := apiRouter.Group("/conversation_logs")
+		conversationLogRoute.Use(middleware.RootAuth())
+		{
+			conversationLogRoute.GET("/", controller.GetConversationLogs)
+			conversationLogRoute.GET("/summary", controller.GetConversationLogSummary)
+			conversationLogRoute.GET("/export", controller.ExportConversationLogs)
+			conversationLogRoute.GET("/:id", controller.GetConversationLog)
+			conversationLogRoute.PUT("/settings", controller.UpdateConversationLogSettings)
+			conversationLogRoute.POST("/cleanup", controller.CleanupConversationLogs)
+			conversationLogRoute.DELETE("/", controller.DeleteConversationLogs)
 		}
 		ratioSyncRoute := apiRouter.Group("/ratio_sync")
 		ratioSyncRoute.Use(middleware.RootAuth())

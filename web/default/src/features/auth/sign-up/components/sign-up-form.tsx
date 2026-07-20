@@ -38,7 +38,7 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { register, wechatLoginByCode } from '@/features/auth/api'
+import { getOAuthState, register, wechatLoginByCode } from '@/features/auth/api'
 import { LegalConsent } from '@/features/auth/components/legal-consent'
 import { OAuthProviders } from '@/features/auth/components/oauth-providers'
 import { registerFormSchema } from '@/features/auth/constants'
@@ -48,6 +48,7 @@ import { useTurnstile } from '@/features/auth/hooks/use-turnstile'
 import {
   getAffiliateCode,
   saveAffiliateCode,
+  saveRegistrationCode,
 } from '@/features/auth/lib/storage'
 import { useStatus } from '@/hooks/use-status'
 import { cn } from '@/lib/utils'
@@ -91,10 +92,12 @@ export function SignUpForm({
       email: '',
       password: '',
       confirmPassword: '',
+      registrationCode: '',
     },
   })
 
   const emailValue = form.watch('email')
+  const registrationCode = form.watch('registrationCode') ?? ''
   const emailVerificationRequired = !!status?.email_verification
   const hasUserAgreement = Boolean(status?.user_agreement_enabled)
   const hasPrivacyPolicy = Boolean(status?.privacy_policy_enabled)
@@ -105,6 +108,14 @@ export function SignUpForm({
     true
   const hasWeChatLogin = Boolean(status?.wechat_login)
   const turnstileReady = !isTurnstileEnabled || Boolean(turnstileToken)
+  const registrationCodeRequired = Boolean(
+    status?.registration_code_required ??
+    status?.data?.registration_code_required
+  )
+
+  useEffect(() => {
+    saveRegistrationCode(registrationCode.trim())
+  }, [registrationCode])
 
   const wechatQrCodeUrl = useMemo(() => {
     return (
@@ -155,6 +166,11 @@ export function SignUpForm({
 
     if (!validateTurnstile()) return
 
+    if (registrationCodeRequired && !registrationCode.trim()) {
+      toast.error(t('Please enter the registration code'))
+      return
+    }
+
     setIsLoading(true)
     try {
       const res = await register({
@@ -163,6 +179,7 @@ export function SignUpForm({
         email: data.email || undefined,
         verification_code: verificationCode || undefined,
         aff_code: getAffiliateCode(),
+        registration_code: registrationCode.trim() || undefined,
         turnstile: turnstileToken,
       })
 
@@ -208,6 +225,7 @@ export function SignUpForm({
 
     setIsWeChatSubmitting(true)
     try {
+      await getOAuthState()
       const res = await wechatLoginByCode(wechatCode)
       if (res?.success) {
         await handleLoginSuccess(res.data as { id?: number } | null)
@@ -244,6 +262,26 @@ export function SignUpForm({
             </FormItem>
           )}
         />
+
+        {registrationCodeRequired && (
+          <FormField
+            control={form.control}
+            name='registrationCode'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Registration code')}</FormLabel>
+                <FormControl>
+                  <Input
+                    placeholder={t('Enter your registration code')}
+                    autoComplete='off'
+                    {...field}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        )}
 
         {/* Password Field */}
         <FormField

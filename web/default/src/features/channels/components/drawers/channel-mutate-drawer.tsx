@@ -256,6 +256,7 @@ const ADVANCED_SETTINGS_SECTION_IDS = {
   internalNotes: 'channel-section-advanced-internal-notes',
   overrideRules: 'channel-section-advanced-override-rules',
   extraSettings: 'channel-section-advanced-extra-settings',
+  conversationCapture: 'channel-section-advanced-conversation-capture',
   fieldPassthrough: 'channel-section-advanced-field-passthrough',
   upstreamModelDetection: 'channel-section-advanced-upstream-model-detection',
 } as const
@@ -287,6 +288,7 @@ const SENSITIVE_FORM_FIELDS = [
   'system_prompt',
   'system_prompt_override',
   'allow_service_tier',
+  'conversation_log_enabled',
   'disable_store',
   'allow_safety_identifier',
   'allow_include_obfuscation',
@@ -611,7 +613,8 @@ export function ChannelMutateDrawer({
     ADMIN_PERMISSION_RESOURCES.CHANNEL,
     ADMIN_PERMISSION_ACTIONS.SENSITIVE_WRITE
   )
-  const canRevealChannelKey = currentUser?.role === ROLE.SUPER_ADMIN
+  const isRoot = currentUser?.role === ROLE.SUPER_ADMIN
+  const canRevealChannelKey = isRoot
   const [fetchModelsDialogOpen, setFetchModelsDialogOpen] = useState(false)
   const [channelKey, setChannelKey] = useState<string | null>(null)
   const [isChannelKeyLoading, setIsChannelKeyLoading] = useState(false)
@@ -747,6 +750,7 @@ export function ChannelMutateDrawer({
   const currentSystemPrompt = form.watch('system_prompt')
   const currentSystemPromptOverride = form.watch('system_prompt_override')
   const currentAllowServiceTier = form.watch('allow_service_tier')
+  const currentConversationLogEnabled = form.watch('conversation_log_enabled')
   const currentDisableStore = form.watch('disable_store')
   const currentAllowSafetyIdentifier = form.watch('allow_safety_identifier')
   const currentAllowIncludeObfuscation = form.watch('allow_include_obfuscation')
@@ -1012,6 +1016,9 @@ export function ChannelMutateDrawer({
     currentSystemPrompt?.trim() ||
     currentSystemPromptOverride
   )
+  const conversationCaptureConfigured = Boolean(
+    isRoot && currentConversationLogEnabled
+  )
   let fieldPassthroughConfigured = false
   if (currentType === 1 || currentType === 57) {
     fieldPassthroughConfigured = Boolean(
@@ -1039,6 +1046,7 @@ export function ChannelMutateDrawer({
     internalNotesConfigured ||
     overrideRulesConfigured ||
     extraSettingsConfigured ||
+    conversationCaptureConfigured ||
     fieldPassthroughConfigured ||
     upstreamModelDetectionConfigured
   )
@@ -1064,6 +1072,13 @@ export function ChannelMutateDrawer({
       configured: extraSettingsConfigured,
     },
   ]
+  if (isRoot) {
+    advancedNavChildren.push({
+      id: ADVANCED_SETTINGS_SECTION_IDS.conversationCapture,
+      title: t('Conversation Capture'),
+      configured: conversationCaptureConfigured,
+    })
+  }
   if (currentType === 1 || currentType === 14 || currentType === 57) {
     advancedNavChildren.push({
       id: ADVANCED_SETTINGS_SECTION_IDS.fieldPassthrough,
@@ -1235,7 +1250,9 @@ export function ChannelMutateDrawer({
       const defaults = transformChannelToFormDefaults(channelData.data)
       form.reset(defaults)
       setAdvancedSettingsOpen(
-        readAdvancedSettingsPreference() || hasAdvancedSettingsValues(defaults)
+        readAdvancedSettingsPreference() ||
+          hasAdvancedSettingsValues(defaults) ||
+          (isRoot && defaults.conversation_log_enabled === true)
       )
       // Store initial values for comparison
       initialModelsRef.current = parseModelsString(
@@ -1251,7 +1268,7 @@ export function ChannelMutateDrawer({
       initialModelMappingRef.current = ''
       initialStatusCodeMappingRef.current = ''
     }
-  }, [isEditing, channelData, form])
+  }, [isEditing, channelData, form, isRoot])
 
   // Handle type change - set default values for specific types
   useEffect(() => {
@@ -4233,6 +4250,52 @@ export function ChannelMutateDrawer({
                             />
                           </fieldset>
                         </div>
+
+                        {isRoot && (
+                          <div
+                            id={
+                              ADVANCED_SETTINGS_SECTION_IDS.conversationCapture
+                            }
+                            className={sideDrawerSectionClassName(
+                              configuredAdvancedSectionClassName(
+                                'scroll-mt-4',
+                                conversationCaptureConfigured
+                              )
+                            )}
+                          >
+                            <CardHeading
+                              title={t('Conversation Capture')}
+                              icon={<FileText className='h-4 w-4' />}
+                              iconTone='chart-4'
+                            />
+                            <FormField
+                              control={form.control}
+                              name='conversation_log_enabled'
+                              render={({ field }) => (
+                                <FormItem
+                                  className={sideDrawerSwitchItemClassName()}
+                                >
+                                  <div className='space-y-0.5'>
+                                    <FormLabel>
+                                      {t('Capture complete conversations')}
+                                    </FormLabel>
+                                    <FormDescription>
+                                      {t(
+                                        'Store complete request and response bodies for this channel. Global conversation capture must also be enabled.'
+                                      )}
+                                    </FormDescription>
+                                  </div>
+                                  <FormControl>
+                                    <Switch
+                                      checked={field.value}
+                                      onCheckedChange={field.onChange}
+                                    />
+                                  </FormControl>
+                                </FormItem>
+                              )}
+                            />
+                          </div>
+                        )}
 
                         {(currentType === 1 ||
                           currentType === 14 ||

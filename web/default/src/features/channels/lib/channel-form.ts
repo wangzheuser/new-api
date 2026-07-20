@@ -198,6 +198,7 @@ export const channelFormSchema = z
     azure_responses_version: z.string().optional(), // Azure specific
     // Field passthrough controls (stored in settings JSON)
     allow_service_tier: z.boolean().optional(), // OpenAI/Anthropic
+    conversation_log_enabled: z.boolean().optional(),
     disable_store: z.boolean().optional(), // OpenAI only
     allow_safety_identifier: z.boolean().optional(), // OpenAI only
     allow_include_obfuscation: z.boolean().optional(), // OpenAI: include usage obfuscation
@@ -338,6 +339,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   azure_responses_version: '',
   // Field passthrough controls
   allow_service_tier: false,
+  conversation_log_enabled: false,
   disable_store: false,
   allow_safety_identifier: false,
   allow_include_obfuscation: false,
@@ -398,6 +400,7 @@ export function transformChannelToFormDefaults(
   let allowSafetyIdentifier = false
   let allowIncludeObfuscation = false
   let allowInferenceGeo = false
+  let conversationLogEnabled = false
   let allowSpeed = false
   let claudeBetaQuery = false
   let disableTaskPollingSleep = false
@@ -414,6 +417,7 @@ export function transformChannelToFormDefaults(
       isEnterpriseAccount = parsed.openrouter_enterprise === true
       awsKeyType = parsed.aws_key_type || 'ak_sk'
       allowServiceTier = parsed.allow_service_tier === true
+      conversationLogEnabled = parsed.conversation_log_enabled === true
       disableStore = parsed.disable_store === true
       allowSafetyIdentifier = parsed.allow_safety_identifier === true
       allowIncludeObfuscation = parsed.allow_include_obfuscation === true
@@ -473,6 +477,7 @@ export function transformChannelToFormDefaults(
     azure_responses_version: azureResponsesVersion,
     aws_key_type: awsKeyType,
     allow_service_tier: allowServiceTier,
+    conversation_log_enabled: conversationLogEnabled,
     disable_store: disableStore,
     allow_include_obfuscation: allowIncludeObfuscation,
     allow_inference_geo: allowInferenceGeo,
@@ -549,6 +554,9 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
   // Field passthrough controls:
   // - OpenAI (type 1) and Anthropic (type 14): allow_service_tier
   // - OpenAI only: disable_store, allow_safety_identifier
+  settingsObj.conversation_log_enabled =
+    formData.conversation_log_enabled === true
+
   if (formData.type === 1 || formData.type === 14 || formData.type === 57) {
     settingsObj.allow_service_tier = formData.allow_service_tier === true
   } else if ('allow_service_tier' in settingsObj) {

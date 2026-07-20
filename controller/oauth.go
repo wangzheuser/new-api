@@ -25,8 +25,26 @@ func GenerateOAuthCode(c *gin.Context) {
 	session := sessions.Default(c)
 	state := common.GetRandomString(12)
 	affCode := c.Query("aff")
+	registrationCode := ""
+	if c.Request.Method == http.MethodPost {
+		var req struct {
+			AffCode          string `json:"aff_code"`
+			RegistrationCode string `json:"registration_code"`
+		}
+		if err := common.DecodeJson(c.Request.Body, &req); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		affCode = req.AffCode
+		registrationCode = req.RegistrationCode
+	}
 	if affCode != "" {
 		session.Set("aff", affCode)
+	}
+	if registrationCode != "" {
+		session.Set("registration_code", registrationCode)
+	} else {
+		session.Delete("registration_code")
 	}
 	session.Set("oauth_state", state)
 	err := session.Save()
@@ -107,6 +125,10 @@ func HandleOAuth(c *gin.Context) {
 	// 7. Find or create user
 	user, err := findOrCreateOAuthUser(c, provider, oauthUser, session)
 	if err != nil {
+		if isRegistrationCodeError(err) {
+			respondRegistrationCodeError(c, err)
+			return
+		}
 		if errors.Is(err, model.ErrEmailAlreadyTaken) {
 			common.ApiErrorI18n(c, i18n.MsgUserEmailAlreadyTaken)
 			return
@@ -131,6 +153,7 @@ func HandleOAuth(c *gin.Context) {
 	}
 
 	// 9. Setup login
+	session.Delete("registration_code")
 	setupLogin(user, c)
 }
 
@@ -281,6 +304,8 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	if affCode != nil {
 		inviterId, _ = model.GetUserIdByAffCode(affCode.(string))
 	}
+	registrationCode, _ := session.Get("registration_code").(string)
+	registrationSource := "oauth:" + provider.GetName()
 
 	// Use transaction to ensure user creation and OAuth binding are atomic
 	if genericProvider, ok := provider.(*oauth.GenericOAuthProvider); ok {
@@ -301,7 +326,7 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 				return err
 			}
 
-			return nil
+			return model.ConsumeRegistrationCodeTx(tx, registrationCode, user.Id, user.Username, registrationSource)
 		})
 		if err != nil {
 			return nil, err
@@ -330,7 +355,7 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 				return err
 			}
 
-			return nil
+			return model.ConsumeRegistrationCodeTx(tx, registrationCode, user.Id, user.Username, registrationSource)
 		})
 		if err != nil {
 			return nil, err

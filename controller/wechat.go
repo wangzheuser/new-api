@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type wechatLoginResponse struct {
@@ -96,13 +97,25 @@ func WeChatAuth(c *gin.Context) {
 			user.Role = common.RoleCommonUser
 			user.Status = common.UserStatusEnabled
 
-			if err := user.Insert(0); err != nil {
+			session := sessions.Default(c)
+			registrationCode, _ := session.Get("registration_code").(string)
+			if err := model.DB.Transaction(func(tx *gorm.DB) error {
+				if err := user.InsertWithTx(tx, 0); err != nil {
+					return err
+				}
+				return model.ConsumeRegistrationCodeTx(tx, registrationCode, user.Id, user.Username, "wechat")
+			}); err != nil {
+				if isRegistrationCodeError(err) {
+					respondRegistrationCodeError(c, err)
+					return
+				}
 				c.JSON(http.StatusOK, gin.H{
 					"success": false,
 					"message": err.Error(),
 				})
 				return
 			}
+			user.FinishInsert(0)
 		} else {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,

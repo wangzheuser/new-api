@@ -42,12 +42,14 @@ import { Route as AuthenticatedUsageLogsIndexRouteImport } from './routes/_authe
 import { Route as AuthenticatedSystemSettingsIndexRouteImport } from './routes/_authenticated/system-settings/index'
 import { Route as AuthenticatedSystemInfoIndexRouteImport } from './routes/_authenticated/system-info/index'
 import { Route as AuthenticatedSubscriptionsIndexRouteImport } from './routes/_authenticated/subscriptions/index'
+import { Route as AuthenticatedRegistrationCodesIndexRouteImport } from './routes/_authenticated/registration-codes/index'
 import { Route as AuthenticatedRedemptionCodesIndexRouteImport } from './routes/_authenticated/redemption-codes/index'
 import { Route as AuthenticatedProfileIndexRouteImport } from './routes/_authenticated/profile/index'
 import { Route as AuthenticatedPlaygroundIndexRouteImport } from './routes/_authenticated/playground/index'
 import { Route as AuthenticatedModelsIndexRouteImport } from './routes/_authenticated/models/index'
 import { Route as AuthenticatedKeysIndexRouteImport } from './routes/_authenticated/keys/index'
 import { Route as AuthenticatedDashboardIndexRouteImport } from './routes/_authenticated/dashboard/index'
+import { Route as AuthenticatedConversationLogsIndexRouteImport } from './routes/_authenticated/conversation-logs/index'
 import { Route as AuthenticatedChannelsIndexRouteImport } from './routes/_authenticated/channels/index'
 import { Route as AuthenticatedUsageLogsSectionRouteImport } from './routes/_authenticated/usage-logs/$section'
 import { Route as AuthenticatedModelsSectionRouteImport } from './routes/_authenticated/models/$section'
@@ -239,6 +241,12 @@ const AuthenticatedSubscriptionsIndexRoute =
     path: '/subscriptions/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedRegistrationCodesIndexRoute =
+  AuthenticatedRegistrationCodesIndexRouteImport.update({
+    id: '/registration-codes/',
+    path: '/registration-codes/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedRedemptionCodesIndexRoute =
   AuthenticatedRedemptionCodesIndexRouteImport.update({
     id: '/redemption-codes/',
@@ -272,6 +280,12 @@ const AuthenticatedDashboardIndexRoute =
   AuthenticatedDashboardIndexRouteImport.update({
     id: '/dashboard/',
     path: '/dashboard/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedConversationLogsIndexRoute =
+  AuthenticatedConversationLogsIndexRouteImport.update({
+    id: '/conversation-logs/',
+    path: '/conversation-logs/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
 const AuthenticatedChannelsIndexRoute =
@@ -431,12 +445,14 @@ export interface FileRoutesByFullPath {
   '/models/$section': typeof AuthenticatedModelsSectionRoute
   '/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/channels/': typeof AuthenticatedChannelsIndexRoute
+  '/conversation-logs/': typeof AuthenticatedConversationLogsIndexRoute
   '/dashboard/': typeof AuthenticatedDashboardIndexRoute
   '/keys/': typeof AuthenticatedKeysIndexRoute
   '/models/': typeof AuthenticatedModelsIndexRoute
   '/playground/': typeof AuthenticatedPlaygroundIndexRoute
   '/profile/': typeof AuthenticatedProfileIndexRoute
   '/redemption-codes/': typeof AuthenticatedRedemptionCodesIndexRoute
+  '/registration-codes/': typeof AuthenticatedRegistrationCodesIndexRoute
   '/subscriptions/': typeof AuthenticatedSubscriptionsIndexRoute
   '/system-info/': typeof AuthenticatedSystemInfoIndexRoute
   '/system-settings/': typeof AuthenticatedSystemSettingsIndexRoute
@@ -490,12 +506,14 @@ export interface FileRoutesByTo {
   '/models/$section': typeof AuthenticatedModelsSectionRoute
   '/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/channels': typeof AuthenticatedChannelsIndexRoute
+  '/conversation-logs': typeof AuthenticatedConversationLogsIndexRoute
   '/dashboard': typeof AuthenticatedDashboardIndexRoute
   '/keys': typeof AuthenticatedKeysIndexRoute
   '/models': typeof AuthenticatedModelsIndexRoute
   '/playground': typeof AuthenticatedPlaygroundIndexRoute
   '/profile': typeof AuthenticatedProfileIndexRoute
   '/redemption-codes': typeof AuthenticatedRedemptionCodesIndexRoute
+  '/registration-codes': typeof AuthenticatedRegistrationCodesIndexRoute
   '/subscriptions': typeof AuthenticatedSubscriptionsIndexRoute
   '/system-info': typeof AuthenticatedSystemInfoIndexRoute
   '/system-settings': typeof AuthenticatedSystemSettingsIndexRoute
@@ -553,12 +571,14 @@ export interface FileRoutesById {
   '/_authenticated/models/$section': typeof AuthenticatedModelsSectionRoute
   '/_authenticated/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/_authenticated/channels/': typeof AuthenticatedChannelsIndexRoute
+  '/_authenticated/conversation-logs/': typeof AuthenticatedConversationLogsIndexRoute
   '/_authenticated/dashboard/': typeof AuthenticatedDashboardIndexRoute
   '/_authenticated/keys/': typeof AuthenticatedKeysIndexRoute
   '/_authenticated/models/': typeof AuthenticatedModelsIndexRoute
   '/_authenticated/playground/': typeof AuthenticatedPlaygroundIndexRoute
   '/_authenticated/profile/': typeof AuthenticatedProfileIndexRoute
   '/_authenticated/redemption-codes/': typeof AuthenticatedRedemptionCodesIndexRoute
+  '/_authenticated/registration-codes/': typeof AuthenticatedRegistrationCodesIndexRoute
   '/_authenticated/subscriptions/': typeof AuthenticatedSubscriptionsIndexRoute
   '/_authenticated/system-info/': typeof AuthenticatedSystemInfoIndexRoute
   '/_authenticated/system-settings/': typeof AuthenticatedSystemSettingsIndexRoute
@@ -615,12 +635,14 @@ export interface FileRouteTypes {
     | '/models/$section'
     | '/usage-logs/$section'
     | '/channels/'
+    | '/conversation-logs/'
     | '/dashboard/'
     | '/keys/'
     | '/models/'
     | '/playground/'
     | '/profile/'
     | '/redemption-codes/'
+    | '/registration-codes/'
     | '/subscriptions/'
     | '/system-info/'
     | '/system-settings/'
@@ -674,12 +696,14 @@ export interface FileRouteTypes {
     | '/models/$section'
     | '/usage-logs/$section'
     | '/channels'
+    | '/conversation-logs'
     | '/dashboard'
     | '/keys'
     | '/models'
     | '/playground'
     | '/profile'
     | '/redemption-codes'
+    | '/registration-codes'
     | '/subscriptions'
     | '/system-info'
     | '/system-settings'
@@ -736,12 +760,14 @@ export interface FileRouteTypes {
     | '/_authenticated/models/$section'
     | '/_authenticated/usage-logs/$section'
     | '/_authenticated/channels/'
+    | '/_authenticated/conversation-logs/'
     | '/_authenticated/dashboard/'
     | '/_authenticated/keys/'
     | '/_authenticated/models/'
     | '/_authenticated/playground/'
     | '/_authenticated/profile/'
     | '/_authenticated/redemption-codes/'
+    | '/_authenticated/registration-codes/'
     | '/_authenticated/subscriptions/'
     | '/_authenticated/system-info/'
     | '/_authenticated/system-settings/'
@@ -1019,6 +1045,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedSubscriptionsIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/registration-codes/': {
+      id: '/_authenticated/registration-codes/'
+      path: '/registration-codes'
+      fullPath: '/registration-codes/'
+      preLoaderRoute: typeof AuthenticatedRegistrationCodesIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/redemption-codes/': {
       id: '/_authenticated/redemption-codes/'
       path: '/redemption-codes'
@@ -1059,6 +1092,13 @@ declare module '@tanstack/react-router' {
       path: '/dashboard'
       fullPath: '/dashboard/'
       preLoaderRoute: typeof AuthenticatedDashboardIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/conversation-logs/': {
+      id: '/_authenticated/conversation-logs/'
+      path: '/conversation-logs'
+      fullPath: '/conversation-logs/'
+      preLoaderRoute: typeof AuthenticatedConversationLogsIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/channels/': {
@@ -1303,12 +1343,14 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedModelsSectionRoute: typeof AuthenticatedModelsSectionRoute
   AuthenticatedUsageLogsSectionRoute: typeof AuthenticatedUsageLogsSectionRoute
   AuthenticatedChannelsIndexRoute: typeof AuthenticatedChannelsIndexRoute
+  AuthenticatedConversationLogsIndexRoute: typeof AuthenticatedConversationLogsIndexRoute
   AuthenticatedDashboardIndexRoute: typeof AuthenticatedDashboardIndexRoute
   AuthenticatedKeysIndexRoute: typeof AuthenticatedKeysIndexRoute
   AuthenticatedModelsIndexRoute: typeof AuthenticatedModelsIndexRoute
   AuthenticatedPlaygroundIndexRoute: typeof AuthenticatedPlaygroundIndexRoute
   AuthenticatedProfileIndexRoute: typeof AuthenticatedProfileIndexRoute
   AuthenticatedRedemptionCodesIndexRoute: typeof AuthenticatedRedemptionCodesIndexRoute
+  AuthenticatedRegistrationCodesIndexRoute: typeof AuthenticatedRegistrationCodesIndexRoute
   AuthenticatedSubscriptionsIndexRoute: typeof AuthenticatedSubscriptionsIndexRoute
   AuthenticatedSystemInfoIndexRoute: typeof AuthenticatedSystemInfoIndexRoute
   AuthenticatedUsageLogsIndexRoute: typeof AuthenticatedUsageLogsIndexRoute
@@ -1326,6 +1368,8 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedModelsSectionRoute: AuthenticatedModelsSectionRoute,
   AuthenticatedUsageLogsSectionRoute: AuthenticatedUsageLogsSectionRoute,
   AuthenticatedChannelsIndexRoute: AuthenticatedChannelsIndexRoute,
+  AuthenticatedConversationLogsIndexRoute:
+    AuthenticatedConversationLogsIndexRoute,
   AuthenticatedDashboardIndexRoute: AuthenticatedDashboardIndexRoute,
   AuthenticatedKeysIndexRoute: AuthenticatedKeysIndexRoute,
   AuthenticatedModelsIndexRoute: AuthenticatedModelsIndexRoute,
@@ -1333,6 +1377,8 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedProfileIndexRoute: AuthenticatedProfileIndexRoute,
   AuthenticatedRedemptionCodesIndexRoute:
     AuthenticatedRedemptionCodesIndexRoute,
+  AuthenticatedRegistrationCodesIndexRoute:
+    AuthenticatedRegistrationCodesIndexRoute,
   AuthenticatedSubscriptionsIndexRoute: AuthenticatedSubscriptionsIndexRoute,
   AuthenticatedSystemInfoIndexRoute: AuthenticatedSystemInfoIndexRoute,
   AuthenticatedUsageLogsIndexRoute: AuthenticatedUsageLogsIndexRoute,

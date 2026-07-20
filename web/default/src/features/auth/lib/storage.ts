@@ -28,6 +28,7 @@ const STORAGE_KEYS = {
   USER_ID: 'uid',
   AFFILIATE: 'aff',
   STATUS: 'status',
+  REGISTRATION_CODE: 'registration_code',
 } as const
 
 // ============================================================================
@@ -102,5 +103,25 @@ export function saveAffiliateCode(code: string): void {
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('Failed to save affiliate code:', error)
+  }
+}
+
+/**
+ * Get the temporary registration code used by OAuth registration.
+ */
+export function getRegistrationCode(): string {
+  if (typeof window === 'undefined') return ''
+  return window.sessionStorage.getItem(STORAGE_KEYS.REGISTRATION_CODE) ?? ''
+}
+
+/**
+ * Save the temporary registration code used by OAuth registration.
+ */
+export function saveRegistrationCode(code: string): void {
+  if (typeof window === 'undefined') return
+  if (code) {
+    window.sessionStorage.setItem(STORAGE_KEYS.REGISTRATION_CODE, code)
+  } else {
+    window.sessionStorage.removeItem(STORAGE_KEYS.REGISTRATION_CODE)
   }
 }

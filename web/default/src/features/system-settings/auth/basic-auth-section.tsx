@@ -49,6 +49,7 @@ const basicAuthSchema = z.object({
   PasswordRegisterEnabled: z.boolean(),
   EmailVerificationEnabled: z.boolean(),
   RegisterEnabled: z.boolean(),
+  RegistrationCodeRequired: z.boolean(),
   EmailDomainRestrictionEnabled: z.boolean(),
   EmailAliasRestrictionEnabled: z.boolean(),
   EmailDomainWhitelist: z.string(),
@@ -165,6 +166,27 @@ export function BasicAuthSection({ defaultValues }: BasicAuthSectionProps) {
                   <FormLabel>{t('Password Registration')}</FormLabel>
                   <FormDescription>
                     {t('Allow registration with password')}
+                  </FormDescription>
+                </SettingsSwitchContent>
+                <FormControl>
+                  <Switch
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                  />
+                </FormControl>
+              </SettingsSwitchItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name='RegistrationCodeRequired'
+            render={({ field }) => (
+              <SettingsSwitchItem>
+                <SettingsSwitchContent>
+                  <FormLabel>{t('Registration Code Required')}</FormLabel>
+                  <FormDescription>
+                    {t('Require a valid registration code for all new users')}
                   </FormDescription>
                 </SettingsSwitchContent>
                 <FormControl>

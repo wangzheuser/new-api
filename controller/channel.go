@@ -610,6 +610,11 @@ func AddChannel(c *gin.Context) {
 		})
 		return
 	}
+	if c.GetInt("role") < common.RoleRootUser {
+		settings := addChannelRequest.Channel.GetOtherSettings()
+		settings.ConversationLogEnabled = false
+		addChannelRequest.Channel.SetOtherSettings(settings)
+	}
 
 	addChannelRequest.Channel.CreatedTime = common.GetTimestamp()
 	keys := make([]string, 0)
@@ -950,6 +955,11 @@ func UpdateChannel(c *gin.Context) {
 			"message": err.Error(),
 		})
 		return
+	}
+	if c.GetInt("role") < common.RoleRootUser {
+		settings := channel.GetOtherSettings()
+		settings.ConversationLogEnabled = originChannel.GetOtherSettings().ConversationLogEnabled
+		channel.SetOtherSettings(settings)
 	}
 
 	// Always copy the original ChannelInfo so that fields like IsMultiKey and MultiKeySize are retained.

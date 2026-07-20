@@ -25,6 +25,7 @@ import {
   Key,
   LayoutDashboard,
   ListTodo,
+  MessageCircleMore,
   MessageSquare,
   Radio,
   ServerCog,
@@ -138,6 +139,18 @@ export function useSidebarData(): SidebarData {
             title: t('Redemption Codes'),
             url: '/redemption-codes',
             icon: Ticket,
+          },
+          {
+            title: t('Registration Codes'),
+            url: '/registration-codes',
+            icon: Key,
+            requiredRole: ROLE.SUPER_ADMIN,
+          },
+          {
+            title: t('Conversation Capture'),
+            url: '/conversation-logs',
+            icon: MessageCircleMore,
+            requiredRole: ROLE.SUPER_ADMIN,
           },
           {
             title: t('Subscriptions'),

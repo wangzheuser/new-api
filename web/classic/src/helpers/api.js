@@ -36,7 +36,6 @@ export let API = axios.create({
   },
 });
 
-
 function redirectToOAuthUrl(url, options = {}) {
   const { openInNewTab = false } = options;
   const targetUrl = typeof url === 'string' ? url : url.toString();
@@ -48,7 +47,6 @@ function redirectToOAuthUrl(url, options = {}) {
 
   window.location.assign(targetUrl);
 }
-
 
 function patchAPIInstance(instance) {
   const originalGet = instance.get.bind(instance);
@@ -241,12 +239,10 @@ export const processGroupsData = (data, userGroup) => {
 // 原来components中的utils.js
 
 export async function getOAuthState() {
-  let path = '/api/oauth/state';
-  let affCode = localStorage.getItem('aff');
-  if (affCode && affCode.length > 0) {
-    path += `?aff=${affCode}`;
-  }
-  const res = await API.get(path);
+  const res = await API.post('/api/oauth/state', {
+    aff_code: localStorage.getItem('aff') || '',
+    registration_code: sessionStorage.getItem('registration_code') || '',
+  });
   const { success, message, data } = res.data;
   if (success) {
     return data;

@@ -22,6 +22,35 @@ func RegisterScheduledSystemTasks() {
 	service.RegisterSystemTaskHandler(modelUpdateHandler{})
 	service.RegisterSystemTaskHandler(midjourneyPollHandler{})
 	service.RegisterSystemTaskHandler(asyncTaskPollHandler{})
+	service.RegisterSystemTaskHandler(conversationLogCleanupHandler{})
+}
+
+// conversationLogCleanupHandler enforces retention and storage limits.
+type conversationLogCleanupHandler struct{}
+
+// Type returns the persistent system task type.
+func (conversationLogCleanupHandler) Type() string { return model.SystemTaskTypeConversationLogCleanup }
+
+// Enabled reports whether either cleanup limit is active.
+func (conversationLogCleanupHandler) Enabled() bool {
+	return !common.UsingLogDatabase(common.DatabaseTypeClickHouse) &&
+		(common.ConversationLogRetentionDays > 0 || common.ConversationLogMaxStorageGB > 0)
+}
+
+// Interval returns the cleanup scheduling interval.
+func (conversationLogCleanupHandler) Interval() time.Duration { return 10 * time.Minute }
+
+// NewPayload returns no payload because limits are read from current options.
+func (conversationLogCleanupHandler) NewPayload() any { return nil }
+
+// Run applies retention and storage cleanup and persists the task result.
+func (conversationLogCleanupHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	result, err := service.CleanupConversationLogs(ctx)
+	if err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
+		return
+	}
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, result, nil)
 }
 
 // channelTestHandler runs the scheduled "test all channels" job. Enablement and

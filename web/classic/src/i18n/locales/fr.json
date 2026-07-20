@@ -3684,6 +3684,9 @@
     "默认折叠侧边栏": "Réduire la barre latérale par défaut",
     "默认测试模型": "Modèle de test par défaut",
     "默认用户消息": "Bonjour",
-    "默认补全倍率": "Taux de complétion par défaut"
+    "默认补全倍率": "Taux de complétion par défaut",
+    "注册码": "Code d’inscription",
+    "请输入注册码": "Saisissez le code d’inscription",
+    "仅首次注册新账户时需要": "Requis uniquement lors de la création d’un compte"
   }
 }

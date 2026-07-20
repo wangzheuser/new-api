@@ -1,0 +1,4 @@
+services:
+  new-api:
+    # Replace this placeholder with the digest emitted by dev-image.yml.
+    image: ghcr.io/your-owner/new-api@sha256:replace-with-published-digest

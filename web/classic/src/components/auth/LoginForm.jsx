@@ -39,6 +39,7 @@ import {
   prepareCredentialRequestOptions,
   buildAssertionResult,
   isPasskeySupported,
+  getOAuthState,
 } from '../../helpers';
 import Turnstile from 'react-turnstile';
 import {
@@ -49,6 +50,7 @@ import {
   Form,
   Icon,
   Modal,
+  Input,
 } from '@douyinfe/semi-ui';
 import Title from '@douyinfe/semi-ui/lib/es/typography/title';
 import Text from '@douyinfe/semi-ui/lib/es/typography/text';
@@ -79,6 +81,7 @@ const LoginForm = () => {
     username: '',
     password: '',
     wechat_verification_code: '',
+    registration_code: '',
   });
   const { username, password } = inputs;
   const [searchParams, setSearchParams] = useSearchParams();
@@ -133,14 +136,22 @@ const LoginForm = () => {
   }, [statusState?.status]);
   const hasCustomOAuthProviders =
     (status.custom_oauth_providers || []).length > 0;
+
+  useEffect(() => {
+    if (inputs.registration_code) {
+      sessionStorage.setItem('registration_code', inputs.registration_code);
+    } else {
+      sessionStorage.removeItem('registration_code');
+    }
+  }, [inputs.registration_code]);
   const hasOAuthLoginOptions = Boolean(
     status.github_oauth ||
-      status.discord_oauth ||
-      status.oidc_enabled ||
-      status.wechat_login ||
-      status.linuxdo_oauth ||
-      status.telegram_oauth ||
-      hasCustomOAuthProviders,
+    status.discord_oauth ||
+    status.oidc_enabled ||
+    status.wechat_login ||
+    status.linuxdo_oauth ||
+    status.telegram_oauth ||
+    hasCustomOAuthProviders,
   );
 
   useEffect(() => {
@@ -189,6 +200,7 @@ const LoginForm = () => {
     }
     setWechatCodeSubmitLoading(true);
     try {
+      await getOAuthState();
       const res = await API.get(
         `/api/oauth/wechat?code=${inputs.wechat_verification_code}`,
       );
@@ -519,6 +531,18 @@ const LoginForm = () => {
             </div>
             <div className='px-2 py-8'>
               <div className='space-y-3'>
+                {status.registration_code_required && (
+                  <div className='space-y-1'>
+                    <Text>{t('注册码')}</Text>
+                    <Input
+                      value={inputs.registration_code}
+                      placeholder={t('仅首次注册新账户时需要')}
+                      onChange={(value) =>
+                        handleChange('registration_code', value)
+                      }
+                    />
+                  </div>
+                )}
                 {status.wechat_login && (
                   <Button
                     theme='outline'
@@ -958,8 +982,7 @@ const LoginForm = () => {
         style={{ top: '50%', left: '-120px' }}
       />
       <div className='w-full max-w-sm mt-[60px]'>
-        {showEmailLogin ||
-        !hasOAuthLoginOptions
+        {showEmailLogin || !hasOAuthLoginOptions
           ? renderEmailLoginForm()
           : renderOAuthOptions()}
         {renderWeChatLoginModal()}
