@@ -44,6 +44,9 @@ export const subscriptionPlanSchema = z.object({
       'extend_time',
       'add_quota',
       'extend_time_add_quota',
+      'max_validity',
+      'max_validity_add_quota',
+      'extend_time_reset_quota',
       'replace',
     ])
     .default('independent'),
@@ -134,6 +137,9 @@ export type SubscriptionApplyMode =
   | 'extend_time'
   | 'add_quota'
   | 'extend_time_add_quota'
+  | 'max_validity'
+  | 'max_validity_add_quota'
+  | 'extend_time_reset_quota'
   | 'replace'
 
 export interface ResetUserSubscriptionsRequest {

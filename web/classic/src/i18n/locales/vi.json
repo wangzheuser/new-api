@@ -4221,6 +4221,9 @@
     "默认补全倍率": "Tỷ lệ hoàn thành mặc định",
     "注册码": "Mã đăng ký",
     "请输入注册码": "Nhập mã đăng ký",
-    "仅首次注册新账户时需要": "Chỉ cần khi tạo tài khoản mới"
+    "仅首次注册新账户时需要": "Chỉ cần khi tạo tài khoản mới",
+    "取较晚有效期": "Giữ thời hạn hiệu lực muộn hơn",
+    "取较晚有效期并叠加额度": "Giữ thời hạn muộn hơn và cộng hạn mức",
+    "延长有效期并重置额度": "Gia hạn hiệu lực và đặt lại hạn mức"
   }
 }

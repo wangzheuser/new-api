@@ -11,11 +11,14 @@ import (
 )
 
 const (
-	SubscriptionRepeatPurchaseIndependent        = "independent"
-	SubscriptionRepeatPurchaseExtendTime         = "extend_time"
-	SubscriptionRepeatPurchaseAddQuota           = "add_quota"
-	SubscriptionRepeatPurchaseExtendTimeAddQuota = "extend_time_add_quota"
-	SubscriptionRepeatPurchaseReplace            = "replace"
+	SubscriptionRepeatPurchaseIndependent          = "independent"
+	SubscriptionRepeatPurchaseExtendTime           = "extend_time"
+	SubscriptionRepeatPurchaseAddQuota             = "add_quota"
+	SubscriptionRepeatPurchaseExtendTimeAddQuota   = "extend_time_add_quota"
+	SubscriptionRepeatPurchaseMaxValidity          = "max_validity"
+	SubscriptionRepeatPurchaseMaxValidityAddQuota  = "max_validity_add_quota"
+	SubscriptionRepeatPurchaseExtendTimeResetQuota = "extend_time_reset_quota"
+	SubscriptionRepeatPurchaseReplace              = "replace"
 
 	SubscriptionApplyModePlanDefault = "plan_default"
 
@@ -55,6 +58,9 @@ func IsValidSubscriptionRepeatPurchaseMode(mode string) bool {
 		SubscriptionRepeatPurchaseExtendTime,
 		SubscriptionRepeatPurchaseAddQuota,
 		SubscriptionRepeatPurchaseExtendTimeAddQuota,
+		SubscriptionRepeatPurchaseMaxValidity,
+		SubscriptionRepeatPurchaseMaxValidityAddQuota,
+		SubscriptionRepeatPurchaseExtendTimeResetQuota,
 		SubscriptionRepeatPurchaseReplace:
 		return true
 	default:
@@ -126,8 +132,11 @@ func mergeRepeatedUserSubscriptionTx(tx *gorm.DB, plan *SubscriptionPlan, incomi
 			target.PrevUserGroup = previousGroup
 		}
 	} else {
-		extendTime := mode == SubscriptionRepeatPurchaseExtendTime || mode == SubscriptionRepeatPurchaseExtendTimeAddQuota
-		addQuota := mode == SubscriptionRepeatPurchaseAddQuota || mode == SubscriptionRepeatPurchaseExtendTimeAddQuota
+		extendTime := mode == SubscriptionRepeatPurchaseExtendTime ||
+			mode == SubscriptionRepeatPurchaseExtendTimeAddQuota ||
+			mode == SubscriptionRepeatPurchaseExtendTimeResetQuota
+		maxValidity := mode == SubscriptionRepeatPurchaseMaxValidity || mode == SubscriptionRepeatPurchaseMaxValidityAddQuota
+		addQuota := mode == SubscriptionRepeatPurchaseAddQuota || mode == SubscriptionRepeatPurchaseExtendTimeAddQuota || mode == SubscriptionRepeatPurchaseMaxValidityAddQuota
 
 		if extendTime {
 			endTime, err := calcPlanEndTime(time.Unix(target.EndTime, 0), plan)
@@ -135,23 +144,25 @@ func mergeRepeatedUserSubscriptionTx(tx *gorm.DB, plan *SubscriptionPlan, incomi
 				return nil, err
 			}
 			target.EndTime = endTime
+		} else if maxValidity && incoming.EndTime > target.EndTime {
+			target.EndTime = incoming.EndTime
+		}
 
-			// Reopen a reset schedule that previously stopped at the old end time.
-			if target.NextResetTime == 0 && NormalizeResetPeriod(plan.QuotaResetPeriod) != SubscriptionResetNever {
-				baseUnix := target.LastResetTime
-				if baseUnix <= 0 {
-					baseUnix = target.StartTime
-				}
-				base := time.Unix(baseUnix, 0)
-				nextReset := calcNextResetTime(base, plan, target.EndTime)
-				for nextReset > 0 && nextReset <= incoming.StartTime {
-					base = time.Unix(nextReset, 0)
-					nextReset = calcNextResetTime(base, plan, target.EndTime)
-				}
-				if nextReset > 0 {
-					target.LastResetTime = base.Unix()
-					target.NextResetTime = nextReset
-				}
+		// Reopen a reset schedule only when this allocation actually extends validity.
+		if target.EndTime > before.EndTime && target.NextResetTime == 0 && NormalizeResetPeriod(plan.QuotaResetPeriod) != SubscriptionResetNever {
+			baseUnix := target.LastResetTime
+			if baseUnix <= 0 {
+				baseUnix = target.StartTime
+			}
+			base := time.Unix(baseUnix, 0)
+			nextReset := calcNextResetTime(base, plan, target.EndTime)
+			for nextReset > 0 && nextReset <= incoming.StartTime {
+				base = time.Unix(nextReset, 0)
+				nextReset = calcNextResetTime(base, plan, target.EndTime)
+			}
+			if nextReset > 0 {
+				target.LastResetTime = base.Unix()
+				target.NextResetTime = nextReset
 			}
 		}
 
@@ -164,6 +175,10 @@ func mergeRepeatedUserSubscriptionTx(tx *gorm.DB, plan *SubscriptionPlan, incomi
 				}
 				target.AmountTotal += incoming.AmountTotal
 			}
+		}
+		if mode == SubscriptionRepeatPurchaseExtendTimeResetQuota {
+			target.AmountTotal = incoming.AmountTotal
+			target.AmountUsed = 0
 		}
 
 		target.AllocationCount = allocationCount + 1

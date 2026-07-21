@@ -3687,6 +3687,9 @@
     "默认补全倍率": "Taux de complétion par défaut",
     "注册码": "Code d’inscription",
     "请输入注册码": "Saisissez le code d’inscription",
-    "仅首次注册新账户时需要": "Requis uniquement lors de la création d’un compte"
+    "仅首次注册新账户时需要": "Requis uniquement lors de la création d’un compte",
+    "取较晚有效期": "Conserver la date d’expiration la plus tardive",
+    "取较晚有效期并叠加额度": "Conserver la date d’expiration la plus tardive et ajouter du quota",
+    "延长有效期并重置额度": "Prolonger la validité et réinitialiser le quota"
   }
 }

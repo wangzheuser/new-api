@@ -46,6 +46,15 @@ export const REPEAT_PURCHASE_MODES = [
     value: 'extend_time_add_quota',
     labelKey: 'Extend validity and add quota',
   },
+  { value: 'max_validity', labelKey: 'Keep later validity' },
+  {
+    value: 'max_validity_add_quota',
+    labelKey: 'Keep later validity and add quota',
+  },
+  {
+    value: 'extend_time_reset_quota',
+    labelKey: 'Extend validity and reset quota',
+  },
   { value: 'replace', labelKey: 'Replace current subscription' },
 ] as const
 

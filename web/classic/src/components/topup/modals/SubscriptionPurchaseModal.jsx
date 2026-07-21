@@ -79,6 +79,9 @@ const SubscriptionPurchaseModal = ({
     extend_time: t('仅延长有效期'),
     add_quota: t('仅叠加额度'),
     extend_time_add_quota: t('延长有效期并叠加额度'),
+    max_validity: t('取较晚有效期'),
+    max_validity_add_quota: t('取较晚有效期并叠加额度'),
+    extend_time_reset_quota: t('延长有效期并重置额度'),
     replace: t('覆盖当前订阅'),
   };
   const repeatPurchaseLabel =

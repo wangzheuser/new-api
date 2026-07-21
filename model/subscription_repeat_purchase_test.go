@@ -71,6 +71,9 @@ func TestResolveSubscriptionApplyMode(t *testing.T) {
 		{name: "empty follows plan", planMode: SubscriptionRepeatPurchaseAddQuota, expected: SubscriptionRepeatPurchaseAddQuota},
 		{name: "plan default follows plan", applyMode: SubscriptionApplyModePlanDefault, planMode: SubscriptionRepeatPurchaseExtendTime, expected: SubscriptionRepeatPurchaseExtendTime},
 		{name: "override", applyMode: SubscriptionRepeatPurchaseReplace, planMode: SubscriptionRepeatPurchaseIndependent, expected: SubscriptionRepeatPurchaseReplace},
+		{name: "max validity", applyMode: SubscriptionRepeatPurchaseMaxValidity, planMode: SubscriptionRepeatPurchaseIndependent, expected: SubscriptionRepeatPurchaseMaxValidity},
+		{name: "max validity and add quota", applyMode: SubscriptionRepeatPurchaseMaxValidityAddQuota, planMode: SubscriptionRepeatPurchaseIndependent, expected: SubscriptionRepeatPurchaseMaxValidityAddQuota},
+		{name: "extend time and reset quota", applyMode: SubscriptionRepeatPurchaseExtendTimeResetQuota, planMode: SubscriptionRepeatPurchaseIndependent, expected: SubscriptionRepeatPurchaseExtendTimeResetQuota},
 		{name: "legacy plan value", applyMode: SubscriptionApplyModePlanDefault, planMode: "", expected: SubscriptionRepeatPurchaseIndependent},
 		{name: "invalid override", applyMode: "unknown", planMode: SubscriptionRepeatPurchaseIndependent, shouldFail: true},
 	}
@@ -102,6 +105,9 @@ func TestRepeatedSubscriptionModes(t *testing.T) {
 		{name: "extend time", mode: SubscriptionRepeatPurchaseExtendTime, expectedRows: 1, expectedTotal: 100, expectedUsed: 25, expectedEndChange: 3600, expectedAction: SubscriptionApplyActionMerged},
 		{name: "add quota", mode: SubscriptionRepeatPurchaseAddQuota, expectedRows: 1, expectedTotal: 200, expectedUsed: 25, expectedEndChange: 0, expectedAction: SubscriptionApplyActionMerged},
 		{name: "extend time and add quota", mode: SubscriptionRepeatPurchaseExtendTimeAddQuota, expectedRows: 1, expectedTotal: 200, expectedUsed: 25, expectedEndChange: 3600, expectedAction: SubscriptionApplyActionMerged},
+		{name: "max validity", mode: SubscriptionRepeatPurchaseMaxValidity, expectedRows: 1, expectedTotal: 100, expectedUsed: 25, expectedEndChange: 0, expectedAction: SubscriptionApplyActionMerged},
+		{name: "max validity and add quota", mode: SubscriptionRepeatPurchaseMaxValidityAddQuota, expectedRows: 1, expectedTotal: 200, expectedUsed: 25, expectedEndChange: 0, expectedAction: SubscriptionApplyActionMerged},
+		{name: "extend time and reset quota", mode: SubscriptionRepeatPurchaseExtendTimeResetQuota, expectedRows: 1, expectedTotal: 100, expectedUsed: 0, expectedEndChange: 3600, expectedAction: SubscriptionApplyActionMerged},
 		{name: "replace", mode: SubscriptionRepeatPurchaseReplace, expectedRows: 1, expectedTotal: 100, expectedUsed: 0, expectedEndChange: 3500, expectedAction: SubscriptionApplyActionMerged},
 	}
 
@@ -120,6 +126,9 @@ func TestRepeatedSubscriptionModes(t *testing.T) {
 					updates["start_time"] = first.Subscription.StartTime - 1000
 					updates["end_time"] = first.Subscription.StartTime + 100
 					originalEnd = first.Subscription.StartTime + 100
+				} else if testCase.mode == SubscriptionRepeatPurchaseMaxValidity || testCase.mode == SubscriptionRepeatPurchaseMaxValidityAddQuota {
+					originalEnd += 100
+					updates["end_time"] = originalEnd
 				}
 				require.NoError(t, DB.Model(&UserSubscription{}).Where("id = ?", first.Subscription.Id).Updates(updates).Error)
 			}
@@ -144,6 +153,70 @@ func TestRepeatedSubscriptionModes(t *testing.T) {
 			assert.EqualValues(t, 2, count)
 		})
 	}
+}
+
+func TestRepeatedSubscriptionMaxValidityModes(t *testing.T) {
+	testCases := []struct {
+		name          string
+		mode          string
+		currentEnd    int64
+		incomingEnd   int64
+		expectedEnd   int64
+		expectedTotal int64
+	}{
+		{name: "keep later current end", mode: SubscriptionRepeatPurchaseMaxValidity, currentEnd: 7200, incomingEnd: 3600, expectedEnd: 7200, expectedTotal: 100},
+		{name: "use later incoming end", mode: SubscriptionRepeatPurchaseMaxValidity, currentEnd: 1800, incomingEnd: 3600, expectedEnd: 3600, expectedTotal: 100},
+		{name: "keep equal end", mode: SubscriptionRepeatPurchaseMaxValidity, currentEnd: 3600, incomingEnd: 3600, expectedEnd: 3600, expectedTotal: 100},
+		{name: "add quota with later current end", mode: SubscriptionRepeatPurchaseMaxValidityAddQuota, currentEnd: 7200, incomingEnd: 3600, expectedEnd: 7200, expectedTotal: 200},
+		{name: "add quota with later incoming end", mode: SubscriptionRepeatPurchaseMaxValidityAddQuota, currentEnd: 1800, incomingEnd: 3600, expectedEnd: 3600, expectedTotal: 200},
+		{name: "add quota with equal end", mode: SubscriptionRepeatPurchaseMaxValidityAddQuota, currentEnd: 3600, incomingEnd: 3600, expectedEnd: 3600, expectedTotal: 200},
+	}
+
+	for index, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			truncateTables(t)
+			userId := 2100 + index
+			plan := seedRepeatPurchaseUserAndPlan(t, userId, 2200+index, testCase.mode)
+			now := GetDBTimestamp()
+			target := &UserSubscription{
+				UserId: userId, PlanId: plan.Id, AmountTotal: 100, AmountUsed: 25,
+				StartTime: now - 100, EndTime: now + testCase.currentEnd, Status: "active", AllocationCount: 1,
+			}
+			require.NoError(t, DB.Create(target).Error)
+			incoming := &UserSubscription{
+				UserId: userId, PlanId: plan.Id, AmountTotal: 100,
+				StartTime: now, EndTime: now + testCase.incomingEnd, Status: "active", AllocationCount: 1,
+			}
+
+			var result *SubscriptionApplyResult
+			require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+				var err error
+				result, err = mergeRepeatedUserSubscriptionTx(tx, plan, incoming, testCase.mode)
+				return err
+			}))
+
+			require.NotNil(t, result)
+			assert.Equal(t, now+testCase.expectedEnd, result.Subscription.EndTime)
+			assert.Equal(t, testCase.expectedTotal, result.Subscription.AmountTotal)
+			assert.EqualValues(t, 25, result.Subscription.AmountUsed)
+			assert.EqualValues(t, 2, result.Subscription.AllocationCount)
+		})
+	}
+}
+
+func TestRepeatedSubscriptionExtendTimeResetQuotaUsesLatestPlanQuota(t *testing.T) {
+	truncateTables(t)
+	plan := seedRepeatPurchaseUserAndPlan(t, 2801, 2802, SubscriptionRepeatPurchaseExtendTimeResetQuota)
+	first := applyRepeatPurchase(t, 2801, plan, SubscriptionApplyModePlanDefault, true, "order")
+	require.NoError(t, DB.Model(&UserSubscription{}).Where("id = ?", first.Subscription.Id).Update("amount_used", 60).Error)
+	plan.TotalAmount = 250
+
+	second := applyRepeatPurchase(t, 2801, plan, SubscriptionApplyModePlanDefault, true, "order")
+
+	assert.Equal(t, first.Subscription.EndTime+3600, second.Subscription.EndTime)
+	assert.EqualValues(t, 250, second.Subscription.AmountTotal)
+	assert.Zero(t, second.Subscription.AmountUsed)
+	assert.EqualValues(t, 2, second.Subscription.AllocationCount)
 }
 
 func TestRepeatedSubscriptionUsesLatestActiveTargetAndKeepsHistory(t *testing.T) {
@@ -184,37 +257,41 @@ func TestRepeatedSubscriptionCreatesWhenOnlyExpiredTargetExists(t *testing.T) {
 }
 
 func TestRepeatedSubscriptionQuotaBoundaries(t *testing.T) {
-	t.Run("unlimited stays unlimited", func(t *testing.T) {
-		truncateTables(t)
-		plan := seedRepeatPurchaseUserAndPlan(t, 3301, 3302, SubscriptionRepeatPurchaseAddQuota)
-		first := applyRepeatPurchase(t, 3301, plan, SubscriptionApplyModePlanDefault, true, "order")
-		require.NoError(t, DB.Model(&UserSubscription{}).Where("id = ?", first.Subscription.Id).Update("amount_total", 0).Error)
+	for index, mode := range []string{SubscriptionRepeatPurchaseAddQuota, SubscriptionRepeatPurchaseMaxValidityAddQuota} {
+		t.Run(mode+" unlimited stays unlimited", func(t *testing.T) {
+			truncateTables(t)
+			userId := 3301 + index
+			plan := seedRepeatPurchaseUserAndPlan(t, userId, 3303+index, mode)
+			first := applyRepeatPurchase(t, userId, plan, SubscriptionApplyModePlanDefault, true, "order")
+			require.NoError(t, DB.Model(&UserSubscription{}).Where("id = ?", first.Subscription.Id).Update("amount_total", 0).Error)
 
-		second := applyRepeatPurchase(t, 3301, plan, SubscriptionApplyModePlanDefault, true, "order")
+			second := applyRepeatPurchase(t, userId, plan, SubscriptionApplyModePlanDefault, true, "order")
 
-		assert.Zero(t, second.Subscription.AmountTotal)
-		assert.EqualValues(t, 2, second.Subscription.AllocationCount)
-	})
-
-	t.Run("overflow rolls back", func(t *testing.T) {
-		truncateTables(t)
-		plan := seedRepeatPurchaseUserAndPlan(t, 3401, 3402, SubscriptionRepeatPurchaseAddQuota)
-		first := applyRepeatPurchase(t, 3401, plan, SubscriptionApplyModePlanDefault, true, "order")
-		require.NoError(t, DB.Model(&UserSubscription{}).Where("id = ?", first.Subscription.Id).Update("amount_total", int64(math.MaxInt64)).Error)
-
-		err := DB.Transaction(func(tx *gorm.DB) error {
-			_, err := CreateUserSubscriptionFromPlanTx(tx, 3401, plan, SubscriptionApplyOptions{
-				Source: "order", ApplyMode: SubscriptionApplyModePlanDefault, EnforcePurchaseLimit: true,
-			})
-			return err
+			assert.Zero(t, second.Subscription.AmountTotal)
+			assert.EqualValues(t, 2, second.Subscription.AllocationCount)
 		})
 
-		require.ErrorContains(t, err, "quota overflow")
-		actual := getRepeatPurchaseSubscriptions(t, 3401, plan.Id)
-		require.Len(t, actual, 1)
-		assert.EqualValues(t, 1, actual[0].AllocationCount)
-		assert.Equal(t, int64(math.MaxInt64), actual[0].AmountTotal)
-	})
+		t.Run(mode+" overflow rolls back", func(t *testing.T) {
+			truncateTables(t)
+			userId := 3401 + index
+			plan := seedRepeatPurchaseUserAndPlan(t, userId, 3403+index, mode)
+			first := applyRepeatPurchase(t, userId, plan, SubscriptionApplyModePlanDefault, true, "order")
+			require.NoError(t, DB.Model(&UserSubscription{}).Where("id = ?", first.Subscription.Id).Update("amount_total", int64(math.MaxInt64)).Error)
+
+			err := DB.Transaction(func(tx *gorm.DB) error {
+				_, err := CreateUserSubscriptionFromPlanTx(tx, userId, plan, SubscriptionApplyOptions{
+					Source: "order", ApplyMode: SubscriptionApplyModePlanDefault, EnforcePurchaseLimit: true,
+				})
+				return err
+			})
+
+			require.ErrorContains(t, err, "quota overflow")
+			actual := getRepeatPurchaseSubscriptions(t, userId, plan.Id)
+			require.Len(t, actual, 1)
+			assert.EqualValues(t, 1, actual[0].AllocationCount)
+			assert.Equal(t, int64(math.MaxInt64), actual[0].AmountTotal)
+		})
+	}
 }
 
 func TestAdminSubscriptionGrantBypassesLimitAndCanOverrideMode(t *testing.T) {
@@ -239,6 +316,15 @@ func TestAdminSubscriptionGrantBypassesLimitAndCanOverrideMode(t *testing.T) {
 	assert.Equal(t, SubscriptionApplyActionMerged, adminMerged.Action)
 	assert.EqualValues(t, 200, adminMerged.Subscription.AmountTotal)
 	assert.EqualValues(t, 2, adminMerged.Subscription.AllocationCount)
+	require.NoError(t, DB.Model(&UserSubscription{}).Where("id = ?", adminMerged.Subscription.Id).Update("amount_used", 40).Error)
+
+	adminReset, err := AdminBindSubscription(3501, plan.Id, SubscriptionRepeatPurchaseExtendTimeResetQuota)
+	require.NoError(t, err)
+	assert.Equal(t, SubscriptionApplyActionMerged, adminReset.Action)
+	assert.Equal(t, SubscriptionRepeatPurchaseExtendTimeResetQuota, adminReset.AppliedMode)
+	assert.EqualValues(t, 100, adminReset.Subscription.AmountTotal)
+	assert.Zero(t, adminReset.Subscription.AmountUsed)
+	assert.EqualValues(t, 3, adminReset.Subscription.AllocationCount)
 
 	adminIndependent, err := AdminBindSubscription(3501, plan.Id, SubscriptionRepeatPurchaseIndependent)
 	require.NoError(t, err)
@@ -247,7 +333,7 @@ func TestAdminSubscriptionGrantBypassesLimitAndCanOverrideMode(t *testing.T) {
 
 	count, err := CountUserSubscriptionsByPlan(3501, plan.Id)
 	require.NoError(t, err)
-	assert.EqualValues(t, 3, count)
+	assert.EqualValues(t, 4, count)
 }
 
 func TestRepeatedSubscriptionReopensResetScheduleAndPreservesPreviousGroup(t *testing.T) {
@@ -271,6 +357,94 @@ func TestRepeatedSubscriptionReopensResetScheduleAndPreservesPreviousGroup(t *te
 	assert.Equal(t, first.Subscription.EndTime+60, second.Subscription.EndTime)
 	assert.Equal(t, first.Subscription.StartTime+120, second.Subscription.NextResetTime)
 	assert.Equal(t, "default", second.Subscription.PrevUserGroup)
+}
+
+func TestExtendTimeResetQuotaKeepsOrReopensResetSchedule(t *testing.T) {
+	t.Run("keeps active reset schedule", func(t *testing.T) {
+		truncateTables(t)
+		plan := seedRepeatPurchaseUserAndPlan(t, 3651, 3652, SubscriptionRepeatPurchaseExtendTimeResetQuota)
+		plan.QuotaResetPeriod = SubscriptionResetCustom
+		plan.QuotaResetCustomSeconds = 120
+		require.NoError(t, DB.Model(plan).Updates(map[string]interface{}{
+			"quota_reset_period": SubscriptionResetCustom, "quota_reset_custom_seconds": 120,
+		}).Error)
+
+		first := applyRepeatPurchase(t, 3651, plan, SubscriptionApplyModePlanDefault, true, "order")
+		require.NotZero(t, first.Subscription.NextResetTime)
+		require.NoError(t, DB.Model(&UserSubscription{}).Where("id = ?", first.Subscription.Id).Update("amount_used", 50).Error)
+
+		second := applyRepeatPurchase(t, 3651, plan, SubscriptionApplyModePlanDefault, true, "order")
+
+		assert.Equal(t, first.Subscription.LastResetTime, second.Subscription.LastResetTime)
+		assert.Equal(t, first.Subscription.NextResetTime, second.Subscription.NextResetTime)
+		assert.Zero(t, second.Subscription.AmountUsed)
+	})
+
+	t.Run("reopens stopped reset schedule", func(t *testing.T) {
+		truncateTables(t)
+		plan := seedRepeatPurchaseUserAndPlan(t, 3661, 3662, SubscriptionRepeatPurchaseExtendTimeResetQuota)
+		plan.CustomSeconds = 60
+		plan.QuotaResetPeriod = SubscriptionResetCustom
+		plan.QuotaResetCustomSeconds = 120
+		require.NoError(t, DB.Model(plan).Updates(map[string]interface{}{
+			"custom_seconds": 60, "quota_reset_period": SubscriptionResetCustom,
+			"quota_reset_custom_seconds": 120,
+		}).Error)
+
+		first := applyRepeatPurchase(t, 3661, plan, SubscriptionApplyModePlanDefault, true, "order")
+		assert.Zero(t, first.Subscription.NextResetTime)
+
+		second := applyRepeatPurchase(t, 3661, plan, SubscriptionApplyModePlanDefault, true, "order")
+
+		assert.Equal(t, first.Subscription.EndTime+60, second.Subscription.EndTime)
+		assert.Equal(t, first.Subscription.StartTime+120, second.Subscription.NextResetTime)
+	})
+}
+
+func TestMaxValidityReopensResetScheduleOnlyWhenExtended(t *testing.T) {
+	testCases := []struct {
+		name        string
+		currentEnd  int64
+		incomingEnd int64
+		shouldOpen  bool
+	}{
+		{name: "reopens after extension", currentEnd: 60, incomingEnd: 3600, shouldOpen: true},
+		{name: "stays stopped without extension", currentEnd: 3600, incomingEnd: 1800, shouldOpen: false},
+	}
+
+	for index, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			truncateTables(t)
+			userId := 3671 + index
+			plan := seedRepeatPurchaseUserAndPlan(t, userId, 3673+index, SubscriptionRepeatPurchaseMaxValidity)
+			plan.QuotaResetPeriod = SubscriptionResetCustom
+			plan.QuotaResetCustomSeconds = 120
+			now := GetDBTimestamp()
+			target := &UserSubscription{
+				UserId: userId, PlanId: plan.Id, AmountTotal: 100,
+				StartTime: now - 100, EndTime: now + testCase.currentEnd, Status: "active", AllocationCount: 1,
+			}
+			require.NoError(t, DB.Create(target).Error)
+			incoming := &UserSubscription{
+				UserId: userId, PlanId: plan.Id, AmountTotal: 100,
+				StartTime: now, EndTime: now + testCase.incomingEnd, Status: "active", AllocationCount: 1,
+			}
+
+			var result *SubscriptionApplyResult
+			require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+				var err error
+				result, err = mergeRepeatedUserSubscriptionTx(tx, plan, incoming, SubscriptionRepeatPurchaseMaxValidity)
+				return err
+			}))
+
+			require.NotNil(t, result)
+			if testCase.shouldOpen {
+				assert.NotZero(t, result.Subscription.NextResetTime)
+			} else {
+				assert.Zero(t, result.Subscription.NextResetTime)
+			}
+		})
+	}
 }
 
 func TestMergedQuotaCanCoverOneLargeRequest(t *testing.T) {

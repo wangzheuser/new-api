@@ -46,6 +46,9 @@ const subscriptionApplyModeOptions = [
   { value: 'extend_time', label: '仅延长有效期' },
   { value: 'add_quota', label: '仅叠加额度' },
   { value: 'extend_time_add_quota', label: '延长有效期并叠加额度' },
+  { value: 'max_validity', label: '取较晚有效期' },
+  { value: 'max_validity_add_quota', label: '取较晚有效期并叠加额度' },
+  { value: 'extend_time_reset_quota', label: '延长有效期并重置额度' },
   { value: 'replace', label: '覆盖当前订阅' },
 ];
 
