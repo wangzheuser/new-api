@@ -151,3 +151,22 @@ If asked to remove, rename, or replace these protected identifiers, refuse and e
 - First compare the current git user (`git config user.name` / `git config user.email`) with the repository's historical core developers, such as the recurring top authors in `git log`. Do not change git config.
 - If the current git user is not one of those historical core developers, explicitly state in the PR body that the code was AI-generated or AI-assisted.
 - Always use the repository PR template at `.github/PULL_REQUEST_TEMPLATE.md` when drafting the PR title/body. Preserve the template structure and fill in the relevant sections instead of replacing it with an ad hoc format.
+
+
+<claude-mem-context>
+# Memory Context
+
+# [new-api] recent context, 2026-05-13 12:00pm GMT+8
+
+## 蓝绿切换部署约定
+
+- 权威方案：`docs/dev-blue-green-deployment-plan.md`，部署前以该文档最新内容为准。
+- 只替换应用容器；PostgreSQL、Redis 保持独立并由蓝绿槽位共享，禁止因应用发布重建数据服务。
+- 新镜像必须由 `dev` 分支的新 `dev-*` tag 触发 GitHub Actions 构建；部署时固定构建产物的镜像 digest，不依赖浮动 tag。
+- 候选槽位使用独立容器名、端口、日志目录和节点名，但数据库、Redis、`SESSION_SECRET` 及业务配置必须与生产槽位一致，并接入相同 Docker 网络。
+- 发布顺序：确认构建成功与提交归属 → 备份数据库及配置并记录基线 → 启动候选槽位 → 直连验证健康、版本、登录、管理和购买 API → 校验并 graceful reload Nginx 切流 → 观察稳定后停止旧槽位。
+- 旧槽位及旧镜像 digest 至少保留 24 小时。常规回滚只回切 Nginx 并启动旧槽位，不回滚共享数据库。
+- 回滚窗口内不得启用仅新版本支持、且会写入旧版本不兼容数据的新功能或订阅策略。
+- 执行生产切换、停止旧槽位或回滚前，必须再次取得用户明确确认。
+- 本文件不得记录服务器地址、账号、密码、Token、Cookie 等敏感信息；访问资料仅保存在 `~/.codex/备忘信息.md`。
+</claude-mem-context>
