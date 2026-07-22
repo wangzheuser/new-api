@@ -24,43 +24,59 @@ import { parseQuotaFromDollars, quotaUnitsToDollars } from '@/lib/format'
 import type { SubscriptionPlan, PlanPayload } from '../types'
 
 export function getPlanFormSchema(t: TFunction) {
-  return z.object({
-    title: z.string().min(1, t('Please enter plan title')),
-    subtitle: z.string().optional(),
-    price_amount: z.coerce.number().min(0, t('Please enter amount')),
-    duration_unit: z.enum(['year', 'month', 'day', 'hour', 'custom']),
-    duration_value: z.coerce.number().min(1),
-    custom_seconds: z.coerce.number().min(0).optional(),
-    quota_reset_period: z.enum([
-      'never',
-      'daily',
-      'weekly',
-      'monthly',
-      'custom',
-    ]),
-    quota_reset_custom_seconds: z.coerce.number().min(0).optional(),
-    enabled: z.boolean(),
-    sort_order: z.coerce.number(),
-    allow_balance_pay: z.boolean(),
-    allow_wallet_overflow: z.boolean(),
-    max_purchase_per_user: z.coerce.number().min(0),
-    repeat_purchase_mode: z.enum([
-      'independent',
-      'extend_time',
-      'add_quota',
-      'extend_time_add_quota',
-      'max_validity',
-      'max_validity_add_quota',
-      'extend_time_reset_quota',
-      'replace',
-    ]),
-    total_amount: z.coerce.number().min(0),
-    upgrade_group: z.string().optional(),
-    downgrade_group: z.string().optional(),
-    stripe_price_id: z.string().optional(),
-    creem_product_id: z.string().optional(),
-    waffo_pancake_product_id: z.string().optional(),
-  })
+  return z
+    .object({
+      title: z.string().min(1, t('Please enter plan title')),
+      subtitle: z.string().optional(),
+      price_amount: z.coerce.number().min(0, t('Please enter amount')),
+      duration_unit: z.enum(['year', 'month', 'day', 'hour', 'custom']),
+      duration_value: z.coerce.number().min(1),
+      custom_seconds: z.coerce.number().min(0).optional(),
+      quota_reset_period: z.enum([
+        'never',
+        'daily',
+        'weekly',
+        'monthly',
+        'custom',
+      ]),
+      quota_reset_custom_seconds: z.coerce.number().min(0).optional(),
+      enabled: z.boolean(),
+      sort_order: z.coerce.number(),
+      allow_balance_pay: z.boolean(),
+      allow_wallet_overflow: z.boolean(),
+      max_purchase_per_user: z.coerce.number().min(0),
+      repeat_purchase_mode: z.enum([
+        'independent',
+        'extend_time',
+        'add_quota',
+        'extend_time_add_quota',
+        'max_validity',
+        'max_validity_add_quota',
+        'extend_time_reset_quota',
+        'replace',
+      ]),
+      total_amount: z.coerce.number().min(0),
+      entitlement_group: z.string().optional(),
+      upgrade_group: z.string().optional(),
+      downgrade_group: z.string().optional(),
+      stripe_price_id: z.string().optional(),
+      creem_product_id: z.string().optional(),
+      waffo_pancake_product_id: z.string().optional(),
+    })
+    .superRefine((values, context) => {
+      if (
+        values.entitlement_group &&
+        (values.upgrade_group || values.downgrade_group)
+      ) {
+        context.addIssue({
+          code: 'custom',
+          path: ['entitlement_group'],
+          message: t(
+            'Entitlement group cannot be combined with upgrade or downgrade group'
+          ),
+        })
+      }
+    })
 }
 
 export type PlanFormValues = z.infer<ReturnType<typeof getPlanFormSchema>>
@@ -81,6 +97,7 @@ export const PLAN_FORM_DEFAULTS: PlanFormValues = {
   max_purchase_per_user: 0,
   repeat_purchase_mode: 'independent',
   total_amount: 0,
+  entitlement_group: '',
   upgrade_group: '',
   downgrade_group: '',
   stripe_price_id: '',
@@ -105,6 +122,7 @@ export function planToFormValues(plan: SubscriptionPlan): PlanFormValues {
     max_purchase_per_user: Number(plan.max_purchase_per_user || 0),
     repeat_purchase_mode: plan.repeat_purchase_mode || 'independent',
     total_amount: quotaUnitsToDollars(Number(plan.total_amount || 0)),
+    entitlement_group: plan.entitlement_group || '',
     upgrade_group: plan.upgrade_group || '',
     downgrade_group: plan.downgrade_group || '',
     stripe_price_id: plan.stripe_price_id || '',
@@ -129,6 +147,7 @@ export function formValuesToPlanPayload(values: PlanFormValues): PlanPayload {
       sort_order: Number(values.sort_order || 0),
       max_purchase_per_user: Number(values.max_purchase_per_user || 0),
       total_amount: parseQuotaFromDollars(Number(values.total_amount || 0)),
+      entitlement_group: values.entitlement_group || '',
       upgrade_group: values.upgrade_group || '',
       downgrade_group: values.downgrade_group || '',
     },

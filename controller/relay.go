@@ -182,7 +182,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	retryParam := &service.RetryParam{
 		Ctx:         c,
-		TokenGroup:  relayInfo.TokenGroup,
+		TokenGroup:  relayRetryGroup(relayInfo),
 		ModelName:   relayInfo.OriginModelName,
 		RequestPath: c.Request.URL.Path,
 		Retry:       common.GetPointer(0),
@@ -322,6 +322,17 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		return nil, newAPIError
 	}
 	return channel, nil
+}
+
+// relayRetryGroup keeps retries inside the group whose subscription funds the request.
+func relayRetryGroup(info *relaycommon.RelayInfo) string {
+	if info != nil && info.SubscriptionEntitlementGroup != "" {
+		return info.SubscriptionEntitlementGroup
+	}
+	if info == nil {
+		return ""
+	}
+	return info.TokenGroup
 }
 
 func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {
@@ -511,7 +522,7 @@ func RelayTask(c *gin.Context) {
 
 	retryParam := &service.RetryParam{
 		Ctx:         c,
-		TokenGroup:  relayInfo.TokenGroup,
+		TokenGroup:  relayRetryGroup(relayInfo),
 		ModelName:   relayInfo.OriginModelName,
 		RequestPath: c.Request.URL.Path,
 		Retry:       common.GetPointer(0),

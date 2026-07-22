@@ -109,6 +109,9 @@ func setupTokenControllerTestDB(t *testing.T) *gorm.DB {
 
 	db := openTokenControllerTestDB(t)
 	migrateTokenControllerTestDB(t, db)
+	if err := db.AutoMigrate(&model.User{}, &model.UserSubscription{}); err != nil {
+		t.Fatalf("failed to migrate token authorization tables: %v", err)
+	}
 	return db
 }
 
@@ -162,6 +165,13 @@ func openTokenControllerExternalDB(t *testing.T, dialect string, dsn string) (*g
 
 func seedToken(t *testing.T, db *gorm.DB, userID int, name string, rawKey string) *model.Token {
 	t.Helper()
+	user := &model.User{
+		Id: userID, Username: fmt.Sprintf("token-user-%d", userID), Group: "default",
+		Status: common.UserStatusEnabled, AffCode: fmt.Sprintf("token-aff-%d", userID),
+	}
+	if err := db.Where("id = ?", userID).FirstOrCreate(user).Error; err != nil {
+		t.Fatalf("failed to seed token user: %v", err)
+	}
 
 	token := &model.Token{
 		UserId:         userID,

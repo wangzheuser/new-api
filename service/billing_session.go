@@ -345,6 +345,15 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 	}
 
 	pref := common.NormalizeBillingPreference(relayInfo.UserSetting.BillingPreference)
+	entitlementGroup := ""
+	hasGroupSubscription, err := model.HasActiveUserSubscriptionForGroup(relayInfo.UserId, relayInfo.UsingGroup)
+	if err != nil {
+		return nil, types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+	}
+	if hasGroupSubscription {
+		entitlementGroup = relayInfo.UsingGroup
+		relayInfo.SubscriptionEntitlementGroup = entitlementGroup
+	}
 
 	// 钱包路径需要先检查用户额度
 	tryWallet := func() (*BillingSession, *types.NewAPIError) {
@@ -384,10 +393,11 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		session := &BillingSession{
 			relayInfo: relayInfo,
 			funding: &SubscriptionFunding{
-				requestId: relayInfo.RequestId,
-				userId:    relayInfo.UserId,
-				modelName: relayInfo.OriginModelName,
-				amount:    subConsume,
+				requestId:        relayInfo.RequestId,
+				userId:           relayInfo.UserId,
+				modelName:        relayInfo.OriginModelName,
+				entitlementGroup: entitlementGroup,
+				amount:           subConsume,
 			},
 		}
 		// 必须传 subConsume 而非 preConsumedQuota，保证 SubscriptionFunding.amount、
@@ -396,6 +406,23 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 			return nil, apiErr
 		}
 		return session, nil
+	}
+
+	// A group-scoped subscription must consume its own quota. Wallet fallback follows
+	// that subscription's overflow setting and never consumes another group's quota.
+	if entitlementGroup != "" {
+		session, apiErr := trySubscription()
+		if apiErr == nil || apiErr.GetErrorCode() != types.ErrorCodeInsufficientUserQuota {
+			return session, apiErr
+		}
+		allowOverflow, overflowErr := model.UserActiveSubscriptionsAllowWalletOverflowForGroup(relayInfo.UserId, entitlementGroup)
+		if overflowErr != nil {
+			return nil, types.NewError(overflowErr, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+		}
+		if allowOverflow {
+			return tryWallet()
+		}
+		return nil, apiErr
 	}
 
 	switch pref {
@@ -415,7 +442,7 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 	case "subscription_first":
 		fallthrough
 	default:
-		hasSub, subCheckErr := model.HasActiveUserSubscription(relayInfo.UserId)
+		hasSub, subCheckErr := model.HasActiveUserSubscriptionForGroup(relayInfo.UserId, "")
 		if subCheckErr != nil {
 			return nil, types.NewError(subCheckErr, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
 		}
@@ -426,7 +453,7 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		if apiErr != nil {
 			if apiErr.GetErrorCode() == types.ErrorCodeInsufficientUserQuota {
 				// 仅当用户的活跃订阅允许钱包回退时才回退到钱包，否则返回订阅额度不足错误
-				allowOverflow, overflowErr := model.UserActiveSubscriptionsAllowWalletOverflow(relayInfo.UserId)
+				allowOverflow, overflowErr := model.UserActiveSubscriptionsAllowWalletOverflowForGroup(relayInfo.UserId, "")
 				if overflowErr != nil {
 					return nil, types.NewError(overflowErr, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
 				}

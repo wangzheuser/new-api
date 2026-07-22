@@ -5242,6 +5242,10 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Entitlement Group": "Nhóm quyền lợi",
+    "No Entitlement Group": "Không có nhóm quyền lợi",
+    "Grants access to this group while the subscription is active without changing the user base group": "Cấp quyền truy cập nhóm này trong thời gian gói đăng ký còn hiệu lực mà không thay đổi nhóm cơ sở của người dùng",
+    "Entitlement group cannot be combined with upgrade or downgrade group": "Không thể kết hợp nhóm quyền lợi với nhóm nâng cấp hoặc hạ cấp"
   }
 }

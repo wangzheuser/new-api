@@ -420,8 +420,13 @@ func TokenAuth() func(c *gin.Context) {
 		userGroup := userCache.Group
 		tokenGroup := token.Group
 		if tokenGroup != "" {
-			// check common.UserUsableGroups[userGroup]
-			if _, ok := service.GetUserUsableGroups(userGroup)[tokenGroup]; !ok {
+			groupAllowed, err := service.GroupInUserEffectiveGroups(token.UserId, userGroup, tokenGroup)
+			if err != nil {
+				abortWithOpenAiMessage(c, http.StatusInternalServerError,
+					common.TranslateMessage(c, i18n.MsgDatabaseError))
+				return
+			}
+			if !groupAllowed {
 				abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", tokenGroup))
 				return
 			}

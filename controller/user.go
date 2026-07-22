@@ -621,7 +621,11 @@ func GetUserModels(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	groups := service.GetUserUsableGroups(user.Group)
+	groups, err := service.GetUserEffectiveGroups(user.Id, user.Group)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	group := c.Query("group")
 	if group != "" {
 		if _, ok := groups[group]; !ok {

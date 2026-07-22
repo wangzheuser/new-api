@@ -9,7 +9,9 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -164,6 +166,28 @@ func GetTokenUsage(c *gin.Context) {
 	})
 }
 
+// validateUserTokenGroup verifies that the token group is currently available to the user.
+func validateUserTokenGroup(userId int, group string) error {
+	if group == "" {
+		return nil
+	}
+	userGroup, err := model.GetUserGroup(userId, false)
+	if err != nil {
+		return err
+	}
+	allowed, err := service.GroupInUserEffectiveGroups(userId, userGroup, group)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return fmt.Errorf("无权访问 %s 分组", group)
+	}
+	if group != "auto" && !ratio_setting.ContainsGroupRatio(group) {
+		return fmt.Errorf("分组 %s 已被弃用", group)
+	}
+	return nil
+}
+
 func AddToken(c *gin.Context) {
 	token := model.Token{}
 	err := c.ShouldBindJSON(&token)
@@ -199,6 +223,10 @@ func AddToken(c *gin.Context) {
 			"success": false,
 			"message": fmt.Sprintf("已达到最大令牌数量限制 (%d)", maxTokens),
 		})
+		return
+	}
+	if err := validateUserTokenGroup(c.GetInt("id"), token.Group); err != nil {
+		common.ApiError(c, err)
 		return
 	}
 	key, err := common.GenerateKey()
@@ -289,6 +317,10 @@ func UpdateToken(c *gin.Context) {
 	if statusOnly != "" {
 		cleanToken.Status = token.Status
 	} else {
+		if err := validateUserTokenGroup(userId, token.Group); err != nil {
+			common.ApiError(c, err)
+			return
+		}
 		// If you add more fields, please also update token.Update()
 		cleanToken.Name = token.Name
 		cleanToken.ExpiredTime = token.ExpiredTime

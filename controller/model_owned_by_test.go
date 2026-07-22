@@ -6,6 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -82,4 +83,14 @@ func TestGetModelListGroupsUsesExplicitTokenGroup(t *testing.T) {
 	require.Equal(t, "default", groups.userGroup)
 	require.Equal(t, "vip", groups.tokenGroup)
 	require.Equal(t, []string{"vip"}, groups.ownerGroups)
+}
+
+func TestRelayRetryGroupLocksSubscriptionEntitlementGroup(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		TokenGroup:                   "auto",
+		SubscriptionEntitlementGroup: "claude",
+	}
+	require.Equal(t, "claude", relayRetryGroup(info))
+	info.SubscriptionEntitlementGroup = ""
+	require.Equal(t, "auto", relayRetryGroup(info))
 }

@@ -175,6 +175,9 @@ type SubscriptionPlan struct {
 	// How repeated purchases of this plan are applied to an active subscription.
 	RepeatPurchaseMode string `json:"repeat_purchase_mode" gorm:"type:varchar(32);not null;default:'independent'"`
 
+	// Group granted while the subscription is active without changing the user's base group.
+	EntitlementGroup string `json:"entitlement_group" gorm:"type:varchar(64);default:''"`
+
 	// Upgrade user group after purchase (empty = no change)
 	UpgradeGroup string `json:"upgrade_group" gorm:"type:varchar(64);default:''"`
 
@@ -272,6 +275,9 @@ type UserSubscription struct {
 
 	LastResetTime int64 `json:"last_reset_time" gorm:"type:bigint;default:0"`
 	NextResetTime int64 `json:"next_reset_time" gorm:"type:bigint;default:0;index"`
+
+	// Entitlement group snapshot from the plan.
+	EntitlementGroup string `json:"entitlement_group" gorm:"type:varchar(64);default:'';index"`
 
 	UpgradeGroup  string `json:"upgrade_group" gorm:"type:varchar(64);default:''"`
 	PrevUserGroup string `json:"prev_user_group" gorm:"type:varchar(64);default:''"`
@@ -524,6 +530,12 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 		lastReset = now.Unix()
 	}
 	upgradeGroup := strings.TrimSpace(plan.UpgradeGroup)
+	entitlementGroup := strings.TrimSpace(plan.EntitlementGroup)
+	downgradeGroup := strings.TrimSpace(plan.DowngradeGroup)
+	if entitlementGroup != "" {
+		upgradeGroup = ""
+		downgradeGroup = ""
+	}
 	prevGroup := ""
 	if upgradeGroup != "" {
 		currentGroup, err := getUserGroupByIdTx(tx, userId)
@@ -554,9 +566,10 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 		AllocationCount:     1,
 		LastResetTime:       lastReset,
 		NextResetTime:       nextReset,
+		EntitlementGroup:    entitlementGroup,
 		UpgradeGroup:        upgradeGroup,
 		PrevUserGroup:       prevGroup,
-		DowngradeGroup:      strings.TrimSpace(plan.DowngradeGroup),
+		DowngradeGroup:      downgradeGroup,
 		AllowWalletOverflow: allowWalletOverflow,
 		CreatedAt:           common.GetTimestamp(),
 		UpdatedAt:           common.GetTimestamp(),
@@ -887,6 +900,39 @@ func HasActiveUserSubscription(userId int) (bool, error) {
 	return count > 0, nil
 }
 
+// HasActiveUserSubscriptionForGroup returns whether the user has an active subscription
+// in the specified entitlement scope. An empty group matches legacy unscoped subscriptions.
+func HasActiveUserSubscriptionForGroup(userId int, entitlementGroup string) (bool, error) {
+	if userId <= 0 {
+		return false, errors.New("invalid userId")
+	}
+	now := common.GetTimestamp()
+	query := DB.Model(&UserSubscription{}).
+		Where("user_id = ? AND status = ? AND start_time <= ? AND end_time > ?", userId, "active", now, now)
+	query = scopeUserSubscriptionsByEntitlementGroup(query, entitlementGroup)
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// GetActiveUserEntitlementGroups returns the distinct groups granted by active subscriptions.
+func GetActiveUserEntitlementGroups(userId int) ([]string, error) {
+	if userId <= 0 {
+		return []string{}, nil
+	}
+	now := common.GetTimestamp()
+	groups := make([]string, 0)
+	err := DB.Model(&UserSubscription{}).
+		Where("user_id = ? AND status = ? AND start_time <= ? AND end_time > ? AND entitlement_group <> ''",
+			userId, "active", now, now).
+		Distinct().
+		Order("entitlement_group asc").
+		Pluck("entitlement_group", &groups).Error
+	return groups, err
+}
+
 // UserActiveSubscriptionsAllowWalletOverflow returns whether wallet balance may be used
 // after the user's subscription quota is exhausted. A single active subscription that
 // disallows wallet overflow (allow_wallet_overflow = false) blocks the fallback.
@@ -903,6 +949,33 @@ func UserActiveSubscriptionsAllowWalletOverflow(userId int) (bool, error) {
 		return false, err
 	}
 	return strictCount == 0, nil
+}
+
+// UserActiveSubscriptionsAllowWalletOverflowForGroup returns whether wallet fallback is
+// allowed for active subscriptions in one entitlement scope.
+func UserActiveSubscriptionsAllowWalletOverflowForGroup(userId int, entitlementGroup string) (bool, error) {
+	if userId <= 0 {
+		return false, errors.New("invalid userId")
+	}
+	now := common.GetTimestamp()
+	query := DB.Model(&UserSubscription{}).
+		Where("user_id = ? AND status = ? AND start_time <= ? AND end_time > ? AND allow_wallet_overflow = ?",
+			userId, "active", now, now, false)
+	query = scopeUserSubscriptionsByEntitlementGroup(query, entitlementGroup)
+	var strictCount int64
+	if err := query.Count(&strictCount).Error; err != nil {
+		return false, err
+	}
+	return strictCount == 0, nil
+}
+
+// scopeUserSubscriptionsByEntitlementGroup applies the subscription funding scope.
+func scopeUserSubscriptionsByEntitlementGroup(query *gorm.DB, entitlementGroup string) *gorm.DB {
+	entitlementGroup = strings.TrimSpace(entitlementGroup)
+	if entitlementGroup == "" {
+		return query.Where("(entitlement_group = ? OR entitlement_group IS NULL)", "")
+	}
+	return query.Where("entitlement_group = ?", entitlementGroup)
 }
 
 // GetAllUserSubscriptions returns all subscriptions (active and expired) for a user.
@@ -1305,8 +1378,13 @@ func maybeResetUserSubscriptionWithPlanTx(tx *gorm.DB, sub *UserSubscription, pl
 	return tx.Save(sub).Error
 }
 
-// PreConsumeUserSubscription pre-consumes from any active subscription total quota.
+// PreConsumeUserSubscription pre-consumes from an active legacy unscoped subscription.
 func PreConsumeUserSubscription(requestId string, userId int, modelName string, quotaType int, amount int64) (*SubscriptionPreConsumeResult, error) {
+	return PreConsumeUserSubscriptionForGroup(requestId, userId, modelName, quotaType, amount, "")
+}
+
+// PreConsumeUserSubscriptionForGroup pre-consumes from active subscriptions in one entitlement scope.
+func PreConsumeUserSubscriptionForGroup(requestId string, userId int, modelName string, quotaType int, amount int64, entitlementGroup string) (*SubscriptionPreConsumeResult, error) {
 	if userId <= 0 {
 		return nil, errors.New("invalid userId")
 	}
@@ -1343,8 +1421,10 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 		}
 
 		var subs []UserSubscription
-		if err := lockForUpdate(tx).
-			Where("user_id = ? AND status = ? AND end_time > ?", userId, "active", now).
+		subQuery := lockForUpdate(tx).
+			Where("user_id = ? AND status = ? AND start_time <= ? AND end_time > ?", userId, "active", now, now)
+		subQuery = scopeUserSubscriptionsByEntitlementGroup(subQuery, entitlementGroup)
+		if err := subQuery.
 			Order("end_time asc, id asc").
 			Find(&subs).Error; err != nil {
 			return errors.New("no active subscription")

@@ -27,6 +27,33 @@ type SubscriptionBalancePayRequest struct {
 	PlanId int `json:"plan_id"`
 }
 
+// normalizeSubscriptionPlanGroups validates mutually exclusive group grant modes.
+func normalizeSubscriptionPlanGroups(plan *model.SubscriptionPlan) error {
+	plan.EntitlementGroup = strings.TrimSpace(plan.EntitlementGroup)
+	plan.UpgradeGroup = strings.TrimSpace(plan.UpgradeGroup)
+	plan.DowngradeGroup = strings.TrimSpace(plan.DowngradeGroup)
+	groups := ratio_setting.GetGroupRatioCopy()
+	if plan.EntitlementGroup != "" {
+		if _, ok := groups[plan.EntitlementGroup]; !ok {
+			return fmt.Errorf("权益分组不存在")
+		}
+		if plan.UpgradeGroup != "" || plan.DowngradeGroup != "" {
+			return fmt.Errorf("权益分组不能与升级或降级分组同时配置")
+		}
+	}
+	if plan.UpgradeGroup != "" {
+		if _, ok := groups[plan.UpgradeGroup]; !ok {
+			return fmt.Errorf("升级分组不存在")
+		}
+	}
+	if plan.DowngradeGroup != "" {
+		if _, ok := groups[plan.DowngradeGroup]; !ok {
+			return fmt.Errorf("降级分组不存在")
+		}
+	}
+	return nil
+}
+
 // ---- User APIs ----
 
 func GetSubscriptionPlans(c *gin.Context) {
@@ -193,19 +220,9 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "总额度不能为负数")
 		return
 	}
-	req.Plan.UpgradeGroup = strings.TrimSpace(req.Plan.UpgradeGroup)
-	if req.Plan.UpgradeGroup != "" {
-		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.UpgradeGroup]; !ok {
-			common.ApiErrorMsg(c, "升级分组不存在")
-			return
-		}
-	}
-	req.Plan.DowngradeGroup = strings.TrimSpace(req.Plan.DowngradeGroup)
-	if req.Plan.DowngradeGroup != "" {
-		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.DowngradeGroup]; !ok {
-			common.ApiErrorMsg(c, "降级分组不存在")
-			return
-		}
+	if err := normalizeSubscriptionPlanGroups(&req.Plan); err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
 	}
 	req.Plan.QuotaResetPeriod = model.NormalizeResetPeriod(req.Plan.QuotaResetPeriod)
 	if req.Plan.QuotaResetPeriod == model.SubscriptionResetCustom && req.Plan.QuotaResetCustomSeconds <= 0 {
@@ -275,19 +292,9 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "总额度不能为负数")
 		return
 	}
-	req.Plan.UpgradeGroup = strings.TrimSpace(req.Plan.UpgradeGroup)
-	if req.Plan.UpgradeGroup != "" {
-		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.UpgradeGroup]; !ok {
-			common.ApiErrorMsg(c, "升级分组不存在")
-			return
-		}
-	}
-	req.Plan.DowngradeGroup = strings.TrimSpace(req.Plan.DowngradeGroup)
-	if req.Plan.DowngradeGroup != "" {
-		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.DowngradeGroup]; !ok {
-			common.ApiErrorMsg(c, "降级分组不存在")
-			return
-		}
+	if err := normalizeSubscriptionPlanGroups(&req.Plan); err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
 	}
 	req.Plan.QuotaResetPeriod = model.NormalizeResetPeriod(req.Plan.QuotaResetPeriod)
 	if req.Plan.QuotaResetPeriod == model.SubscriptionResetCustom && req.Plan.QuotaResetCustomSeconds <= 0 {
@@ -313,6 +320,7 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 			"max_purchase_per_user":      req.Plan.MaxPurchasePerUser,
 			"repeat_purchase_mode":       req.Plan.RepeatPurchaseMode,
 			"total_amount":               req.Plan.TotalAmount,
+			"entitlement_group":          req.Plan.EntitlementGroup,
 			"upgrade_group":              req.Plan.UpgradeGroup,
 			"downgrade_group":            req.Plan.DowngradeGroup,
 			"quota_reset_period":         req.Plan.QuotaResetPeriod,
@@ -377,12 +385,13 @@ func subscriptionAuditSnapshot(sub *model.UserSubscription) map[string]interface
 		return nil
 	}
 	return map[string]interface{}{
-		"subscription_id":  sub.Id,
-		"start_time":       sub.StartTime,
-		"end_time":         sub.EndTime,
-		"amount_total":     sub.AmountTotal,
-		"amount_used":      sub.AmountUsed,
-		"allocation_count": sub.AllocationCount,
+		"subscription_id":   sub.Id,
+		"start_time":        sub.StartTime,
+		"end_time":          sub.EndTime,
+		"amount_total":      sub.AmountTotal,
+		"amount_used":       sub.AmountUsed,
+		"allocation_count":  sub.AllocationCount,
+		"entitlement_group": sub.EntitlementGroup,
 	}
 }
 

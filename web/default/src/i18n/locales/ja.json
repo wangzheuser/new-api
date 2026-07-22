@@ -5242,6 +5242,10 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Entitlement Group": "権限グループ",
+    "No Entitlement Group": "権限グループなし",
+    "Grants access to this group while the subscription is active without changing the user base group": "ユーザーの基本グループを変更せず、サブスクリプションの有効期間中このグループへのアクセスを許可します",
+    "Entitlement group cannot be combined with upgrade or downgrade group": "権限グループはアップグレードまたはダウングレードグループと同時に設定できません"
   }
 }

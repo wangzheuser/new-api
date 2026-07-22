@@ -182,6 +182,9 @@ func mergeRepeatedUserSubscriptionTx(tx *gorm.DB, plan *SubscriptionPlan, incomi
 		}
 
 		target.AllocationCount = allocationCount + 1
+		if incoming.EntitlementGroup != "" {
+			target.EntitlementGroup = incoming.EntitlementGroup
+		}
 		if incoming.UpgradeGroup != "" {
 			target.UpgradeGroup = incoming.UpgradeGroup
 			if target.PrevUserGroup == "" {

@@ -319,6 +319,14 @@ export function SubscriptionPurchaseDialog(props: Props) {
               <span className='text-right text-sm'>{repeatPurchaseLabel}</span>
             </div>
           )}
+          {plan.entitlement_group && (
+            <div className='flex items-center justify-between gap-4'>
+              <span className='text-muted-foreground text-sm'>
+                {t('Entitlement Group')}
+              </span>
+              <GroupBadge group={plan.entitlement_group} />
+            </div>
+          )}
           {plan.upgrade_group && (
             <div className='flex items-center justify-between'>
               <span className='text-muted-foreground text-sm'>

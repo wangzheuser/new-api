@@ -5242,6 +5242,10 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Entitlement Group": "权益分组",
+    "No Entitlement Group": "不授予权益分组",
+    "Grants access to this group while the subscription is active without changing the user base group": "订阅生效期间授予该分组访问权限，不修改用户基础分组",
+    "Entitlement group cannot be combined with upgrade or downgrade group": "权益分组不能与升级或降级分组同时配置"
   }
 }

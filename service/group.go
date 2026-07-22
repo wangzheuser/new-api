@@ -3,6 +3,7 @@ package service
 import (
 	"strings"
 
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
@@ -41,6 +42,35 @@ func GroupInUserUsableGroups(userGroup, groupName string) bool {
 	return ok
 }
 
+// GetUserEffectiveGroups returns the configured groups plus groups granted by active subscriptions.
+func GetUserEffectiveGroups(userId int, userGroup string) (map[string]string, error) {
+	groups := GetUserUsableGroups(userGroup)
+	if userId <= 0 {
+		return groups, nil
+	}
+	entitlementGroups, err := model.GetActiveUserEntitlementGroups(userId)
+	if err != nil {
+		return nil, err
+	}
+	for _, group := range entitlementGroups {
+		group = strings.TrimSpace(group)
+		if group != "" {
+			if _, exists := groups[group]; !exists {
+				groups[group] = "订阅权益分组"
+			}
+		}
+	}
+	return groups, nil
+}
+
+// GroupInUserEffectiveGroups reports whether a user can use the specified group now.
+func GroupInUserEffectiveGroups(userId int, userGroup, groupName string) (bool, error) {
+	if _, ok := GetUserUsableGroups(userGroup)[groupName]; ok {
+		return true, nil
+	}
+	return model.HasActiveUserSubscriptionForGroup(userId, groupName)
+}
+
 // GetUserAutoGroup 根据用户分组获取自动分组设置
 func GetUserAutoGroup(userGroup string) []string {
 	groups := GetUserUsableGroups(userGroup)
@@ -51,6 +81,21 @@ func GetUserAutoGroup(userGroup string) []string {
 		}
 	}
 	return autoGroups
+}
+
+// GetUserEffectiveAutoGroups returns auto groups available through configuration or subscriptions.
+func GetUserEffectiveAutoGroups(userId int, userGroup string) ([]string, error) {
+	groups, err := GetUserEffectiveGroups(userId, userGroup)
+	if err != nil {
+		return nil, err
+	}
+	autoGroups := make([]string, 0)
+	for _, group := range setting.GetAutoGroups() {
+		if _, ok := groups[group]; ok {
+			autoGroups = append(autoGroups, group)
+		}
+	}
+	return autoGroups, nil
 }
 
 // GetUserGroupRatio 获取用户使用某个分组的倍率

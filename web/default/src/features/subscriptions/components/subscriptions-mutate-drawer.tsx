@@ -324,6 +324,55 @@ export function SubscriptionsMutateDrawer({
               <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
                 <FormField
                   control={form.control}
+                  name='entitlement_group'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Entitlement Group')}</FormLabel>
+                      <Select
+                        items={[
+                          {
+                            value: '__none__',
+                            label: t('No Entitlement Group'),
+                          },
+                          ...groupOptions.map((g) => ({ value: g, label: g })),
+                        ]}
+                        onValueChange={(v) =>
+                          field.onChange(v === '__none__' ? '' : v)
+                        }
+                        value={field.value || ''}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue
+                              placeholder={t('No Entitlement Group')}
+                            />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent alignItemWithTrigger={false}>
+                          <SelectGroup>
+                            <SelectItem value='__none__'>
+                              {t('No Entitlement Group')}
+                            </SelectItem>
+                            {groupOptions.map((g) => (
+                              <SelectItem key={g} value={g}>
+                                {g}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                      <FormDescription>
+                        {t(
+                          'Grants access to this group while the subscription is active without changing the user base group'
+                        )}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
                   name='price_amount'
                   render={({ field }) => (
                     <FormItem>

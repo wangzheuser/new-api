@@ -5242,6 +5242,10 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Entitlement Group": "Groupe de droits",
+    "No Entitlement Group": "Aucun groupe de droits",
+    "Grants access to this group while the subscription is active without changing the user base group": "Accorde l’accès à ce groupe pendant la durée de l’abonnement sans modifier le groupe de base de l’utilisateur",
+    "Entitlement group cannot be combined with upgrade or downgrade group": "Le groupe de droits ne peut pas être combiné avec un groupe de mise à niveau ou de rétrogradation"
   }
 }

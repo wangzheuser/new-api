@@ -5242,6 +5242,10 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Entitlement Group": "Группа прав",
+    "No Entitlement Group": "Без группы прав",
+    "Grants access to this group while the subscription is active without changing the user base group": "Предоставляет доступ к этой группе на время действия подписки без изменения основной группы пользователя",
+    "Entitlement group cannot be combined with upgrade or downgrade group": "Группу прав нельзя сочетать с группой повышения или понижения"
   }
 }
