@@ -1723,6 +1723,8 @@
     "Enter your username or email": "Saisir votre nom d'utilisateur ou votre e-mail",
     "Enterprise Account": "Compte d'entreprise",
     "Enterprise-grade security with comprehensive permission management": "Sécurité de niveau entreprise avec gestion complète des autorisations",
+    "Entitlement Group": "Groupe de droits",
+    "Entitlement group cannot be combined with upgrade or downgrade group": "Le groupe de droits ne peut pas être combiné avec un groupe de mise à niveau ou de rétrogradation",
     "Entrypoint (space separated)": "Point d'entrée (séparés par des espaces)",
     "Env (JSON object)": "Env (objet JSON)",
     "Environment variables": "Variables d'environnement",
@@ -2160,6 +2162,7 @@
     "gpt-4, claude-3-opus, etc.": "gpt-4, claude-3-opus, etc.",
     "GPU count": "Nombre de GPU",
     "Granted at": "Accordé le",
+    "Grants access to this group while the subscription is active without changing the user base group": "Accorde l’accès à ce groupe pendant la durée de l’abonnement sans modifier le groupe de base de l’utilisateur",
     "Greater than": "Supérieur à",
     "Greater Than": "Supérieur à",
     "Greater than or equal": "Supérieur ou égal",
@@ -2469,6 +2472,7 @@
     "Latency short": "Lat.",
     "Latency trend (last 24h)": "Tendance de latence (24 dernières heures)",
     "Latest platform updates and notices": "Dernières mises à jour et annonces de la plateforme",
+    "Latest result per request": "Dernier résultat par requête",
     "Lavender Dream": "Rêve de lavande",
     "Layout": "Disposition",
     "lead": "tête",
@@ -2916,6 +2920,7 @@
     "No enabled tokens available": "Aucun token activé disponible",
     "No encryption": "Aucun chiffrement",
     "No endpoints configured. Switch to JSON mode or add rows to define endpoints.": "Aucun point de terminaison configuré. Passez en mode JSON ou ajoutez des lignes pour définir les points de terminaison.",
+    "No Entitlement Group": "Aucun groupe de droits",
     "No FAQ entries available": "Aucune entrée FAQ disponible",
     "No FAQ entries yet. Click \"Add FAQ\" to create one.": "Aucune entrée FAQ pour l'instant. Cliquez sur \"Ajouter une FAQ\" pour en créer une.",
     "No files match the accepted types.": "Aucun fichier ne correspond aux types acceptés.",
@@ -5242,10 +5247,6 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom",
-    "Entitlement Group": "Groupe de droits",
-    "No Entitlement Group": "Aucun groupe de droits",
-    "Grants access to this group while the subscription is active without changing the user base group": "Accorde l’accès à ce groupe pendant la durée de l’abonnement sans modifier le groupe de base de l’utilisateur",
-    "Entitlement group cannot be combined with upgrade or downgrade group": "Le groupe de droits ne peut pas être combiné avec un groupe de mise à niveau ou de rétrogradation"
+    "Zoom": "Zoom"
   }
 }

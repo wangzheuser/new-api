@@ -114,6 +114,21 @@ func TestClickHouseLogOrder(t *testing.T) {
 	assert.Equal(t, "logs.created_at desc, logs.request_id desc", clickHouseLogOrder("logs."))
 }
 
+func TestKeepLatestRequestLogsUsesClickHouseWindow(t *testing.T) {
+	originalLogDatabaseType := common.LogDatabaseType()
+	t.Cleanup(func() {
+		common.SetLogDatabaseType(originalLogDatabaseType)
+	})
+	common.SetLogDatabaseType(common.DatabaseTypeClickHouse)
+
+	query := keepLatestRequestLogs(LOG_DB.Model(&Log{})).
+		Session(&gorm.Session{DryRun: true}).
+		Find(&[]Log{})
+	require.NoError(t, query.Error)
+	assert.Contains(t, query.Statement.SQL.String(), "row_number() OVER (PARTITION BY logs.request_id")
+	assert.Contains(t, query.Statement.SQL.String(), "logs.request_id = '' OR logs.request_rank = 1")
+}
+
 func TestBuildLogLikeConditionUsesStandardEscape(t *testing.T) {
 	originalLogDatabaseType := common.LogDatabaseType()
 	t.Cleanup(func() {

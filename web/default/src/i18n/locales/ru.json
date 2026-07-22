@@ -1723,6 +1723,8 @@
     "Enter your username or email": "Введите ваше имя пользователя или адрес электронной почты",
     "Enterprise Account": "Корпоративная учетная запись",
     "Enterprise-grade security with comprehensive permission management": "Безопасность корпоративного уровня с комплексным управлением разрешениями",
+    "Entitlement Group": "Группа прав",
+    "Entitlement group cannot be combined with upgrade or downgrade group": "Группу прав нельзя сочетать с группой повышения или понижения",
     "Entrypoint (space separated)": "Точка входа (через пробелы)",
     "Env (JSON object)": "Env (объект JSON)",
     "Environment variables": "Переменные окружения",
@@ -2160,6 +2162,7 @@
     "gpt-4, claude-3-opus, etc.": "gpt-4, claude-3-opus и т. д.",
     "GPU count": "Количество GPU",
     "Granted at": "Выдано",
+    "Grants access to this group while the subscription is active without changing the user base group": "Предоставляет доступ к этой группе на время действия подписки без изменения основной группы пользователя",
     "Greater than": "Больше",
     "Greater Than": "Больше",
     "Greater than or equal": "Больше или равно",
@@ -2469,6 +2472,7 @@
     "Latency short": "Зад.",
     "Latency trend (last 24h)": "Тренд задержки (за 24 часа)",
     "Latest platform updates and notices": "Последние обновления и уведомления платформы",
+    "Latest result per request": "Последний результат каждого запроса",
     "Lavender Dream": "Лавандовая мечта",
     "Layout": "Макет",
     "lead": "лидер",
@@ -2916,6 +2920,7 @@
     "No enabled tokens available": "Нет доступных активных токенов",
     "No encryption": "Без шифрования",
     "No endpoints configured. Switch to JSON mode or add rows to define endpoints.": "Конечные точки не настроены. Переключитесь в режим JSON или добавьте строки для определения конечных точек.",
+    "No Entitlement Group": "Без группы прав",
     "No FAQ entries available": "Нет доступных записей FAQ",
     "No FAQ entries yet. Click \"Add FAQ\" to create one.": "Пока нет записей FAQ. Нажмите \"Добавить FAQ\", чтобы создать одну.",
     "No files match the accepted types.": "Нет файлов, соответствующих допустимым типам.",
@@ -5242,10 +5247,6 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom",
-    "Entitlement Group": "Группа прав",
-    "No Entitlement Group": "Без группы прав",
-    "Grants access to this group while the subscription is active without changing the user base group": "Предоставляет доступ к этой группе на время действия подписки без изменения основной группы пользователя",
-    "Entitlement group cannot be combined with upgrade or downgrade group": "Группу прав нельзя сочетать с группой повышения или понижения"
+    "Zoom": "Zoom"
   }
 }

@@ -1723,6 +1723,8 @@
     "Enter your username or email": "Enter your username or email",
     "Enterprise Account": "Enterprise Account",
     "Enterprise-grade security with comprehensive permission management": "Enterprise-grade security with comprehensive permission management",
+    "Entitlement Group": "Entitlement Group",
+    "Entitlement group cannot be combined with upgrade or downgrade group": "Entitlement group cannot be combined with upgrade or downgrade group",
     "Entrypoint (space separated)": "Entrypoint (space separated)",
     "Env (JSON object)": "Env (JSON object)",
     "Environment variables": "Environment variables",
@@ -2160,6 +2162,7 @@
     "gpt-4, claude-3-opus, etc.": "gpt-4, claude-3-opus, etc.",
     "GPU count": "GPU count",
     "Granted at": "Granted at",
+    "Grants access to this group while the subscription is active without changing the user base group": "Grants access to this group while the subscription is active without changing the user base group",
     "Greater than": "Greater than",
     "Greater Than": "Greater Than",
     "Greater than or equal": "Greater than or equal",
@@ -2469,6 +2472,7 @@
     "Latency short": "Lat.",
     "Latency trend (last 24h)": "Latency trend (last 24h)",
     "Latest platform updates and notices": "Latest platform updates and notices",
+    "Latest result per request": "Latest result per request",
     "Lavender Dream": "Lavender Dream",
     "Layout": "Layout",
     "lead": "lead",
@@ -2916,6 +2920,7 @@
     "No enabled tokens available": "No enabled tokens available",
     "No encryption": "No encryption",
     "No endpoints configured. Switch to JSON mode or add rows to define endpoints.": "No endpoints configured. Switch to JSON mode or add rows to define endpoints.",
+    "No Entitlement Group": "No Entitlement Group",
     "No FAQ entries available": "No FAQ entries available",
     "No FAQ entries yet. Click \"Add FAQ\" to create one.": "No FAQ entries yet. Click \"Add FAQ\" to create one.",
     "No files match the accepted types.": "No files match the accepted types.",
@@ -5242,10 +5247,6 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom",
-    "Entitlement Group": "Entitlement Group",
-    "No Entitlement Group": "No Entitlement Group",
-    "Grants access to this group while the subscription is active without changing the user base group": "Grants access to this group while the subscription is active without changing the user base group",
-    "Entitlement group cannot be combined with upgrade or downgrade group": "Entitlement group cannot be combined with upgrade or downgrade group"
+    "Zoom": "Zoom"
   }
 }

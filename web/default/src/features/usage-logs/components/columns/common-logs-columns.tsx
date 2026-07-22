@@ -604,6 +604,24 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
   })
   columns.push(
     {
+      accessorKey: 'request_id',
+      header: t('Request ID'),
+      cell: ({ row }) => {
+        const requestId = row.original.request_id
+        return requestId ? (
+          <StatusBadge
+            label={requestId}
+            copyText={requestId}
+            showDot={false}
+            className='max-w-[180px] font-mono'
+          />
+        ) : (
+          <span className='text-muted-foreground text-xs'>—</span>
+        )
+      },
+      size: 200,
+    },
+    {
       accessorKey: 'model_name',
       header: t('Model'),
       cell: function ModelCell({ row }) {

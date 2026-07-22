@@ -1723,6 +1723,8 @@
     "Enter your username or email": "ユーザー名またはメールアドレスを入力",
     "Enterprise Account": "エンタープライズアカウント",
     "Enterprise-grade security with comprehensive permission management": "包括的な権限管理を備えたエンタープライズグレードのセキュリティ",
+    "Entitlement Group": "権限グループ",
+    "Entitlement group cannot be combined with upgrade or downgrade group": "権限グループはアップグレードまたはダウングレードグループと同時に設定できません",
     "Entrypoint (space separated)": "Entrypoint (スペース区切り)",
     "Env (JSON object)": "Env (JSON オブジェクト)",
     "Environment variables": "環境変数",
@@ -2160,6 +2162,7 @@
     "gpt-4, claude-3-opus, etc.": "gpt-4、claude-3-opus など",
     "GPU count": "GPU 数",
     "Granted at": "付与日時",
+    "Grants access to this group while the subscription is active without changing the user base group": "ユーザーの基本グループを変更せず、サブスクリプションの有効期間中このグループへのアクセスを許可します",
     "Greater than": "より大きい",
     "Greater Than": "より大きい",
     "Greater than or equal": "以上",
@@ -2469,6 +2472,7 @@
     "Latency short": "遅延",
     "Latency trend (last 24h)": "レイテンシ推移（直近 24 時間）",
     "Latest platform updates and notices": "最新のプラットフォーム更新と通知",
+    "Latest result per request": "リクエストごとの最終結果",
     "Lavender Dream": "ラベンダードリーム",
     "Layout": "レイアウト",
     "lead": "リード",
@@ -2916,6 +2920,7 @@
     "No enabled tokens available": "有効なトークンがありません",
     "No encryption": "暗号化なし",
     "No endpoints configured. Switch to JSON mode or add rows to define endpoints.": "エンドポイントが設定されていません。JSONモードに切り替えるか、エンドポイントを定義するために行を追加してください。",
+    "No Entitlement Group": "権限グループなし",
     "No FAQ entries available": "FAQエントリがありません",
     "No FAQ entries yet. Click \"Add FAQ\" to create one.": "FAQエントリはまだありません。「FAQを追加」をクリックして作成してください。",
     "No files match the accepted types.": "許可された種類に一致するファイルがありません。",
@@ -5242,10 +5247,6 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム",
-    "Entitlement Group": "権限グループ",
-    "No Entitlement Group": "権限グループなし",
-    "Grants access to this group while the subscription is active without changing the user base group": "ユーザーの基本グループを変更せず、サブスクリプションの有効期間中このグループへのアクセスを許可します",
-    "Entitlement group cannot be combined with upgrade or downgrade group": "権限グループはアップグレードまたはダウングレードグループと同時に設定できません"
+    "Zoom": "ズーム"
   }
 }

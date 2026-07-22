@@ -1723,6 +1723,8 @@
     "Enter your username or email": "输入您的用户名或电子邮件",
     "Enterprise Account": "企业账户",
     "Enterprise-grade security with comprehensive permission management": "企业级安全性，提供全面的权限管理",
+    "Entitlement Group": "权益分组",
+    "Entitlement group cannot be combined with upgrade or downgrade group": "权益分组不能与升级或降级分组同时配置",
     "Entrypoint (space separated)": "入口点 (空格分隔)",
     "Env (JSON object)": "环境变量 (JSON 对象)",
     "Environment variables": "环境变量",
@@ -2160,6 +2162,7 @@
     "gpt-4, claude-3-opus, etc.": "gpt-4, claude-3-opus, 等",
     "GPU count": "GPU 数量",
     "Granted at": "发放时间",
+    "Grants access to this group while the subscription is active without changing the user base group": "订阅生效期间授予该分组访问权限，不修改用户基础分组",
     "Greater than": "大于",
     "Greater Than": "大于",
     "Greater than or equal": "大于等于",
@@ -2469,6 +2472,7 @@
     "Latency short": "延迟",
     "Latency trend (last 24h)": "延迟趋势（最近 24 小时）",
     "Latest platform updates and notices": "最新平台更新和通知",
+    "Latest result per request": "每个请求仅显示最终结果",
     "Lavender Dream": "薰衣草梦",
     "Layout": "布局",
     "lead": "领头",
@@ -2916,6 +2920,7 @@
     "No enabled tokens available": "当前没有可用的启用令牌",
     "No encryption": "无加密",
     "No endpoints configured. Switch to JSON mode or add rows to define endpoints.": "未配置端点。切换到 JSON 模式或添加行来定义端点。",
+    "No Entitlement Group": "不授予权益分组",
     "No FAQ entries available": "暂无 FAQ 条目",
     "No FAQ entries yet. Click \"Add FAQ\" to create one.": "暂无常见问题条目。点击“添加常见问题”来创建一个。",
     "No files match the accepted types.": "没有文件匹配接受的类型。",
@@ -5242,10 +5247,6 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放",
-    "Entitlement Group": "权益分组",
-    "No Entitlement Group": "不授予权益分组",
-    "Grants access to this group while the subscription is active without changing the user base group": "订阅生效期间授予该分组访问权限，不修改用户基础分组",
-    "Entitlement group cannot be combined with upgrade or downgrade group": "权益分组不能与升级或降级分组同时配置"
+    "Zoom": "缩放"
   }
 }

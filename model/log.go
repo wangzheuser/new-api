@@ -30,6 +30,23 @@ func applyExplicitLogTextFilter(tx *gorm.DB, column string, value string) (*gorm
 	return tx.Where(column+" = ?", value), nil
 }
 
+// keepLatestRequestLogs keeps the last log in the current scope for each non-empty request ID.
+func keepLatestRequestLogs(tx *gorm.DB) *gorm.DB {
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		ranked := tx.Select("logs.*, row_number() OVER (PARTITION BY logs.request_id ORDER BY logs.created_at DESC, logs.id DESC) AS request_rank")
+		return LOG_DB.Table("(?) AS logs", ranked).
+			Where("logs.request_id = '' OR logs.request_rank = 1")
+	}
+
+	scoped := tx.Select("logs.*")
+	newer := LOG_DB.Table("(?) AS newer", scoped).
+		Select("1").
+		Where("newer.request_id = logs.request_id").
+		Where("newer.created_at > logs.created_at OR (newer.created_at = logs.created_at AND newer.id > logs.id)")
+	return LOG_DB.Table("(?) AS logs", scoped).
+		Where("logs.request_id = '' OR NOT EXISTS (?)", newer)
+}
+
 func buildLogLikeCondition(column string, value string) (string, string, error) {
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		pattern, err := sanitizeClickHouseLikePattern(value)
@@ -465,12 +482,22 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 	}
 }
 
-func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
-	var tx *gorm.DB
-	if logType == LogTypeUnknown {
-		tx = LOG_DB
-	} else {
-		tx = LOG_DB.Where("logs.type = ?", logType)
+func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string, latestPerRequest bool) (logs []*Log, total int64, err error) {
+	tx := LOG_DB.Model(&Log{})
+	if startTimestamp != 0 {
+		tx = tx.Where("logs.created_at >= ?", startTimestamp)
+	}
+	if endTimestamp != 0 {
+		tx = tx.Where("logs.created_at <= ?", endTimestamp)
+	}
+	if requestId != "" {
+		tx = tx.Where("logs.request_id = ?", requestId)
+	}
+	if latestPerRequest {
+		tx = keepLatestRequestLogs(tx)
+	}
+	if logType != LogTypeUnknown {
+		tx = tx.Where("logs.type = ?", logType)
 	}
 
 	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", modelName); err != nil {
@@ -482,17 +509,8 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 	if tokenName != "" {
 		tx = tx.Where("logs.token_name = ?", tokenName)
 	}
-	if requestId != "" {
-		tx = tx.Where("logs.request_id = ?", requestId)
-	}
 	if upstreamRequestId != "" {
 		tx = tx.Where("logs.upstream_request_id = ?", upstreamRequestId)
-	}
-	if startTimestamp != 0 {
-		tx = tx.Where("logs.created_at >= ?", startTimestamp)
-	}
-	if endTimestamp != 0 {
-		tx = tx.Where("logs.created_at <= ?", endTimestamp)
 	}
 	if channel != 0 {
 		tx = tx.Where("logs.channel_id = ?", channel)
@@ -561,12 +579,22 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 
 const logSearchCountLimit = 10000
 
-func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
-	var tx *gorm.DB
-	if logType == LogTypeUnknown {
-		tx = LOG_DB.Where("logs.user_id = ?", userId)
-	} else {
-		tx = LOG_DB.Where("logs.user_id = ? and logs.type = ?", userId, logType)
+func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string, latestPerRequest bool) (logs []*Log, total int64, err error) {
+	tx := LOG_DB.Model(&Log{}).Where("logs.user_id = ?", userId)
+	if startTimestamp != 0 {
+		tx = tx.Where("logs.created_at >= ?", startTimestamp)
+	}
+	if endTimestamp != 0 {
+		tx = tx.Where("logs.created_at <= ?", endTimestamp)
+	}
+	if requestId != "" {
+		tx = tx.Where("logs.request_id = ?", requestId)
+	}
+	if latestPerRequest {
+		tx = keepLatestRequestLogs(tx)
+	}
+	if logType != LogTypeUnknown {
+		tx = tx.Where("logs.type = ?", logType)
 	}
 
 	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", modelName); err != nil {
@@ -575,17 +603,8 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 	if tokenName != "" {
 		tx = tx.Where("logs.token_name = ?", tokenName)
 	}
-	if requestId != "" {
-		tx = tx.Where("logs.request_id = ?", requestId)
-	}
 	if upstreamRequestId != "" {
 		tx = tx.Where("logs.upstream_request_id = ?", upstreamRequestId)
-	}
-	if startTimestamp != 0 {
-		tx = tx.Where("logs.created_at >= ?", startTimestamp)
-	}
-	if endTimestamp != 0 {
-		tx = tx.Where("logs.created_at <= ?", endTimestamp)
 	}
 	if group != "" {
 		tx = tx.Where("logs."+logGroupCol+" = ?", group)
