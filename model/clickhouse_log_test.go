@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -9,7 +10,19 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
+
+// TestGORMLoggerOmitsQueryParameters prevents captured conversation bodies from entering SQL logs.
+func TestGORMLoggerOmitsQueryParameters(t *testing.T) {
+	config := newGormConfig(false)
+	filter, ok := config.Logger.(gorm.ParamsFilter)
+	require.True(t, ok)
+
+	sql, params := filter.ParamsFilter(context.Background(), "INSERT INTO logs (body) VALUES (?)", "sensitive conversation")
+	assert.Equal(t, "INSERT INTO logs (body) VALUES (?)", sql)
+	assert.Empty(t, params)
+}
 
 func TestIsClickHouseDSN(t *testing.T) {
 	cases := []struct {

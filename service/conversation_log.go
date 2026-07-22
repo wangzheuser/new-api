@@ -89,11 +89,13 @@ func RecordConversationLog(c *gin.Context, info *relaycommon.RelayInfo, relayErr
 	}
 }
 
-// sanitizeConversationBody removes encoded binary payloads while preserving ordinary JSON and SSE bodies verbatim.
+// sanitizeConversationBody normalizes text and removes encoded binary payloads from JSON and SSE bodies.
 func sanitizeConversationBody(body []byte) ([]byte, bool) {
 	if len(body) == 0 {
 		return body, false
 	}
+	// PostgreSQL rejects invalid UTF-8 even when the relay accepted the original bytes.
+	body = bytes.ToValidUTF8(body, []byte("\uFFFD"))
 	if sanitized, changed := sanitizeConversationJSON(body); changed {
 		return redactConversationDataURIs(sanitized, true)
 	}

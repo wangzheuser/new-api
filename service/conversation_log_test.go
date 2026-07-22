@@ -2,6 +2,7 @@ package service
 
 import (
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -32,4 +33,13 @@ func TestSanitizeConversationBody(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSanitizeConversationBodyRepairsInvalidUTF8 protects conversation log persistence on PostgreSQL.
+func TestSanitizeConversationBodyRepairsInvalidUTF8(t *testing.T) {
+	sanitized, changed := sanitizeConversationBody([]byte{'h', 'i', 0xe4})
+
+	assert.False(t, changed)
+	assert.True(t, utf8.Valid(sanitized))
+	assert.Equal(t, "hi\uFFFD", string(sanitized))
 }

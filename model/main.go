@@ -17,6 +17,7 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 var commonGroupCol string
@@ -53,6 +54,19 @@ func initCol() {
 var DB *gorm.DB
 
 var LOG_DB *gorm.DB
+
+// newGormConfig creates a database configuration that keeps query values out of logs.
+func newGormConfig(prepareStmt bool) *gorm.Config {
+	return &gorm.Config{
+		PrepareStmt: prepareStmt,
+		Logger: gormlogger.New(log.New(os.Stdout, "\r\n", log.LstdFlags), gormlogger.Config{
+			SlowThreshold:        200 * time.Millisecond,
+			LogLevel:             gormlogger.Warn,
+			Colorful:             true,
+			ParameterizedQueries: true,
+		}),
+	}
+}
 
 func createRootAccountIfNeed() error {
 	var user User
@@ -132,9 +146,7 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, common.DatabaseType, error)
 				return nil, "", fmt.Errorf("%s does not support ClickHouse; use SQLite, MySQL, or PostgreSQL for the primary database and LOG_SQL_DSN for ClickHouse logs", envName)
 			}
 			common.SysLog("using ClickHouse as log database")
-			db, err := gorm.Open(clickhouse.Open(normalizeClickHouseDSN(dsn)), &gorm.Config{
-				PrepareStmt: false,
-			})
+			db, err := gorm.Open(clickhouse.Open(normalizeClickHouseDSN(dsn)), newGormConfig(false))
 			return db, common.DatabaseTypeClickHouse, err
 		}
 		if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
@@ -143,16 +155,12 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, common.DatabaseType, error)
 			db, err := gorm.Open(postgres.New(postgres.Config{
 				DSN:                  dsn,
 				PreferSimpleProtocol: true, // disables implicit prepared statement usage
-			}), &gorm.Config{
-				PrepareStmt: true, // precompile SQL
-			})
+			}), newGormConfig(true))
 			return db, common.DatabaseTypePostgreSQL, err
 		}
 		if strings.HasPrefix(dsn, "local") {
 			common.SysLog("SQL_DSN not set, using SQLite as database")
-			db, err := gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{
-				PrepareStmt: true, // precompile SQL
-			})
+			db, err := gorm.Open(sqlite.Open(common.SQLitePath), newGormConfig(true))
 			return db, common.DatabaseTypeSQLite, err
 		}
 		// Use MySQL
@@ -165,16 +173,12 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, common.DatabaseType, error)
 				dsn += "?parseTime=true"
 			}
 		}
-		db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
-			PrepareStmt: true, // precompile SQL
-		})
+		db, err := gorm.Open(mysql.Open(dsn), newGormConfig(true))
 		return db, common.DatabaseTypeMySQL, err
 	}
 	// Use SQLite
 	common.SysLog("SQL_DSN not set, using SQLite as database")
-	db, err := gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{
-		PrepareStmt: true, // precompile SQL
-	})
+	db, err := gorm.Open(sqlite.Open(common.SQLitePath), newGormConfig(true))
 	return db, common.DatabaseTypeSQLite, err
 }
 
