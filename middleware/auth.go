@@ -37,9 +37,7 @@ func validUserInfo(username string, role int) bool {
 func authHelper(c *gin.Context, minRole int) {
 	session := sessions.Default(c)
 	username := session.Get("username")
-	role := session.Get("role")
 	id := session.Get("id")
-	status := session.Get("status")
 	useAccessToken := false
 	if username == nil {
 		// Check access token
@@ -80,9 +78,7 @@ func authHelper(c *gin.Context, minRole int) {
 			}
 			// Token is valid
 			username = user.Username
-			role = user.Role
 			id = user.Id
-			status = user.Status
 			useAccessToken = true
 		} else {
 			c.JSON(http.StatusOK, gin.H{
@@ -113,7 +109,8 @@ func authHelper(c *gin.Context, minRole int) {
 		return
 
 	}
-	if id != apiUserId {
+	userId, ok := id.(int)
+	if !ok || userId != apiUserId {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"success": false,
 			"message": common.TranslateMessage(c, i18n.MsgAuthUserIdMismatch),
@@ -121,7 +118,24 @@ func authHelper(c *gin.Context, minRole int) {
 		c.Abort()
 		return
 	}
-	if status.(int) == common.UserStatusDisabled {
+	authState, err := model.GetUserAuthState(userId)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"success": false,
+				"message": common.TranslateMessage(c, i18n.MsgAuthNotLoggedIn),
+			})
+		} else {
+			common.SysLog(fmt.Sprintf("authHelper GetUserAuthState error for user %d: %v", userId, err))
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": common.TranslateMessage(c, i18n.MsgDatabaseError),
+			})
+		}
+		c.Abort()
+		return
+	}
+	if authState.Status != common.UserStatusEnabled {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": common.TranslateMessage(c, i18n.MsgAuthUserBanned),
@@ -129,7 +143,7 @@ func authHelper(c *gin.Context, minRole int) {
 		c.Abort()
 		return
 	}
-	if role.(int) < minRole {
+	if authState.Role < minRole {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": common.TranslateMessage(c, i18n.MsgAuthInsufficientPrivilege),
@@ -137,7 +151,7 @@ func authHelper(c *gin.Context, minRole int) {
 		c.Abort()
 		return
 	}
-	if !validUserInfo(username.(string), role.(int)) {
+	if !validUserInfo(authState.Username, authState.Role) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": common.TranslateMessage(c, i18n.MsgAuthUserInfoInvalid),
@@ -147,11 +161,11 @@ func authHelper(c *gin.Context, minRole int) {
 	}
 	// 防止不同newapi版本冲突，导致数据不通用
 	c.Header("Auth-Version", "864b7076dbcd0a3c01b5520316720ebf")
-	c.Set("username", username)
-	c.Set("role", role)
-	c.Set("id", id)
-	c.Set("group", session.Get("group"))
-	c.Set("user_group", session.Get("group"))
+	c.Set("username", authState.Username)
+	c.Set("role", authState.Role)
+	c.Set("id", userId)
+	c.Set("group", authState.Group)
+	c.Set("user_group", authState.Group)
 	c.Set("use_access_token", useAccessToken)
 
 	// 管理/root 写操作审计兜底：内聚在鉴权链路里，保证任何经过 AdminAuth/RootAuth
@@ -222,12 +236,39 @@ func TokenOrUserAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		// Try session auth first (dashboard users)
 		session := sessions.Default(c)
-		if id := session.Get("id"); id != nil {
-			if status, ok := session.Get("status").(int); ok && status == common.UserStatusEnabled {
-				c.Set("id", id)
-				c.Next()
+		if userId, ok := session.Get("id").(int); ok {
+			authState, err := model.GetUserAuthState(userId)
+			if err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					c.JSON(http.StatusUnauthorized, gin.H{
+						"success": false,
+						"message": common.TranslateMessage(c, i18n.MsgAuthNotLoggedIn),
+					})
+				} else {
+					common.SysLog(fmt.Sprintf("TokenOrUserAuth GetUserAuthState error for user %d: %v", userId, err))
+					c.JSON(http.StatusInternalServerError, gin.H{
+						"success": false,
+						"message": common.TranslateMessage(c, i18n.MsgDatabaseError),
+					})
+				}
+				c.Abort()
 				return
 			}
+			if authState.Status != common.UserStatusEnabled {
+				c.JSON(http.StatusForbidden, gin.H{
+					"success": false,
+					"message": common.TranslateMessage(c, i18n.MsgAuthUserBanned),
+				})
+				c.Abort()
+				return
+			}
+			c.Set("id", userId)
+			c.Set("username", authState.Username)
+			c.Set("role", authState.Role)
+			c.Set("group", authState.Group)
+			c.Set("user_group", authState.Group)
+			c.Next()
+			return
 		}
 		// Fall back to token auth (API clients)
 		TokenAuth()(c)
@@ -274,9 +315,26 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 			return
 		}
 
+		tokenAuthState, err := model.GetTokenAuthState(token.Id, token.UserId)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"success": false,
+					"message": common.TranslateMessage(c, i18n.MsgTokenInvalid),
+				})
+			} else {
+				common.SysLog(fmt.Sprintf("TokenAuthReadOnly GetTokenAuthState error for token %d: %v", token.Id, err))
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"success": false,
+					"message": common.TranslateMessage(c, i18n.MsgDatabaseError),
+				})
+			}
+			c.Abort()
+			return
+		}
 		// TokenAuthReadOnly must keep allowing other token states to query read-only
 		// data, such as token usage logs; only explicitly disabled tokens are denied.
-		if token.Status == common.TokenStatusDisabled {
+		if tokenAuthState.TokenStatus == common.TokenStatusDisabled {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"success": false,
 				"message": common.TranslateMessage(c, i18n.MsgTokenStatusUnavailable),
@@ -285,17 +343,7 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 			return
 		}
 
-		userCache, err := model.GetUserCache(token.UserId)
-		if err != nil {
-			common.SysLog(fmt.Sprintf("TokenAuthReadOnly GetUserCache error for user %d: %v", token.UserId, err))
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"success": false,
-				"message": common.TranslateMessage(c, i18n.MsgDatabaseError),
-			})
-			c.Abort()
-			return
-		}
-		if userCache.Status != common.UserStatusEnabled {
+		if tokenAuthState.UserStatus != common.UserStatusEnabled {
 			c.JSON(http.StatusForbidden, gin.H{
 				"success": false,
 				"message": common.TranslateMessage(c, i18n.MsgAuthUserBanned),
@@ -307,6 +355,8 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 		c.Set("id", token.UserId)
 		c.Set("token_id", token.Id)
 		c.Set("token_key", token.Key)
+		c.Set("group", tokenAuthState.UserGroup)
+		c.Set("user_group", tokenAuthState.UserGroup)
 		c.Next()
 	}
 }
@@ -385,6 +435,28 @@ func TokenAuth() func(c *gin.Context) {
 			}
 			return
 		}
+		tokenAuthState, err := model.GetTokenAuthState(token.Id, token.UserId)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				abortWithOpenAiMessage(c, http.StatusUnauthorized,
+					common.TranslateMessage(c, i18n.MsgTokenInvalid))
+			} else {
+				common.SysLog(fmt.Sprintf("TokenAuth GetTokenAuthState error for token %d: %v", token.Id, err))
+				abortWithOpenAiMessage(c, http.StatusInternalServerError,
+					common.TranslateMessage(c, i18n.MsgDatabaseError))
+			}
+			return
+		}
+		if tokenAuthState.TokenStatus != common.TokenStatusEnabled ||
+			(tokenAuthState.TokenExpiredTime != -1 && tokenAuthState.TokenExpiredTime < common.GetTimestamp()) {
+			abortWithOpenAiMessage(c, http.StatusUnauthorized,
+				common.TranslateMessage(c, i18n.MsgTokenInvalid))
+			return
+		}
+		if tokenAuthState.UserStatus != common.UserStatusEnabled {
+			abortWithOpenAiMessage(c, http.StatusForbidden, common.TranslateMessage(c, i18n.MsgAuthUserBanned))
+			return
+		}
 
 		allowIps := token.GetIpLimits()
 		if len(allowIps) > 0 {
@@ -409,15 +481,12 @@ func TokenAuth() func(c *gin.Context) {
 				common.TranslateMessage(c, i18n.MsgDatabaseError))
 			return
 		}
-		userEnabled := userCache.Status == common.UserStatusEnabled
-		if !userEnabled {
-			abortWithOpenAiMessage(c, http.StatusForbidden, common.TranslateMessage(c, i18n.MsgAuthUserBanned))
-			return
-		}
-
+		// 安全状态以数据库为准，缓存只提供额度和用户设置等非授权字段。
+		userCache.Status = tokenAuthState.UserStatus
+		userCache.Group = tokenAuthState.UserGroup
 		userCache.WriteContext(c)
 
-		userGroup := userCache.Group
+		userGroup := tokenAuthState.UserGroup
 		tokenGroup := token.Group
 		if tokenGroup != "" {
 			groupAllowed, err := service.GroupInUserEffectiveGroups(token.UserId, userGroup, tokenGroup)
