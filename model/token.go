@@ -303,6 +303,11 @@ func (token *Token) Update() (err error) {
 	}()
 	err = DB.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota",
 		"model_limits_enabled", "model_limits", "allow_ips", "group", "cross_group_retry").Updates(token).Error
+	if err == nil {
+		if cacheErr := RefreshTokenAuthStateCache(token.Id, token.UserId); cacheErr != nil {
+			common.SysLog(fmt.Sprintf("failed to refresh token auth cache for token %d: %v", token.Id, cacheErr))
+		}
+	}
 	return err
 }
 
@@ -333,6 +338,11 @@ func (token *Token) Delete() (err error) {
 		}
 	}()
 	err = DB.Delete(token).Error
+	if err == nil {
+		if cacheErr := RefreshTokenAuthStateCache(token.Id, token.UserId); cacheErr != nil {
+			common.SysLog(fmt.Sprintf("failed to refresh deleted token auth cache for token %d: %v", token.Id, cacheErr))
+		}
+	}
 	return err
 }
 
@@ -475,6 +485,11 @@ func BatchDeleteTokens(ids []int, userId int) (int, error) {
 				_ = cacheDeleteToken(t.Key)
 			}
 		})
+		for _, token := range tokens {
+			if err := RefreshTokenAuthStateCache(token.Id, token.UserId); err != nil {
+				common.SysLog(fmt.Sprintf("failed to refresh deleted token auth cache for token %d: %v", token.Id, err))
+			}
+		}
 	}
 
 	return len(tokens), nil
@@ -486,33 +501,4 @@ func GetTokenKeysByIds(ids []int, userId int) ([]Token, error) {
 		Where("user_id = ? AND id IN (?)", userId, ids).
 		Find(&tokens).Error
 	return tokens, err
-}
-
-// InvalidateUserTokensCache 清理指定用户所有令牌在 Redis 中的缓存，
-// 配合 InvalidateUserCache 使用，可在用户被禁用/删除时立即阻断其令牌的请求。
-// 下一次请求将从数据库重新加载令牌及用户状态，从而立即识别出被禁用的用户。
-func InvalidateUserTokensCache(userId int) error {
-	if !common.RedisEnabled {
-		return nil
-	}
-	if userId <= 0 {
-		return errors.New("userId 无效")
-	}
-	var tokens []Token
-	if err := DB.Unscoped().
-		Select("id", commonKeyCol).
-		Where("user_id = ?", userId).
-		Find(&tokens).Error; err != nil {
-		return err
-	}
-	var firstErr error
-	for _, t := range tokens {
-		if t.Key == "" {
-			continue
-		}
-		if err := cacheDeleteToken(t.Key); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return firstErr
 }

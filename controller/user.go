@@ -720,6 +720,9 @@ func UpdateUser(c *gin.Context) {
 	if err := model.InvalidateUserCache(updatedUser.Id); err != nil {
 		common.SysLog(fmt.Sprintf("failed to invalidate user cache for user %d: %s", updatedUser.Id, err.Error()))
 	}
+	if err := model.RefreshUserAuthStateCache(updatedUser.Id); err != nil {
+		common.SysLog(fmt.Sprintf("failed to refresh user auth cache for user %d: %s", updatedUser.Id, err.Error()))
+	}
 	recordManageAuditFor(c, updatedUser.Id, "user.update", map[string]interface{}{
 		"username": originUser.Username,
 		"id":       updatedUser.Id,
@@ -1087,11 +1090,6 @@ func ManageUser(c *gin.Context) {
 			})
 			return
 		}
-		// 删除用户后，强制清理 Redis 中所有该用户令牌的缓存，
-		// 避免已缓存的令牌在 TTL 过期前仍能通过 TokenAuth 校验。
-		if err := model.InvalidateUserTokensCache(user.Id); err != nil {
-			common.SysLog(fmt.Sprintf("failed to invalidate tokens cache for user %d: %s", user.Id, err.Error()))
-		}
 	case "promote":
 		if myRole != common.RoleRootUser {
 			common.ApiErrorI18n(c, i18n.MsgUserAdminCannotPromote)
@@ -1177,22 +1175,19 @@ func ManageUser(c *gin.Context) {
 				return
 			}
 		}
+		if err := model.RefreshUserAuthStateCache(user.Id); err != nil {
+			common.SysLog(fmt.Sprintf("failed to refresh user auth cache for user %d: %s", user.Id, err.Error()))
+		}
 	} else {
 		if err := user.Update(false); err != nil {
 			common.ApiError(c, err)
 			return
 		}
 	}
-	// 禁用 / 角色调整后，强制失效用户缓存与其全部令牌缓存，
-	// 避免在 Redis TTL 过期前仍使用旧状态（尤其是禁用后仍可发起请求的问题）。
-	// InvalidateUserCache 会让下一次 GetUserCache 从数据库重新加载，
-	// InvalidateUserTokensCache 则确保令牌侧的缓存也同步刷新。
+	// 用户业务缓存与鉴权缓存分离；鉴权状态已在更新成功后刷新。
 	if req.Action == "disable" || req.Action == "promote" || req.Action == "demote" {
 		if err := model.InvalidateUserCache(user.Id); err != nil {
 			common.SysLog(fmt.Sprintf("failed to invalidate user cache for user %d: %s", user.Id, err.Error()))
-		}
-		if err := model.InvalidateUserTokensCache(user.Id); err != nil {
-			common.SysLog(fmt.Sprintf("failed to invalidate tokens cache for user %d: %s", user.Id, err.Error()))
 		}
 	}
 	recordManageAuditFor(c, user.Id, "user.manage", map[string]interface{}{

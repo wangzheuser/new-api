@@ -343,7 +343,24 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 			return
 		}
 
-		if tokenAuthState.UserStatus != common.UserStatusEnabled {
+		userAuthState, err := model.GetUserAuthState(token.UserId)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"success": false,
+					"message": common.TranslateMessage(c, i18n.MsgTokenInvalid),
+				})
+			} else {
+				common.SysLog(fmt.Sprintf("TokenAuthReadOnly GetUserAuthState error for user %d: %v", token.UserId, err))
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"success": false,
+					"message": common.TranslateMessage(c, i18n.MsgDatabaseError),
+				})
+			}
+			c.Abort()
+			return
+		}
+		if userAuthState.Status != common.UserStatusEnabled {
 			c.JSON(http.StatusForbidden, gin.H{
 				"success": false,
 				"message": common.TranslateMessage(c, i18n.MsgAuthUserBanned),
@@ -355,8 +372,8 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 		c.Set("id", token.UserId)
 		c.Set("token_id", token.Id)
 		c.Set("token_key", token.Key)
-		c.Set("group", tokenAuthState.UserGroup)
-		c.Set("user_group", tokenAuthState.UserGroup)
+		c.Set("group", userAuthState.Group)
+		c.Set("user_group", userAuthState.Group)
 		c.Next()
 	}
 }
@@ -453,7 +470,19 @@ func TokenAuth() func(c *gin.Context) {
 				common.TranslateMessage(c, i18n.MsgTokenInvalid))
 			return
 		}
-		if tokenAuthState.UserStatus != common.UserStatusEnabled {
+		userAuthState, err := model.GetUserAuthState(token.UserId)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				abortWithOpenAiMessage(c, http.StatusUnauthorized,
+					common.TranslateMessage(c, i18n.MsgTokenInvalid))
+			} else {
+				common.SysLog(fmt.Sprintf("TokenAuth GetUserAuthState error for user %d: %v", token.UserId, err))
+				abortWithOpenAiMessage(c, http.StatusInternalServerError,
+					common.TranslateMessage(c, i18n.MsgDatabaseError))
+			}
+			return
+		}
+		if userAuthState.Status != common.UserStatusEnabled {
 			abortWithOpenAiMessage(c, http.StatusForbidden, common.TranslateMessage(c, i18n.MsgAuthUserBanned))
 			return
 		}
@@ -481,12 +510,12 @@ func TokenAuth() func(c *gin.Context) {
 				common.TranslateMessage(c, i18n.MsgDatabaseError))
 			return
 		}
-		// 安全状态以数据库为准，缓存只提供额度和用户设置等非授权字段。
-		userCache.Status = tokenAuthState.UserStatus
-		userCache.Group = tokenAuthState.UserGroup
+		// 鉴权缓存与业务缓存分离，避免额度或设置缓存覆盖安全状态。
+		userCache.Status = userAuthState.Status
+		userCache.Group = userAuthState.Group
 		userCache.WriteContext(c)
 
-		userGroup := tokenAuthState.UserGroup
+		userGroup := userAuthState.Group
 		tokenGroup := token.Group
 		if tokenGroup != "" {
 			groupAllowed, err := service.GroupInUserEffectiveGroups(token.UserId, userGroup, tokenGroup)

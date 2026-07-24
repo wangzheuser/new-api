@@ -2,6 +2,7 @@ package model
 
 import (
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/stretchr/testify/assert"
@@ -9,7 +10,19 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestAuthStateAlwaysReadsCurrentDatabaseValues(t *testing.T) {
+func TestAuthStateCacheTTLCappedAtOneMinute(t *testing.T) {
+	previousFrequency := common.SyncFrequency
+	t.Cleanup(func() {
+		common.SyncFrequency = previousFrequency
+	})
+
+	common.SyncFrequency = 30
+	assert.Equal(t, 30*time.Second, authStateCacheTTL())
+	common.SyncFrequency = 600
+	assert.Equal(t, time.Minute, authStateCacheTTL())
+}
+
+func TestAuthStateReadsCurrentDatabaseValuesWithoutRedis(t *testing.T) {
 	truncateTables(t)
 	user := &User{
 		Username: "auth-state-user",
@@ -38,8 +51,7 @@ func TestAuthStateAlwaysReadsCurrentDatabaseValues(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, common.TokenStatusEnabled, tokenState.TokenStatus)
 	assert.Equal(t, int64(-1), tokenState.TokenExpiredTime)
-	assert.Equal(t, common.UserStatusEnabled, tokenState.UserStatus)
-	assert.Equal(t, "国模", tokenState.UserGroup)
+	assert.Equal(t, user.Id, tokenState.UserId)
 
 	require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).Updates(map[string]interface{}{
 		"status": common.UserStatusDisabled,
@@ -55,8 +67,7 @@ func TestAuthStateAlwaysReadsCurrentDatabaseValues(t *testing.T) {
 	tokenState, err = GetTokenAuthState(token.Id, user.Id)
 	require.NoError(t, err)
 	assert.Equal(t, common.TokenStatusDisabled, tokenState.TokenStatus)
-	assert.Equal(t, common.UserStatusDisabled, tokenState.UserStatus)
-	assert.Equal(t, "default", tokenState.UserGroup)
+	assert.Equal(t, user.Id, tokenState.UserId)
 }
 
 func TestAuthStateRejectsDeletedCredentials(t *testing.T) {

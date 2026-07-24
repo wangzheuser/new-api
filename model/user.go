@@ -424,12 +424,19 @@ func HardDeleteUserById(id int) error {
 	if id == 0 {
 		return errors.New("id 为空！")
 	}
-	return DB.Transaction(func(tx *gorm.DB) error {
+	if err := DB.Transaction(func(tx *gorm.DB) error {
 		if err := deleteUserOAuthBindingsByUserId(tx, id); err != nil {
 			return err
 		}
 		return tx.Unscoped().Delete(&User{}, "id = ?", id).Error
-	})
+	}); err != nil {
+		return err
+	}
+	cacheErr := invalidateUserCache(id)
+	if err := RefreshUserAuthStateCache(id); err != nil {
+		return err
+	}
+	return cacheErr
 }
 
 func inviteUser(inviterId int) (err error) {
@@ -649,7 +656,12 @@ func (user *User) Update(updatePassword bool) error {
 	if err := user.UpdateWithTx(DB, updatePassword); err != nil {
 		return err
 	}
-	return updateUserCache(*user)
+	authErr := RefreshUserAuthStateCache(user.Id)
+	cacheErr := updateUserCache(*user)
+	if authErr != nil {
+		return authErr
+	}
+	return cacheErr
 }
 
 func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
@@ -675,7 +687,12 @@ func (user *User) Edit(updatePassword bool) error {
 	if err := user.EditWithTx(DB, updatePassword); err != nil {
 		return err
 	}
-	return updateUserCache(*user)
+	authErr := RefreshUserAuthStateCache(user.Id)
+	cacheErr := updateUserCache(*user)
+	if authErr != nil {
+		return authErr
+	}
+	return cacheErr
 }
 
 func (user *User) EditWithTx(tx *gorm.DB, updatePassword bool) error {
@@ -747,20 +764,30 @@ func (user *User) Delete() error {
 		return err
 	}
 
-	// 清除缓存
-	return invalidateUserCache(user.Id)
+	cacheErr := invalidateUserCache(user.Id)
+	if err := RefreshUserAuthStateCache(user.Id); err != nil {
+		return err
+	}
+	return cacheErr
 }
 
 func (user *User) HardDelete() error {
 	if user.Id == 0 {
 		return errors.New("id 为空！")
 	}
-	return DB.Transaction(func(tx *gorm.DB) error {
+	if err := DB.Transaction(func(tx *gorm.DB) error {
 		if err := deleteUserOAuthBindingsByUserId(tx, user.Id); err != nil {
 			return err
 		}
 		return tx.Unscoped().Delete(user).Error
-	})
+	}); err != nil {
+		return err
+	}
+	cacheErr := invalidateUserCache(user.Id)
+	if err := RefreshUserAuthStateCache(user.Id); err != nil {
+		return err
+	}
+	return cacheErr
 }
 
 // ValidateAndFill check password & user status

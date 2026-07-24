@@ -69,6 +69,14 @@ func RedisSet(key string, value string, expiration time.Duration) error {
 	return RDB.Set(ctx, key, value, expiration).Err()
 }
 
+// RedisSetNX writes a value only when the key does not already exist.
+func RedisSetNX(key string, value string, expiration time.Duration) (bool, error) {
+	if DebugEnabled {
+		SysLog(fmt.Sprintf("Redis SET NX: key=%s, expiration=%v", key, expiration))
+	}
+	return RDB.SetNX(context.Background(), key, value, expiration).Result()
+}
+
 func RedisGet(key string) (string, error) {
 	if DebugEnabled {
 		SysLog(fmt.Sprintf("Redis GET: key=%s", key))

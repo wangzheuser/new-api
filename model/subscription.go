@@ -308,6 +308,16 @@ type SubscriptionSummary struct {
 	Subscription *UserSubscription `json:"subscription"`
 }
 
+// refreshSubscriptionUserAuthCache publishes the user's final committed authorization state.
+func refreshSubscriptionUserAuthCache(userId int) {
+	if userId <= 0 {
+		return
+	}
+	if err := RefreshUserAuthStateCache(userId); err != nil {
+		common.SysLog(fmt.Sprintf("failed to refresh user auth cache after subscription change for user %d: %v", userId, err))
+	}
+}
+
 type SubscriptionResetResult struct {
 	PlanId           int    `json:"plan_id"`
 	MatchedCount     int    `json:"matched_count"`
@@ -666,6 +676,7 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 	if upgradeGroup != "" && logUserId > 0 {
 		_ = UpdateUserGroupCache(logUserId, upgradeGroup)
 	}
+	refreshSubscriptionUserAuthCache(logUserId)
 	if logUserId > 0 {
 		msg := fmt.Sprintf("订阅购买成功，套餐: %s，支付金额: %.2f，支付方式: %s", logPlanTitle, logMoney, logPaymentMethod)
 		RecordLog(logUserId, LogTypeTopup, msg)
@@ -758,6 +769,7 @@ func AdminBindSubscription(userId int, planId int, applyMode string) (*Subscript
 	if strings.TrimSpace(plan.UpgradeGroup) != "" {
 		_ = UpdateUserGroupCache(userId, plan.UpgradeGroup)
 	}
+	refreshSubscriptionUserAuthCache(userId)
 	return result, nil
 }
 
@@ -863,6 +875,7 @@ func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 	if upgradeGroup != "" {
 		_ = UpdateUserGroupCache(userId, upgradeGroup)
 	}
+	refreshSubscriptionUserAuthCache(userId)
 	msg := fmt.Sprintf("使用余额购买订阅成功，套餐: %s，支付金额: %.2f，扣除额度: %d", logPlanTitle, logMoney, chargedQuota)
 	RecordLog(userId, LogTypeTopup, msg)
 	return nil
@@ -1046,6 +1059,7 @@ func AdminInvalidateUserSubscription(userSubscriptionId int) (string, error) {
 	if cacheGroup != "" && userId > 0 {
 		_ = UpdateUserGroupCache(userId, cacheGroup)
 	}
+	refreshSubscriptionUserAuthCache(userId)
 	if downgradeGroup != "" {
 		return fmt.Sprintf("用户分组将回退到 %s", downgradeGroup), nil
 	}
@@ -1087,6 +1101,7 @@ func AdminDeleteUserSubscription(userSubscriptionId int) (string, error) {
 	if cacheGroup != "" && userId > 0 {
 		_ = UpdateUserGroupCache(userId, cacheGroup)
 	}
+	refreshSubscriptionUserAuthCache(userId)
 	if downgradeGroup != "" {
 		return fmt.Sprintf("用户分组将回退到 %s", downgradeGroup), nil
 	}
@@ -1314,6 +1329,7 @@ func ExpireDueSubscriptions(limit int) (int, error) {
 		if cacheGroup != "" {
 			_ = UpdateUserGroupCache(userId, cacheGroup)
 		}
+		refreshSubscriptionUserAuthCache(userId)
 	}
 	return expiredCount, nil
 }
