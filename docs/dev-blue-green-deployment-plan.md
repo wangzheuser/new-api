@@ -107,6 +107,10 @@ services:
     image: ${NEW_API_IMAGE_DIGEST}
     container_name: new-api-green
     restart: unless-stopped
+    cpus: ${NEW_API_CPUS:-1.0}
+    mem_limit: ${NEW_API_MEMORY_LIMIT:-768m}
+    memswap_limit: ${NEW_API_MEMORY_SWAP_LIMIT:-1g}
+    pids_limit: ${NEW_API_PIDS_LIMIT:-256}
     command: --log-dir /app/logs
     env_file:
       - ./runtime.env
@@ -149,6 +153,8 @@ docker system prune --volumes
 8. 迁移只出现本文列出的新增表、列和回填。
 9. CPU、内存、磁盘和数据库连接数允许短时间运行 Blue 与 Green。
 10. 已准备并验证反向代理回滚配置。
+11. 候选槽位实际生效的 CPU、内存、内存加交换空间和 PID 上限已通过
+    `docker inspect` 核对，且旧槽位的当前峰值没有超过候选上限。
 
 任一门禁失败，停止发布，不连接生产数据库，不切换流量。
 
