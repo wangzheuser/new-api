@@ -73,6 +73,7 @@ type ParamOverrideCondition = {
 
 type ParamOverrideOperation = {
   id: string
+  phase: 'request' | 'final_error'
   description: string
   path: string
   mode: string
@@ -120,6 +121,11 @@ const OPERATION_MODE_OPTIONS = [
   { label: 'Copy Request Header', value: 'copy_header' },
   { label: 'Move Request Header', value: 'move_header' },
 ]
+
+const OPERATION_PHASE_OPTIONS = [
+  { label: 'Before Upstream Request', value: 'request' },
+  { label: 'Before Final Error Response', value: 'final_error' },
+] as const
 
 const OPERATION_MODE_VALUES = new Set(
   OPERATION_MODE_OPTIONS.map((o) => o.value)
@@ -499,6 +505,7 @@ const normalizeOperation = (
   operation: Record<string, unknown> = {}
 ): ParamOverrideOperation => ({
   id: nextLocalId(),
+  phase: operation.phase === 'final_error' ? 'final_error' : 'request',
   description:
     typeof operation.description === 'string' ? operation.description : '',
   path: typeof operation.path === 'string' ? operation.path : '',
@@ -926,6 +933,17 @@ const validateOperations = (
     const fromValue = op.from.trim()
     const toValue = op.to.trim()
 
+    if (op.phase === 'final_error' && mode !== 'return_error') {
+      return t('Final error phase only supports Return Custom Error')
+    }
+    if (
+      op.phase === 'final_error' &&
+      op.conditions.length === 0 &&
+      operations.slice(i + 1).some((item) => item.phase === 'final_error')
+    ) {
+      return t('Unconditional final error rule must be last')
+    }
+
     if (meta.path && !pathValue)
       return t('Rule {{line}} is missing target path', { line })
     if (FROM_REQUIRED_MODES.has(mode) && !fromValue) {
@@ -970,7 +988,6 @@ const validateOperations = (
       if (headers.length === 0)
         return t('Rule {{line}} pass_headers format is invalid', { line })
     }
-
   }
   return ''
 }
@@ -1079,6 +1096,7 @@ const buildOperationsJson = (
     const fromValue = operation.from.trim()
     const toValue = operation.to.trim()
     const payload: Record<string, unknown> = { mode }
+    if (operation.phase === 'final_error') payload.phase = 'final_error'
     if (descriptionValue) payload.description = descriptionValue
     if (meta.path) payload.path = pathValue
     if (meta.pathOptional && pathValue) payload.path = pathValue
@@ -2130,6 +2148,12 @@ function RuleEditor(ruleEditorProps: RuleEditorProps) {
   const { t } = useTranslation()
   const operation = ruleEditorProps.operation
   const mode = operation.mode || 'set'
+  const availableOperationModes =
+    operation.phase === 'final_error'
+      ? OPERATION_MODE_OPTIONS.filter(
+          (option) => option.value === 'return_error'
+        )
+      : OPERATION_MODE_OPTIONS
   const meta = MODE_META[mode] || MODE_META.set
   const conditions = operation.conditions
   const syncFromTarget =
@@ -2173,17 +2197,51 @@ function RuleEditor(ruleEditorProps: RuleEditorProps) {
           </div>
         </div>
 
+        {/* Application phase */}
+        <div className='space-y-1.5'>
+          <label className='text-xs font-medium'>
+            {t('Application Phase')}
+          </label>
+          <Select
+            items={OPERATION_PHASE_OPTIONS.map((option) => ({
+              value: option.value,
+              label: t(option.label),
+            }))}
+            value={operation.phase}
+            onValueChange={(nextPhase) => {
+              if (nextPhase === null) {
+                return
+              }
+              ruleEditorProps.updateOperation(operation.id, {
+                phase: nextPhase as ParamOverrideOperation['phase'],
+                mode: nextPhase === 'final_error' ? 'return_error' : mode,
+              })
+            }}
+          >
+            <SelectTrigger className='h-9'>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false}>
+              <SelectGroup>
+                {OPERATION_PHASE_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {t(option.label)}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </div>
+
         {/* Operation type + path */}
         <div className='grid gap-3 sm:grid-cols-2'>
           <div className='space-y-1.5'>
             <label className='text-xs font-medium'>{t('Operation Type')}</label>
             <Select
-              items={[
-                ...OPERATION_MODE_OPTIONS.map((o) => ({
-                  value: o.value,
-                  label: t(o.label),
-                })),
-              ]}
+              items={availableOperationModes.map((o) => ({
+                value: o.value,
+                label: t(o.label),
+              }))}
               value={mode}
               onValueChange={(nextMode) =>
                 nextMode !== null &&
@@ -2197,7 +2255,7 @@ function RuleEditor(ruleEditorProps: RuleEditorProps) {
               </SelectTrigger>
               <SelectContent alignItemWithTrigger={false}>
                 <SelectGroup>
-                  {OPERATION_MODE_OPTIONS.map((o) => (
+                  {availableOperationModes.map((o) => (
                     <SelectItem key={o.value} value={o.value}>
                       {t(o.label)}
                     </SelectItem>

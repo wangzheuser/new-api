@@ -1,11 +1,15 @@
 package controller
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -55,6 +59,7 @@ func GetUserLogs(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	sanitizeHistoricalUserRelayLogs(logs)
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(logs)
 	common.ApiSuccess(c, pageInfo)
@@ -94,11 +99,52 @@ func GetLogByKey(c *gin.Context) {
 		})
 		return
 	}
+	sanitizeHistoricalUserRelayLogs(logs)
 	c.JSON(200, gin.H{
 		"success": true,
 		"message": "",
 		"data":    logs,
 	})
+}
+
+// sanitizeHistoricalUserRelayLogs applies the configurable system fallback to pre-feature error logs.
+func sanitizeHistoricalUserRelayLogs(logs []*model.Log) {
+	defaultOverride := operation_setting.GetDefaultFinalErrorOverride()
+	for _, log := range logs {
+		if log == nil || log.Type != model.LogTypeError {
+			continue
+		}
+		other, _ := common.StrToMap(log.Other)
+		if publicError, ok := other["public_error"].(bool); ok && publicError {
+			continue
+		}
+
+		statusCode, _ := strconv.Atoi(common.Interface2String(other["status_code"]))
+		lastError := types.WithOpenAIError(types.OpenAIError{
+			Message: log.Content,
+			Type:    common.Interface2String(other["error_type"]),
+			Code:    common.Interface2String(other["error_code"]),
+		}, statusCode)
+		relayInfo := &relaycommon.RelayInfo{
+			OriginModelName: log.ModelName,
+			RequestURLPath:  common.Interface2String(other["request_path"]),
+			LastError:       lastError,
+		}
+
+		mapped, matched, err := relaycommon.ApplyFinalErrorOverride(defaultOverride, relayInfo)
+		if err != nil {
+			common.SysError("invalid default final_error override: " + err.Error())
+		}
+		if err != nil || !matched {
+			mapped = types.NewOpenAIError(
+				errors.New(http.StatusText(http.StatusBadGateway)),
+				types.ErrorCodeBadResponse,
+				http.StatusBadGateway,
+				types.ErrOptionWithSkipRetry(),
+			)
+		}
+		log.Content = relayClientErrorLogContent(mapped, types.RelayFormatOpenAI)
+	}
 }
 
 func GetLogsStat(c *gin.Context) {

@@ -1126,6 +1126,118 @@ func TestApplyParamOverrideReturnError(t *testing.T) {
 	}
 }
 
+// TestFinalErrorOverrideRunsOnlyAfterRetries verifies phase isolation and configurable public errors.
+func TestFinalErrorOverrideRunsOnlyAfterRetries(t *testing.T) {
+	override := map[string]interface{}{
+		"operations": []interface{}{
+			map[string]interface{}{
+				"phase": "final_error",
+				"mode":  "return_error",
+				"value": map[string]interface{}{
+					"message":     "模型服务暂时不可用",
+					"status_code": 503,
+					"code":        "service_unavailable",
+					"type":        "new_api_error",
+				},
+				"conditions": []interface{}{
+					map[string]interface{}{
+						"path":  "last_error.status_code",
+						"mode":  "full",
+						"value": 503,
+					},
+				},
+			},
+		},
+	}
+	info := &RelayInfo{
+		RetryIndex: 2,
+		LastError: types.WithOpenAIError(types.OpenAIError{
+			Message: "raw upstream failure",
+			Code:    "upstream_error",
+		}, 503),
+	}
+
+	out, err := ApplyParamOverride([]byte(`{"model":"test"}`), override, BuildParamOverrideContext(info))
+	require.NoError(t, err)
+	require.JSONEq(t, `{"model":"test"}`, string(out))
+
+	mapped, matched, err := ApplyFinalErrorOverride(override, info)
+	require.NoError(t, err)
+	require.True(t, matched)
+	require.Equal(t, 503, mapped.StatusCode)
+	require.Equal(t, types.ErrorCode("service_unavailable"), mapped.GetErrorCode())
+	require.Equal(t, "模型服务暂时不可用", mapped.ToOpenAIError().Message)
+}
+
+// TestFinalErrorOverrideUsesFirstMatchingRule verifies ordered special-case and catch-all rules.
+func TestFinalErrorOverrideUsesFirstMatchingRule(t *testing.T) {
+	override := map[string]interface{}{
+		"operations": []interface{}{
+			map[string]interface{}{
+				"phase": "final_error",
+				"mode":  "return_error",
+				"value": map[string]interface{}{
+					"message":     "请求上下文过长",
+					"status_code": 400,
+					"code":        "context_length_exceeded",
+				},
+				"conditions": []interface{}{
+					map[string]interface{}{
+						"path":  "last_error.status_code",
+						"mode":  "full",
+						"value": 413,
+					},
+				},
+			},
+			map[string]interface{}{
+				"phase": "final_error",
+				"mode":  "return_error",
+				"value": map[string]interface{}{
+					"message":     "请求失败",
+					"status_code": 502,
+					"code":        "bad_gateway",
+				},
+			},
+		},
+	}
+	info := &RelayInfo{
+		LastError: types.WithOpenAIError(types.OpenAIError{
+			Message: "context window 262144 exceeded",
+			Code:    "upstream_error",
+		}, 413),
+	}
+
+	mapped, matched, err := ApplyFinalErrorOverride(override, info)
+	require.NoError(t, err)
+	require.True(t, matched)
+	require.Equal(t, 400, mapped.StatusCode)
+	require.Equal(t, types.ErrorCode("context_length_exceeded"), mapped.GetErrorCode())
+	require.Equal(t, "请求上下文过长", mapped.ToOpenAIError().Message)
+}
+
+// TestValidateFinalErrorOverrideRejectsRulesAfterCatchAll protects ordered rule semantics.
+func TestValidateFinalErrorOverrideRejectsRulesAfterCatchAll(t *testing.T) {
+	override := map[string]interface{}{
+		"operations": []interface{}{
+			map[string]interface{}{
+				"phase": "final_error",
+				"mode":  "return_error",
+				"value": map[string]interface{}{"message": "fallback"},
+			},
+			map[string]interface{}{
+				"phase": "final_error",
+				"mode":  "return_error",
+				"value": map[string]interface{}{"message": "unreachable"},
+				"conditions": []interface{}{
+					map[string]interface{}{"path": "last_error.status_code", "mode": "full", "value": 503},
+				},
+			},
+		},
+	}
+
+	require.EqualError(t, ValidateFinalErrorOverride(override), "unconditional final_error rule must be last")
+}
+
 func TestApplyParamOverridePruneObjectsByTypeString(t *testing.T) {
 	input := []byte(`{
 		"messages":[

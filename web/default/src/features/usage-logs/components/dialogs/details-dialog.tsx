@@ -1,3 +1,4 @@
+import type { TFunction } from 'i18next'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -31,7 +32,6 @@ import {
   Info,
   LogIn,
 } from 'lucide-react'
-import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 
 import { Dialog } from '@/components/dialog'
@@ -179,7 +179,9 @@ function getUsageBillingPathLabel(
   }
 }
 
-function isUsageBillingPathLocal(adminInfo: LogOtherData['admin_info']): boolean {
+function isUsageBillingPathLocal(
+  adminInfo: LogOtherData['admin_info']
+): boolean {
   if (adminInfo?.usage_billing_path) {
     return adminInfo.usage_billing_path === USAGE_BILLING_PATH.LOCAL
   }
@@ -1205,6 +1207,19 @@ export function DetailsDialog(props: DetailsDialogProps) {
                 </div>
               )
             })}
+          </DetailSection>
+        )}
+
+        {/* Raw upstream error (admin only) */}
+        {props.isAdmin && adminInfo?.upstream_error && (
+          <DetailSection
+            icon={<AlertTriangle className='size-3.5' aria-hidden='true' />}
+            label={t('Upstream Original Error')}
+            variant='danger'
+          >
+            <p className='text-xs break-all whitespace-pre-wrap sm:wrap-break-word'>
+              {adminInfo.upstream_error}
+            </p>
           </DetailSection>
         )}
 

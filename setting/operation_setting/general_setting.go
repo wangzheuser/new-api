@@ -11,9 +11,10 @@ const (
 )
 
 type GeneralSetting struct {
-	DocsLink            string `json:"docs_link"`
-	PingIntervalEnabled bool   `json:"ping_interval_enabled"`
-	PingIntervalSeconds int    `json:"ping_interval_seconds"`
+	DocsLink                  string                 `json:"docs_link"`
+	PingIntervalEnabled       bool                   `json:"ping_interval_enabled"`
+	PingIntervalSeconds       int                    `json:"ping_interval_seconds"`
+	DefaultFinalErrorOverride map[string]interface{} `json:"default_final_error_override"`
 	// 当前站点额度展示类型：USD / CNY / TOKENS
 	QuotaDisplayType string `json:"quota_display_type"`
 	// 自定义货币符号，用于 CUSTOM 展示类型
@@ -27,6 +28,7 @@ var generalSetting = GeneralSetting{
 	DocsLink:                   "https://docs.newapi.pro",
 	PingIntervalEnabled:        false,
 	PingIntervalSeconds:        60,
+	DefaultFinalErrorOverride:  map[string]interface{}{},
 	QuotaDisplayType:           QuotaDisplayTypeUSD,
 	CustomCurrencySymbol:       "¤",
 	CustomCurrencyExchangeRate: 1.0,
@@ -39,6 +41,11 @@ func init() {
 
 func GetGeneralSetting() *GeneralSetting {
 	return &generalSetting
+}
+
+// GetDefaultFinalErrorOverride returns the system fallback for public relay errors.
+func GetDefaultFinalErrorOverride() map[string]interface{} {
+	return generalSetting.DefaultFinalErrorOverride
 }
 
 // IsCurrencyDisplay 是否以货币形式展示（美元或人民币）

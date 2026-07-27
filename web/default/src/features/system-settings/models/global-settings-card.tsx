@@ -76,6 +76,78 @@ const chatToResponsesPolicyAllChannelsExample = JSON.stringify(
   2
 )
 
+const defaultFinalErrorOverrideExample = JSON.stringify(
+  {
+    operations: [
+      {
+        phase: 'final_error',
+        mode: 'return_error',
+        value: {
+          message: '请求上下文过长，请减少输入内容后重试。',
+          status_code: 400,
+          code: 'context_length_exceeded',
+          type: 'invalid_request_error',
+        },
+        conditions: [
+          {
+            path: 'last_error.status_code',
+            mode: 'full',
+            value: 413,
+          },
+        ],
+      },
+      {
+        phase: 'final_error',
+        mode: 'return_error',
+        value: {
+          message: '请求未通过模型服务校验，请检查请求参数后重试。',
+          status_code: 400,
+          code: 'invalid_request',
+          type: 'invalid_request_error',
+        },
+        logic: 'AND',
+        conditions: [
+          {
+            path: 'last_error.status_code',
+            mode: 'gte',
+            value: 400,
+          },
+          {
+            path: 'last_error.status_code',
+            mode: 'lte',
+            value: 499,
+          },
+        ],
+      },
+      {
+        phase: 'final_error',
+        mode: 'return_error',
+        value: {
+          message: '模型服务暂时不可用，请稍后重试。',
+          status_code: 503,
+          code: 'service_unavailable',
+          type: 'new_api_error',
+        },
+        logic: 'AND',
+        conditions: [
+          {
+            path: 'last_error.status_code',
+            mode: 'gte',
+            value: 500,
+          },
+          {
+            path: 'last_error.status_code',
+            mode: 'lte',
+            value: 599,
+          },
+        ],
+      },
+    ],
+  },
+  null,
+  2
+)
+
 const jsonString = z.string().refine((value) => {
   const trimmed = value.trim()
   if (!trimmed) return true
@@ -96,6 +168,7 @@ const schema = z.object({
   general_setting: z.object({
     ping_interval_enabled: z.boolean(),
     ping_interval_seconds: z.coerce.number().min(1),
+    default_final_error_override: jsonString,
   }),
 })
 
@@ -108,6 +181,7 @@ type FlatGlobalModelSettings = {
   'global.chat_completions_to_responses_policy': string
   'general_setting.ping_interval_enabled': boolean
   'general_setting.ping_interval_seconds': number
+  'general_setting.default_final_error_override': string
 }
 
 const flattenGlobalValues = (
@@ -127,6 +201,10 @@ const flattenGlobalValues = (
     values.general_setting.ping_interval_enabled,
   'general_setting.ping_interval_seconds':
     values.general_setting.ping_interval_seconds,
+  'general_setting.default_final_error_override': normalizeJsonText(
+    values.general_setting.default_final_error_override,
+    '{}'
+  ),
 })
 
 function normalizeJsonText(value: string, fallback: string) {
@@ -161,6 +239,7 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
     field:
       | 'global.thinking_model_blacklist'
       | 'global.chat_completions_to_responses_policy'
+      | 'general_setting.default_final_error_override'
   ) => {
     const raw = form.getValues(field)
     if (!raw || !raw.trim()) return
@@ -349,6 +428,60 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
               )}
             />
           </div>
+
+          <Separator />
+
+          <FormField
+            control={form.control}
+            name='general_setting.default_final_error_override'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Default Final Error Override')}</FormLabel>
+                <FormControl>
+                  <Textarea
+                    rows={10}
+                    placeholder={defaultFinalErrorOverrideExample}
+                    {...field}
+                    onChange={(event) => field.onChange(event.target.value)}
+                  />
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'Applied after all retries when the final channel has no matching final error rule.'
+                  )}
+                </FormDescription>
+                <div className='flex flex-wrap gap-2'>
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='sm'
+                    onClick={() =>
+                      form.setValue(
+                        'general_setting.default_final_error_override',
+                        defaultFinalErrorOverrideExample,
+                        { shouldDirty: true }
+                      )
+                    }
+                  >
+                    {t('Fill example')}
+                  </Button>
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='sm'
+                    onClick={() =>
+                      formatJsonField(
+                        'general_setting.default_final_error_override'
+                      )
+                    }
+                  >
+                    {t('Format JSON')}
+                  </Button>
+                </div>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
 
           <Separator />
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -21,7 +22,7 @@ func TestLogListFinalResultVisibility(t *testing.T) {
 		{UserId: 1, CreatedAt: 100, Type: model.LogTypeError, Content: "retry upstream 503", RequestId: "req-success"},
 		{UserId: 1, CreatedAt: 101, Type: model.LogTypeConsume, Content: "success", RequestId: "req-success"},
 		{UserId: 1, CreatedAt: 102, Type: model.LogTypeError, Content: "retry upstream 503", RequestId: "req-failure"},
-		{UserId: 1, CreatedAt: 103, Type: model.LogTypeError, Content: "当前分组上游负载已饱和", RequestId: "req-failure"},
+		{UserId: 1, CreatedAt: 103, Type: model.LogTypeError, Content: "当前分组上游负载已饱和", RequestId: "req-failure", Other: `{"public_error":true}`},
 	}).Error)
 
 	type logListResponse struct {
@@ -79,4 +80,32 @@ func TestLogListFinalResultVisibility(t *testing.T) {
 			assert.ElementsMatch(t, test.wantContents, contents)
 		})
 	}
+}
+
+// TestSanitizeHistoricalUserRelayLogs verifies old raw errors use the configured system fallback.
+func TestSanitizeHistoricalUserRelayLogs(t *testing.T) {
+	settings := operation_setting.GetGeneralSetting()
+	previous := settings.DefaultFinalErrorOverride
+	t.Cleanup(func() {
+		settings.DefaultFinalErrorOverride = previous
+	})
+	settings.DefaultFinalErrorOverride = finalErrorOverrideForTest("公共错误", 503, "service_unavailable")
+
+	logs := []*model.Log{
+		{
+			Type:    model.LogTypeError,
+			Content: "status_code=503, raw upstream vendor error",
+			Other:   `{"status_code":503,"error_code":"upstream_error"}`,
+		},
+		{
+			Type:    model.LogTypeError,
+			Content: "status_code=400, 已清洗错误",
+			Other:   `{"status_code":400,"public_error":true}`,
+		},
+	}
+
+	sanitizeHistoricalUserRelayLogs(logs)
+
+	assert.Equal(t, "status_code=503, 公共错误", logs[0].Content)
+	assert.Equal(t, "status_code=400, 已清洗错误", logs[1].Content)
 }

@@ -73,6 +73,11 @@ GOOS=linux GOARCH=amd64 CGO_ENABLED=0 GOEXPERIMENT=greenteagc
 
 任一门禁失败即保留现网槽位，不交接流量。
 
+旧槽位版本尚不识别 `phase: final_error` 时，不得在切流前把该阶段写入渠道
+`param_override`：旧版本会把它当作请求阶段执行。回滚窗口内优先只配置系统级
+`general_setting.default_final_error_override`；渠道级最终错误规则应在旧版本退出
+回滚窗口后启用，或在回滚脚本中同时恢复发布前的渠道参数覆盖快照。
+
 ## 6. 不改 Nginx 的静态 IP 交接
 
 Nginx 已把 `new-api-green:3000` 解析为生产应用静态地址。切流时动态读取现网槽位 IP，严禁在脚本中硬编码：

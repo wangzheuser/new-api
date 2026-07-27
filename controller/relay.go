@@ -72,10 +72,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	//originalModel := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 
 	var (
-		newAPIError  *types.NewAPIError
-		ws           *websocket.Conn
-		relayInfo    *relaycommon.RelayInfo
-		relayStarted bool
+		newAPIError   *types.NewAPIError
+		rawFinalError *types.NewAPIError
+		ws            *websocket.Conn
+		relayInfo     *relaycommon.RelayInfo
+		relayStarted  bool
 	)
 
 	if relayFormat == types.RelayFormatOpenAIRealtime {
@@ -93,7 +94,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
 			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
 			if relayStarted {
-				recordRelayErrorLog(c, newAPIError, relayClientErrorLogContent(newAPIError, relayFormat))
+				recordRelayErrorLog(c, newAPIError, relayClientErrorLogContent(newAPIError, relayFormat), rawFinalError)
 			}
 			switch relayFormat {
 			case types.RelayFormatOpenAIRealtime:
@@ -252,6 +253,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		gopool.Go(func() {
 			perfmetrics.RecordRelaySample(relayInfo, false, 0)
 		})
+		rawFinalError = newAPIError
+		if relayInfo.LastError == nil {
+			relayInfo.LastError = newAPIError
+		}
+		newAPIError = resolveConfiguredFinalRelayError(c, relayInfo)
 	}
 }
 
@@ -372,6 +378,32 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 	return operation_setting.ShouldRetryByStatusCode(code)
 }
 
+// resolveConfiguredFinalRelayError applies channel and system final_error rules after retries finish.
+func resolveConfiguredFinalRelayError(c *gin.Context, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
+	if relayInfo != nil && relayInfo.ChannelMeta != nil {
+		mapped, matched, err := relaycommon.ApplyFinalErrorOverride(relayInfo.ChannelMeta.ParamOverride, relayInfo)
+		if err != nil {
+			logger.LogError(c, fmt.Sprintf("invalid channel final_error override: %s", err.Error()))
+		} else if matched {
+			return mapped
+		}
+	}
+
+	mapped, matched, err := relaycommon.ApplyFinalErrorOverride(operation_setting.GetDefaultFinalErrorOverride(), relayInfo)
+	if err != nil {
+		logger.LogError(c, fmt.Sprintf("invalid default final_error override: %s", err.Error()))
+	} else if matched {
+		return mapped
+	}
+
+	return types.NewOpenAIError(
+		errors.New(http.StatusText(http.StatusBadGateway)),
+		types.ErrorCodeBadResponse,
+		http.StatusBadGateway,
+		types.ErrOptionWithSkipRetry(),
+	)
+}
+
 // relayClientErrorLogContent returns the error text sent to the client.
 func relayClientErrorLogContent(err *types.NewAPIError, relayFormat types.RelayFormat) string {
 	if err == nil {
@@ -391,7 +423,7 @@ func relayClientErrorLogContent(err *types.NewAPIError, relayFormat types.RelayF
 }
 
 // recordRelayErrorLog writes one relay error using the current channel context.
-func recordRelayErrorLog(c *gin.Context, err *types.NewAPIError, content string) {
+func recordRelayErrorLog(c *gin.Context, err *types.NewAPIError, content string, rawError *types.NewAPIError) {
 	if !constant.ErrorLogEnabled || !types.IsRecordErrorLog(err) {
 		return
 	}
@@ -414,6 +446,9 @@ func recordRelayErrorLog(c *gin.Context, err *types.NewAPIError, content string)
 	other["channel_id"] = channelId
 	other["channel_name"] = c.GetString("channel_name")
 	other["channel_type"] = c.GetInt("channel_type")
+	if rawError != nil {
+		other["public_error"] = true
+	}
 	adminInfo := make(map[string]interface{})
 	adminInfo["use_channel"] = c.GetStringSlice("use_channel")
 	isMultiKey := common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey)
@@ -422,6 +457,9 @@ func recordRelayErrorLog(c *gin.Context, err *types.NewAPIError, content string)
 		adminInfo["multi_key_index"] = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
 	}
 	service.AppendChannelAffinityAdminInfo(c, adminInfo)
+	if rawError != nil {
+		adminInfo["upstream_error"] = common.LocalLogPreview(rawError.MaskSensitiveErrorWithStatusCode())
+	}
 	other["admin_info"] = adminInfo
 	startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
 	if startTime.IsZero() {
@@ -443,7 +481,7 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 	}
 
 	if recordAttempt {
-		recordRelayErrorLog(c, err, "")
+		recordRelayErrorLog(c, err, "", nil)
 	}
 
 }

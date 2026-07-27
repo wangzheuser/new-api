@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/console_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -288,6 +289,19 @@ func UpdateOption(c *gin.Context) {
 		}
 	case "AutomaticRetryStatusCodes":
 		_, err = operation_setting.ParseHTTPStatusCodeRanges(option.Value.(string))
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+	case "general_setting.default_final_error_override":
+		override := make(map[string]interface{})
+		err = common.UnmarshalJsonStr(option.Value.(string), &override)
+		if err == nil {
+			err = relaycommon.ValidateFinalErrorOverride(override)
+		}
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,

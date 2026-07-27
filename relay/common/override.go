@@ -55,6 +55,7 @@ type ConditionOperation struct {
 }
 
 type ParamOperation struct {
+	Phase      string               `json:"phase,omitempty"` // request, final_error
 	Path       string               `json:"path"`
 	Mode       string               `json:"mode"` // delete, set, move, copy, prepend, append, trim_prefix, trim_suffix, ensure_prefix, ensure_suffix, trim_space, to_lower, to_upper, replace, regex_replace, return_error, prune_objects, set_header, delete_header, copy_header, move_header, pass_headers, sync_fields
 	Value      interface{}          `json:"value"`
@@ -135,6 +136,19 @@ func NewAPIErrorFromParamOverride(err *ParamOverrideReturnError) *types.NewAPIEr
 	}, statusCode, opts...)
 }
 
+const (
+	paramOverridePhaseRequest    = "request"
+	paramOverridePhaseFinalError = "final_error"
+)
+
+func normalizeParamOverridePhase(phase string) string {
+	phase = strings.ToLower(strings.TrimSpace(phase))
+	if phase == "" {
+		return paramOverridePhaseRequest
+	}
+	return phase
+}
+
 func ApplyParamOverride(jsonData []byte, paramOverride map[string]interface{}, conditionContext map[string]interface{}) ([]byte, error) {
 	if len(paramOverride) == 0 {
 		return jsonData, nil
@@ -153,12 +167,92 @@ func ApplyParamOverride(jsonData []byte, paramOverride map[string]interface{}, c
 			}
 		}
 
+		requestOperations := make([]ParamOperation, 0, len(operations))
+		for _, operation := range operations {
+			if normalizeParamOverridePhase(operation.Phase) == paramOverridePhaseRequest {
+				requestOperations = append(requestOperations, operation)
+			}
+		}
+
 		// 使用新方法（基于 []byte，避免整包 string 拷贝）
-		return applyOperations(workingJSON, operations, conditionContext)
+		return applyOperations(workingJSON, requestOperations, conditionContext)
 	}
 
 	// 直接使用旧方法
 	return applyOperationsLegacy(jsonData, paramOverride, auditRecorder)
+}
+
+// ApplyFinalErrorOverride evaluates final_error return_error rules after retries finish.
+func ApplyFinalErrorOverride(paramOverride map[string]interface{}, info *RelayInfo) (*types.NewAPIError, bool, error) {
+	if len(paramOverride) == 0 {
+		return nil, false, nil
+	}
+	operations, ok := tryParseOperations(paramOverride)
+	if !ok {
+		return nil, false, nil
+	}
+
+	finalOperations := make([]ParamOperation, 0, len(operations))
+	for _, operation := range operations {
+		if normalizeParamOverridePhase(operation.Phase) != paramOverridePhaseFinalError {
+			continue
+		}
+		if operation.Mode != "return_error" {
+			return nil, false, fmt.Errorf("final_error phase only supports return_error")
+		}
+		finalOperations = append(finalOperations, operation)
+	}
+	if len(finalOperations) == 0 {
+		return nil, false, nil
+	}
+
+	overrideCtx := BuildParamOverrideContext(info)
+	if overrideCtx == nil {
+		overrideCtx = make(map[string]interface{})
+	}
+	overrideCtx["phase"] = paramOverridePhaseFinalError
+	if retry, ok := overrideCtx["retry"].(map[string]interface{}); ok {
+		retry["exhausted"] = true
+	}
+
+	_, err := applyOperations([]byte(`{}`), finalOperations, overrideCtx)
+	if err == nil {
+		return nil, false, nil
+	}
+	returnErr, ok := AsParamOverrideReturnError(err)
+	if !ok {
+		return nil, false, err
+	}
+	return NewAPIErrorFromParamOverride(returnErr), true, nil
+}
+
+// ValidateFinalErrorOverride validates ordered final_error rules without executing them.
+func ValidateFinalErrorOverride(paramOverride map[string]interface{}) error {
+	if len(paramOverride) == 0 {
+		return nil
+	}
+	operations, ok := tryParseOperations(paramOverride)
+	if !ok {
+		return fmt.Errorf("final error override must use operations format")
+	}
+
+	catchAllSeen := false
+	for _, operation := range operations {
+		if normalizeParamOverridePhase(operation.Phase) != paramOverridePhaseFinalError {
+			continue
+		}
+		if catchAllSeen {
+			return fmt.Errorf("unconditional final_error rule must be last")
+		}
+		if operation.Mode != "return_error" {
+			return fmt.Errorf("final_error phase only supports return_error")
+		}
+		if _, err := parseParamOverrideReturnError(operation.Value); err != nil {
+			return err
+		}
+		catchAllSeen = len(operation.Conditions) == 0
+	}
+	return nil
 }
 
 func buildLegacyParamOverride(paramOverride map[string]interface{}) map[string]interface{} {
@@ -474,6 +568,11 @@ func tryParseOperations(paramOverride map[string]interface{}) ([]ParamOperation,
 			operation.Mode = mode
 		} else {
 			return nil, false // mode 是必需的
+		}
+		if phase, ok := opMap["phase"].(string); ok {
+			operation.Phase = normalizeParamOverridePhase(phase)
+		} else {
+			operation.Phase = paramOverridePhaseRequest
 		}
 
 		// 可选字段
@@ -2076,9 +2175,11 @@ func BuildParamOverrideContext(info *RelayInfo) map[string]interface{} {
 
 	ctx["retry_index"] = info.RetryIndex
 	ctx["is_retry"] = info.RetryIndex > 0
+	ctx["phase"] = paramOverridePhaseRequest
 	ctx["retry"] = map[string]interface{}{
-		"index":    info.RetryIndex,
-		"is_retry": info.RetryIndex > 0,
+		"index":     info.RetryIndex,
+		"is_retry":  info.RetryIndex > 0,
+		"exhausted": false,
 	}
 
 	if info.LastError != nil {
