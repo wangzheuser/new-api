@@ -1,136 +1,20 @@
-# Dev 分支最大程度无感部署方案
+# US 服务器本地构建蓝绿部署方案
 
-## 1. 目标与适用范围
+## 1. 权威约定
 
-将 `dev` 分支的不可变镜像替换现有上游镜像，保留原数据库、Redis、用户、Token、渠道、日志、订阅和登录状态，并把用户可感知影响压缩到反向代理的一次 graceful reload。
+本文是 `dev` 分支在 US 服务器的唯一应用发布流程。以后发布固定采用：**本地从干净提交构建 `linux/amd64` 镜像 → 导出压缩归档并校验 SHA-256 → 通过 SSH Manager 上传 → 启动候选槽位 → 真实端到端验证 → 交接 Docker 网络静态地址**。
 
-本文不记录服务器地址、域名、账号、密码、Token、数据库连接串、镜像仓库所有者或其他凭据。运行时配置和备份只能保存在服务器受限目录或现有密钥管理系统中。
+- 不使用 GitHub Actions 构建额度，也不依赖远端浮动 Tag。
+- Nginx Proxy 配置文件保持原样，不执行 reload 或重启；切流只交接其已解析的应用静态 IP 和 `new-api-green` 网络别名。
+- 只替换应用容器。PostgreSQL、Redis、日志库及其卷保持独立和共享。
+- 文档不记录服务器地址、域名、账号、密码、Token、Cookie、DSN 等凭据；凭据只来自本机备忘和服务器受限配置。
+- 生产切换、停止旧槽位、生产回滚均须取得明确确认。
 
-本方案适用于以下生产拓扑：
+## 2. 不变量
 
-- 主数据库为 PostgreSQL，应用容器与数据库分离。
-- Redis 和数据库具有独立持久化卷，更新应用时不重建依赖服务。
-- 域名流量先进入支持语法检查和 graceful reload 的反向代理。
-- 可短时间并行运行两个应用容器。
+两个槽位必须共享相同的 PostgreSQL、Redis、`SESSION_SECRET`、业务配置、回调域名和应用网络；必须使用不同的容器名、`NODE_NAME`、本机端口、日志目录和 `/data` 目录。候选端口只绑定 `127.0.0.1`。
 
-若生产实际使用 SQLite，不执行本文的双实例共享数据库方案。SQLite 应改用维护窗口、停止写入、复制数据库文件、校验副本后单实例替换。
-
-## 2. 重新分析后的当前结论
-
-截至本次更新，`dev` 比 `main` 增加三组需要纳入部署与回滚判断的能力：
-
-1. 注册码与注册限制。
-2. 完整对话采集。
-3. 订阅重复购买和管理员重复分配策略。
-
-当前 `dev` HEAD 已包含订阅策略，但最近一次成功构建的 dev 镜像指向更早提交，不能作为本次最终发布物。必须在最终 `dev` HEAD 上重新创建 Tag 并获得新 digest。
-
-本次新增数据库变化均为向前兼容的新增表或新增列：
-
-- 主数据库新增 `registration_codes`、`registration_code_usages`。
-- 日志数据库新增 `conversation_logs`；未配置独立日志库时，该表位于主数据库。
-- `subscription_plans` 新增 `repeat_purchase_mode`，旧套餐默认 `independent`。
-- `user_subscriptions` 新增 `allocation_count`，历史记录回填为 `1`。
-
-旧镜像能够忽略这些新增结构，因此未启用新业务行为前可以只回滚应用，不回滚数据库。
-
-## 3. 发布前必须修复的 CI 门禁
-
-当前仓库的 `dev-*` Tag 不只触发 `.github/workflows/dev-image.yml`，还会命中其他工作流的通配 Tag：
-
-- `release.yml` 的 `'*'`。
-- `docker-build.yml` 的 `'*'`。
-
-历史运行已经验证同一个 dev Tag 会同时触发 dev 镜像、正式 Release 和 Docker Hub 构建。这与“只由 dev Tag 构建 dev 镜像”的目标不一致。
-
-创建下一枚发布 Tag 前必须：
-
-1. 在 `release.yml` 的 Tag 规则中排除 `dev-*`。
-2. 在 `docker-build.yml` 的 Tag 规则中排除 `dev-*`。
-3. 保留 `dev-image.yml` 的 `dev-*` 规则和“Tag 必须指向远端 dev HEAD”校验。
-4. 推送一个新的测试 Tag，确认只有 `Publish dev image to GHCR` 被触发。
-5. 不复用、不强制移动已经存在的 Tag。
-
-推荐 Tag 格式：
-
-```text
-dev-YYYYMMDD-HHMM-<short-sha>
-```
-
-发布物只使用工作流输出的镜像 digest：
-
-```text
-ghcr.io/<owner>/new-api@sha256:<digest>
-```
-
-不得部署浮动 Tag，也不得使用最近一次旧 dev 镜像代替当前 HEAD。
-
-## 4. 总体拓扑
-
-```mermaid
-flowchart LR
-    U["用户请求"] --> P["反向代理"]
-    P -->|"切换前及旧连接"| B["Blue：现有实例"]
-    P -->|"切换后新连接"| G["Green：dev digest"]
-    B --> DB["原 PostgreSQL"]
-    G --> DB
-    B --> R["原 Redis"]
-    G --> R
-    B --> L["原日志库"]
-    G --> L
-```
-
-Blue 与 Green 必须复用：
-
-- 完全相同的主数据库和日志数据库连接目标。
-- 完全相同的 Redis。
-- 完全相同的 `SESSION_SECRET`、Cookie 安全配置和业务环境变量。
-- 完全相同的外部回调域名。
-
-Blue 与 Green 必须使用：
-
-- 不同的容器名、`NODE_NAME`、本机端口和日志目录。
-- 仅监听 `127.0.0.1` 的 Green 端口，禁止增加公网入口。
-- 相同的应用 Docker 网络。
-
-生产使用外部 PostgreSQL 时，Green 使用独立的临时 `/data` 目录即可，避免两个实例清理同一磁盘缓存。不得误挂一个新的空数据库卷。
-
-## 5. Compose 使用约束
-
-仓库根目录的 `docker-compose.yml` 同时定义应用、PostgreSQL 和 Redis，并固定了 `container_name`。直接以新 project name 再启动该文件可能造成容器名冲突，或创建一套新的空数据库和 Redis；仅使用镜像 override 也只会原地重建现有应用，不是蓝绿部署。
-
-因此 Green 必须使用“仅包含应用服务”的独立 Compose 文件，结构如下：
-
-```yaml
-services:
-  new-api-green:
-    image: ${NEW_API_IMAGE_DIGEST}
-    container_name: new-api-green
-    restart: unless-stopped
-    cpus: ${NEW_API_CPUS:-1.0}
-    mem_limit: ${NEW_API_MEMORY_LIMIT:-768m}
-    memswap_limit: ${NEW_API_MEMORY_SWAP_LIMIT:-1g}
-    pids_limit: ${NEW_API_PIDS_LIMIT:-256}
-    command: --log-dir /app/logs
-    env_file:
-      - ./runtime.env
-    ports:
-      - "127.0.0.1:${GREEN_PORT}:3000"
-    volumes:
-      - ./green-data:/data
-      - ./green-logs:/app/logs
-    networks:
-      - app-network
-
-networks:
-  app-network:
-    external: true
-    name: ${EXISTING_APP_NETWORK}
-```
-
-该文件只表达拓扑，实际变量由服务器受限环境文件提供。`runtime.env` 不进入 Git，不复制到发布文档，不在命令输出中打印。
-
-禁止执行：
+应用 Compose 只描述应用服务，严禁借发布重建数据库或 Redis。以下命令不属于发布流程：
 
 ```text
 docker compose down
@@ -139,222 +23,95 @@ docker volume rm
 docker system prune --volumes
 ```
 
-## 6. 上线门禁
+## 3. 本地不可变构建
 
-以下条件必须全部满足：
-
-1. CI Tag 冲突已经排除，新的 dev Tag 只触发 dev 镜像工作流。
-2. Tag 指向远端 `dev` HEAD，工作流成功并输出多架构 digest。
-3. 本地完整测试、Default/Classic 构建和订阅 API 端到端测试通过。
-4. 生产服务器能够按 digest 拉取 GHCR 镜像。
-5. 主数据库和独立日志数据库均已完成在线一致性备份与恢复演练。
-6. 新镜像已在恢复副本上成功完成迁移并启动。
-7. 恢复副本上的用户、Token、渠道、订阅、日志数量与备份快照一致。
-8. 迁移只出现本文列出的新增表、列和回填。
-9. CPU、内存、磁盘和数据库连接数允许短时间运行 Blue 与 Green。
-10. 已准备并验证反向代理回滚配置。
-11. 候选槽位实际生效的 CPU、内存、内存加交换空间和 PID 上限已通过
-    `docker inspect` 核对，且旧槽位的当前峰值没有超过候选上限。
-
-任一门禁失败，停止发布，不连接生产数据库，不切换流量。
-
-## 7. 备份与恢复演练
-
-### 7.1 备份范围
-
-每次发布创建独立且权限受限的目录：
+1. 确认目标提交已推送到远端 `dev`，记录完整 SHA。
+2. 执行全仓 Go 测试、Default/Classic 前端构建、类型检查和相关回归测试。
+3. 使用 `git archive <commit>` 导出干净源码，避免把工作区未提交文件带入镜像。
+4. 在归档源码中构建 Default 和 Classic 前端，并把版本写为：
 
 ```text
-pre-dev-<timestamp>/
-├── main-database.dump
-├── main-database.dump.sha256
-├── log-database.dump
-├── log-database.dump.sha256
-├── compose-config/
-├── proxy-config/
-└── persistent-data.tar.gz
+dev-<12位提交SHA>-local-amd64
 ```
 
-要求：
-
-- 主库使用 PostgreSQL custom format 在线备份。
-- 若 `LOG_SQL_DSN` 指向独立 PostgreSQL/MySQL，单独备份日志库。
-- 若日志库是 ClickHouse，使用其原生备份方案；完整对话采集当前不支持 ClickHouse，部署后继续保持关闭。
-- 保存并验证 SHA-256，但不把 DSN 或凭据写入校验日志。
-- 备份原 Compose、反向代理配置、持久化目录和当前镜像 digest。
-- 配置快照可能包含凭据，目录权限必须限制为部署账号可读。
-
-### 7.2 恢复演练
-
-在隔离的同版本数据库实例中恢复备份，使用新镜像启动一次。检查：
-
-- 应用健康检查通过且没有迁移循环或重复 `ALTER TABLE`。
-- 新表和新列存在。
-- `user_subscriptions.allocation_count` 不存在空值或小于 `1` 的值。
-- 旧套餐的 `repeat_purchase_mode` 为 `independent`。
-- 注册码强制开关和全局对话采集开关仍为关闭。
-- 使用恢复副本完成 Root 登录和只读管理 API 检查。
-
-恢复演练记录耗时。若生产表规模明显更大，应按演练结果预估 DDL 锁窗口，并选择低峰期发布。
-
-## 8. 生产部署步骤
-
-### 阶段 A：基线冻结
-
-1. 记录 Blue 镜像 digest、容器状态、网络、挂载、端口和反向代理 upstream。
-2. 确认数据库、Redis 和日志库的实际持久化位置。
-3. 确认 Green 的环境变量来自 Blue 的同一受控配置源，而不是手工重写。
-4. 记录核心数据基线：用户、Token、渠道、订阅计划、用户订阅和日志数量。
-5. 确认以下功能在发布期间保持关闭或默认状态：
+5. 在 arm64 Mac 上使用固定 Go 工具链交叉编译：
 
 ```text
-RegistrationCodeRequired=false
-ConversationCaptureEnabled=false
-所有现有套餐 repeat_purchase_mode=independent
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 GOEXPERIMENT=greenteagc
 ```
 
-### 阶段 B：启动 Green 并迁移
+6. 使用仓库 Dockerfile 相同的固定 Debian runtime digest 打包；镜像必须通过 `docker image inspect` 验证为 `linux/amd64`。
+7. 用临时 SQLite 容器验证 `/api/status` 返回精确版本，并验证首页可访问。
+8. 执行 `docker save | gzip`，生成 `.tar.gz` 和 SHA-256 文件；`gzip -t`、本地 SHA-256 均须通过。
 
-1. 按 digest 拉取镜像。
-2. 使用应用专用 Compose 文件启动 Green，不启动 PostgreSQL 或 Redis 服务。
-3. Green 保持 master 模式，使启动过程执行 GORM 迁移；不要设置 `NODE_TYPE=slave`，否则会跳过迁移。
-4. Green 只绑定本机端口，Blue 继续承载全部公网流量。
-5. 等待健康检查稳定，再检查启动日志中迁移已结束且容器没有重启。
+构建物、元数据和验证脚本保存在本地部署制品目录，文件名必须包含短提交 SHA。
 
-Blue 与 Green 在验证和排空期间会短时间同时作为 master。系统任务已有主节点判断或数据库协调，但仍应把并行窗口控制在验证和连接排空所需的最短时间，不把两个实例同时运行 24 小时。
+## 4. 上传、备份与候选槽位
 
-### 阶段 C：Green 直连验证
+1. 只通过 SSH Manager 上传镜像归档到服务器受限目录，权限设为 `600`。
+2. 服务器再次执行 SHA-256 和 `gzip -t`，再用 `gzip -dc | docker load` 导入。
+3. 发布前创建权限为 `700` 的独立备份目录，至少包含：
+   - PostgreSQL custom-format 在线备份、SHA-256 和 `pg_restore -l` 校验；
+   - 当前应用 Compose、运行环境的脱敏快照、容器和镜像 inspect；
+   - Nginx Proxy 配置快照及网络 inspect。
+4. 更新闲置槽位 Compose 的不可变本地镜像 Tag，仅执行该应用服务的 `docker compose up -d --force-recreate`。
+5. 核对候选槽位健康、版本、重启次数、OOM、CPU、内存、memory+swap 和 PID 上限。数据库、Redis 不参与重建。
 
-至少完成：
+## 5. 切流前真实门禁
 
-- `GET /api/status` 和两个前端主题静态资源正常。
-- 使用受限的内部 canary 入口完成 Root 登录，管理端只读 API 正常。
-- 使用专用测试 Token 完成一次最小非流式和一次流式请求。
-- 现有用户、Token、渠道、订阅计划和用户订阅可读取。
-- PostgreSQL、Redis、日志库连接正常。
-- 新增表、列及历史回填正确。
-- 注册码、对话采集和非独立订阅策略仍未启用。
-- 无持续锁等待、迁移错误、容器重启或异常资源增长。
+候选槽位通过独立本机端口完成：
 
-测试 Token 只能从服务器密钥源注入，禁止粘贴到命令行历史、文档或日志。
+- `/api/status` 精确版本、首页及所有引用静态资源；
+- Root/管理员 API、普通用户 API；
+- 普通用户日志始终只返回每个请求的最终记录；
+- 管理员默认只返回最终记录，显式关闭时返回完整重试过程；
+- 真实路由重试，最终日志内容必须与客户端最终响应完全一致；
+- 订阅更新成功路径及非法额度事务回滚；
+- PostgreSQL、Redis、缓存、登录状态和管理页面；
+- 容器 `healthy`、零重启、未 OOM；
+- Nginx Proxy 当前配置 SHA-256 与发布前快照一致。
 
-### 阶段 D：平滑切流
+任一门禁失败即保留现网槽位，不交接流量。
 
-1. 生成只把 upstream 从 Blue 本机端口改为 Green 本机端口的候选配置。
-2. 查看完整 diff，确认没有域名、TLS、WebSocket、SSE 超时或请求体限制的其他变化。
-3. 对候选配置执行反向代理语法检查。
-4. 自动备份当前配置。
-5. 执行 graceful reload，不重启反向代理容器。
+## 6. 不改 Nginx 的静态 IP 交接
 
-reload 后新请求进入 Green；旧代理 worker 和 Blue 继续处理切换前已建立的流式连接。
+Nginx 已把 `new-api-green:3000` 解析为生产应用静态地址。切流时动态读取现网槽位 IP，严禁在脚本中硬编码：
 
-### 阶段 E：切流后验证
+1. 记录现网槽位生产 IP和候选槽位原 IP。
+2. 从 Nginx 网络断开候选槽位。
+3. 从 Nginx 网络断开现网槽位。
+4. 将候选槽位以现网 IP、`new-api-green` 别名接回 Nginx 网络。
+5. 从 Nginx 容器内请求 `http://new-api-green:3000/api/status`，再从公网域名请求 `/api/status`，两者必须返回新版本。
+6. 核对候选持有生产 IP、旧槽位已脱离 Nginx 网络、配置 SHA-256 未变化。
 
-立即检查：
+切换脚本必须设置失败陷阱：任何验证失败时，断开候选槽位，把原生产 IP 和别名交还旧槽位，并把候选接回其待机地址。脚本先经 `bash -n` 验证并作为制品留存。
 
-- 已登录浏览器刷新后仍保持登录，验证 `SESSION_SECRET` 和 Cookie 配置一致。
-- Root、普通用户页面和管理 API 正常。
-- 最小非流式、流式请求成功，额度和日志各产生一次正确记录。
-- 支付回调地址仍指向原域名，待处理订单没有异常。
-- `499`、`502`、`504`、5xx 和 P95/P99 延迟无明显变化。
-- 数据库连接数、锁等待、慢查询和 Redis 错误正常。
+该方案不修改或 reload Nginx，但 Docker 网络地址交接会中断当时仍连接旧容器的长连接或流式请求；应在低峰执行，并把交接窗口控制在数秒内。
 
-### 阶段 F：排空 Blue
+## 7. 切流后验证与停止旧槽位
 
-1. 反向代理不再向 Blue 分发新请求。
-2. 监控 Blue 活动连接和 SSE 日志，至少等待一个最长请求超时周期。
-3. 确认 Blue 无活动请求后优雅停止容器，但不要删除容器、镜像或配置。
-4. 保留已停止的 Blue 和原代理配置至少 24 小时作为快速回滚入口。
+切流后立即通过真实公网入口重复第 5 节端到端场景。随后至少观察十分钟，定时核对：
 
-“保留旧实例”指保留可重新启动的容器和镜像，不是让 Blue 与 Green 作为两个 master 持续运行 24 小时。
+- 公网版本和 Nginx 容器内上游版本始终为新版本；
+- 候选槽位持续 `running/healthy`、零重启、未 OOM；
+- CPU、内存、数据库连接、Redis、5xx 和延迟无异常；
+- Nginx Proxy 配置哈希保持不变。
 
-## 9. 功能启用顺序
+观察通过并已取得停止确认后，使用带超时的 `docker stop` 停止旧槽位。旧容器、旧镜像、Compose、运行配置和数据库备份至少保留 24 小时，不执行删除或 prune。停止后再次验证公网版本和新槽位健康状态。
 
-应用稳定运行至少 24 小时且快速回滚窗口结束前，不启用新业务行为。
+## 8. 回滚
 
-### 9.1 订阅重复策略
+回滚只处理应用网络，不回滚共享数据库：
 
-1. 先确认历史套餐均为 `independent`。
-2. 只选择一个低风险套餐作为 canary。
-3. 根据业务选择时间、额度、时间加额度或覆盖策略。
-4. 完成一次真实或受控购买，核对有效期、额度、`allocation_count` 和购买上限。
-5. 观察无异常后再逐套餐启用。
+1. 启动旧槽位并确认其本机健康。
+2. 记录当前生产 IP。
+3. 从 Nginx 网络断开新槽位。
+4. 将旧槽位以生产 IP 和 `new-api-green` 别名接回。
+5. 验证 Nginx 容器内上游与公网入口均恢复旧版本。
+6. 将新槽位接回待机地址并保留用于分析。
 
-一旦发生合并购买，旧镜像虽然仍能读取合并后的订阅，但会按“记录条数”而不是 `allocation_count` 计算购买次数。此后回滚旧镜像前应先暂停受影响套餐购买，避免购买上限被低估。
+回滚窗口内不启用只受新版本支持、且会写入旧版本不兼容数据的功能。Nginx Proxy 配置、PostgreSQL 和 Redis 始终保持原样。
 
-### 9.2 注册码限制
+## 9. 发布记录
 
-1. 先生成并验证足够的有效注册码。
-2. 分别验证密码注册、OAuth 注册和目标第三方注册入口。
-3. 确认现有用户登录不受影响。
-4. 最后开启 `RegistrationCodeRequired`。
-
-回滚旧镜像前先关闭注册码强制限制，因为旧镜像不会执行该限制。
-
-### 9.3 完整对话采集
-
-1. 确认日志库为 SQLite、MySQL 或 PostgreSQL；ClickHouse 不启用。
-2. 先配置保留天数和最大存储量。
-3. 只给一个 canary 渠道开启渠道采集开关。
-4. 再开启全局 `ConversationCaptureEnabled`。
-5. 验证非流式、流式、错误响应、截断标记、清理任务和磁盘增长。
-6. 根据存储和隐私要求逐渠道扩大。
-
-应用部署、订阅策略、注册码限制和对话采集必须作为四个独立变更执行。
-
-## 10. 监控与回滚
-
-### 10.1 监控项
-
-- 反向代理 `499`、`502`、`504`。
-- API 5xx、P95/P99 和流式异常结束数量。
-- Green CPU、内存、重启次数和磁盘增长。
-- PostgreSQL锁等待、连接数、慢查询和表膨胀。
-- Redis 连接错误和缓存异常。
-- 用户、Token、渠道、订阅数量。
-- 额度扣减、订阅消费、支付订单和消费日志。
-- 对话采集启用后的日志库存储增长和清理任务结果。
-
-### 10.2 回滚矩阵
-
-| 阶段 | 回滚动作 | 数据库处理 |
-| --- | --- | --- |
-| 切流前 | 停止 Green，Blue 不变 | 不恢复 |
-| 切流后、未启用新功能 | upstream 切回 Blue，graceful reload | 不恢复 |
-| 已启用注册码 | 先关闭强制限制，再切回 Blue | 不恢复 |
-| 已启用对话采集 | 先关闭全局采集，再切回 Blue | 保留已采集记录 |
-| 已发生订阅合并 | 暂停受影响套餐购买，再切回 Blue | 保留订阅，人工关注购买上限 |
-| 确认数据库损坏 | 进入停写、差异核对和恢复流程 | 按批准的恢复方案处理 |
-
-正常应用回滚不得恢复发布前数据库备份，因为那会删除发布后产生的用户、订单、额度和日志数据。
-
-## 11. 发布完成标准
-
-全部满足后才认定完成：
-
-- Green 经域名入口稳定运行至少 24 小时。
-- Blue 已排空并停止，且没有客户端绕过代理直连旧端口。
-- 已登录 Session、计费、订阅、支付回调和流式请求无异常。
-- 数据核对无减少，新增迁移结构符合预期。
-- 正式部署配置已记录当前镜像 digest、端口和回滚 digest。
-- 数据库备份、恢复记录和代理配置备份仍可用。
-- 新功能仍按独立变更逐项灰度，而不是随部署同时全量开启。
-
-## 12. 执行前最终检查表
-
-```text
-[ ] release.yml 与 docker-build.yml 已排除 dev-*
-[ ] 新 Tag 指向远端 dev HEAD
-[ ] 只有 dev-image.yml 被触发且构建成功
-[ ] 已记录不可变镜像 digest
-[ ] 主库与日志库备份、校验、恢复演练通过
-[ ] 恢复副本迁移和数据核对通过
-[ ] Green 使用应用专用 Compose，不会启动新数据库/Redis
-[ ] Green 复用原 SESSION_SECRET、数据库、Redis 和 Cookie 配置
-[ ] Green 仅监听 127.0.0.1
-[ ] 三类新功能保持关闭或 independent
-[ ] Green 直连健康、登录、非流式、流式验证通过
-[ ] 代理候选配置 diff 与语法检查通过
-[ ] 回滚 upstream 和旧镜像已就绪
-[ ] 切流后验证通过并完成 Blue 排空
-```
+每次发布记录：提交 SHA、版本、镜像 ID、归档 SHA-256、备份目录、候选门禁结果、切换时间、观察结果、旧槽位停止时间和回滚命令。记录中只写脱敏标识，不写任何凭据。
