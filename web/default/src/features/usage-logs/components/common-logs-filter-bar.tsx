@@ -150,7 +150,7 @@ export function CommonLogsFilterBar<TData>(
       username: searchParams.username || undefined,
       requestId: searchParams.requestId || undefined,
       upstreamRequestId: searchParams.upstreamRequestId || undefined,
-      latestPerRequest: searchParams.latestPerRequest || undefined,
+      latestPerRequest: searchParams.latestPerRequest !== false,
     }
     return {
       sourceKey: buildSearchSourceKey(sourceValues),
@@ -211,11 +211,16 @@ export function CommonLogsFilterBar<TData>(
 
   const handleReset = useCallback(() => {
     const { start, end } = getDefaultTimeRange()
-    const resetFilters: CommonLogFilters = { startTime: start, endTime: end }
+    const resetFilters: CommonLogFilters = {
+      startTime: start,
+      endTime: end,
+      latestPerRequest: true,
+    }
     const resetSearch = {
       type: [LOG_TYPE_ALL_VALUE],
       startTime: start.getTime(),
       endTime: end.getTime(),
+      latestPerRequest: true,
     }
     setDraft({
       sourceKey: buildSearchSourceKey(resetSearch),
@@ -248,7 +253,7 @@ export function CommonLogsFilterBar<TData>(
     !!filters.channel ||
     !!filters.requestId ||
     !!filters.upstreamRequestId ||
-    !!filters.latestPerRequest
+    (isAdmin && filters.latestPerRequest === false)
 
   const hasTypeFilter = logType !== LOG_TYPE_ALL_VALUE
   const hasAdditionalFilters =
@@ -260,7 +265,7 @@ export function CommonLogsFilterBar<TData>(
     isAdmin ? filters.channel : undefined,
     filters.requestId,
     filters.upstreamRequestId,
-    filters.latestPerRequest,
+    isAdmin && filters.latestPerRequest === false,
   ].filter(Boolean).length
   const sensitiveType = sensitiveVisible ? 'text' : 'password'
   const logTypeItems = useMemo(
@@ -417,17 +422,19 @@ export function CommonLogsFilterBar<TData>(
           onKeyDown={handleKeyDown}
         />
       </LogsFilterField>
-      <LogsFilterField className='flex items-center'>
-        <label className='flex cursor-pointer items-center gap-2 text-sm'>
-          <Switch
-            checked={!!filters.latestPerRequest}
-            onCheckedChange={(checked) =>
-              handleChange('latestPerRequest', checked)
-            }
-          />
-          {t('Latest result per request')}
-        </label>
-      </LogsFilterField>
+      {isAdmin && (
+        <LogsFilterField className='flex items-center'>
+          <label className='flex cursor-pointer items-center gap-2 text-sm'>
+            <Switch
+              checked={!!filters.latestPerRequest}
+              onCheckedChange={(checked) =>
+                handleChange('latestPerRequest', checked)
+              }
+            />
+            {t('Latest result per request')}
+          </label>
+        </LogsFilterField>
+      )}
     </>
   )
 

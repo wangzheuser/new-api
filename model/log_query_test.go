@@ -11,13 +11,13 @@ import (
 func TestLogQueriesLatestPerRequest(t *testing.T) {
 	truncateTables(t)
 	logs := []*Log{
-		{UserId: 1, CreatedAt: 100, Type: LogTypeError, Content: "retry", RequestId: "req-a"},
-		{UserId: 1, CreatedAt: 101, Type: LogTypeConsume, Content: "success", RequestId: "req-a"},
-		{UserId: 1, CreatedAt: 102, Type: LogTypeError, Content: "older same second", RequestId: "req-b"},
-		{UserId: 1, CreatedAt: 102, Type: LogTypeError, Content: "final same second", RequestId: "req-b"},
+		{UserId: 1, CreatedAt: 100, Type: LogTypeError, Content: "retry", TokenId: 7, RequestId: "req-a"},
+		{UserId: 1, CreatedAt: 101, Type: LogTypeConsume, Content: "success", TokenId: 7, RequestId: "req-a"},
+		{UserId: 1, CreatedAt: 102, Type: LogTypeError, Content: "older same second", TokenId: 7, RequestId: "req-b"},
+		{UserId: 1, CreatedAt: 102, Type: LogTypeError, Content: "final same second", TokenId: 7, RequestId: "req-b"},
 		{UserId: 1, CreatedAt: 103, Type: LogTypeManage, Content: "empty one"},
 		{UserId: 1, CreatedAt: 104, Type: LogTypeManage, Content: "empty two"},
-		{UserId: 2, CreatedAt: 105, Type: LogTypeConsume, Content: "other user", RequestId: "req-c"},
+		{UserId: 2, CreatedAt: 105, Type: LogTypeConsume, Content: "other user", TokenId: 8, RequestId: "req-c"},
 	}
 	require.NoError(t, LOG_DB.Create(&logs).Error)
 
@@ -52,6 +52,10 @@ func TestLogQueriesLatestPerRequest(t *testing.T) {
 	assert.EqualValues(t, 1, total)
 	require.Len(t, exact, 1)
 	assert.Equal(t, "success", exact[0].Content)
+
+	tokenLogs, err := GetLogByTokenId(7)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"success", "final same second"}, logContents(tokenLogs))
 }
 
 // logContents returns log content values for order-independent assertions.
