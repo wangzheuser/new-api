@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Ban, Plus, RotateCcw, Trash2 } from 'lucide-react'
+import { Ban, Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -72,6 +72,7 @@ import type {
   SubscriptionApplyMode,
   UserSubscriptionRecord,
 } from '../../types'
+import { EditUserSubscriptionDialog } from './edit-user-subscription-dialog'
 
 interface Props {
   open: boolean
@@ -135,6 +136,9 @@ export function UserSubscriptionsDialog(props: Props) {
     type: 'invalidate' | 'delete'
     subId: number
   } | null>(null)
+  const [editRecord, setEditRecord] = useState<UserSubscriptionRecord | null>(
+    null
+  )
 
   const planTitleMap = useMemo(() => {
     const map = new Map<number, string>()
@@ -421,6 +425,13 @@ export function UserSubscriptionsDialog(props: Props) {
 
                     return (
                       <DataTableRowActionMenu ariaLabel={t('Actions')}>
+                        <DropdownMenuItem onClick={() => setEditRecord(record)}>
+                          {t('Edit')}
+                          <DropdownMenuShortcut>
+                            <Pencil size={16} />
+                          </DropdownMenuShortcut>
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
                         <DropdownMenuItem
                           disabled={!isActive}
                           onClick={() => {
@@ -497,6 +508,22 @@ export function UserSubscriptionsDialog(props: Props) {
           }
           handleConfirm={handleConfirmAction}
           destructive={confirmAction.type === 'delete'}
+        />
+      )}
+
+      {editRecord && (
+        <EditUserSubscriptionDialog
+          open
+          onOpenChange={(open) => !open && setEditRecord(null)}
+          record={editRecord}
+          planTitle={
+            planTitleMap.get(editRecord.subscription.plan_id) ||
+            `#${editRecord.subscription.plan_id}`
+          }
+          onSuccess={async () => {
+            await loadData()
+            props.onSuccess?.()
+          }}
         />
       )}
 

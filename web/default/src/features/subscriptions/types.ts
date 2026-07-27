@@ -133,6 +133,12 @@ export interface CreateUserSubscriptionRequest {
   apply_mode?: SubscriptionApplyMode
 }
 
+export interface UpdateUserSubscriptionRequest {
+  end_time: number
+  amount_used: number
+  amount_total: number
+}
+
 export type SubscriptionApplyMode =
   | 'plan_default'
   | 'independent'

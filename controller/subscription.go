@@ -386,10 +386,12 @@ func subscriptionAuditSnapshot(sub *model.UserSubscription) map[string]interface
 	}
 	return map[string]interface{}{
 		"subscription_id":   sub.Id,
+		"status":            sub.Status,
 		"start_time":        sub.StartTime,
 		"end_time":          sub.EndTime,
 		"amount_total":      sub.AmountTotal,
 		"amount_used":       sub.AmountUsed,
+		"next_reset_time":   sub.NextResetTime,
 		"allocation_count":  sub.AllocationCount,
 		"entitlement_group": sub.EntitlementGroup,
 	}
@@ -464,6 +466,12 @@ type AdminCreateUserSubscriptionRequest struct {
 	ApplyMode string `json:"apply_mode"`
 }
 
+type AdminUpdateUserSubscriptionRequest struct {
+	EndTime     *int64 `json:"end_time"`
+	AmountUsed  *int64 `json:"amount_used"`
+	AmountTotal *int64 `json:"amount_total"`
+}
+
 type AdminResetSubscriptionRequest struct {
 	PlanId           int   `json:"plan_id"`
 	AdvanceResetTime *bool `json:"advance_reset_time"`
@@ -503,6 +511,47 @@ func AdminCreateUserSubscription(c *gin.Context) {
 		return
 	}
 	handleAdminSubscriptionApply(c, userId, req.PlanId, req.ApplyMode)
+}
+
+// AdminUpdateUserSubscription updates one user subscription and records its before/after state.
+func AdminUpdateUserSubscription(c *gin.Context) {
+	subId, _ := strconv.Atoi(c.Param("id"))
+	if subId <= 0 {
+		common.ApiErrorMsg(c, "无效的订阅ID")
+		return
+	}
+	var req AdminUpdateUserSubscriptionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	result, err := model.AdminUpdateUserSubscription(subId, model.UserSubscriptionUpdate{
+		EndTime:     req.EndTime,
+		AmountUsed:  req.AmountUsed,
+		AmountTotal: req.AmountTotal,
+	})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	message := fmt.Sprintf("管理员修改订阅（ID: %d）", subId)
+	if result.GroupChanged != "" {
+		message += fmt.Sprintf("，用户分组已更新为 %s", result.GroupChanged)
+	}
+	adminInfo := auditOperatorInfo(c)
+	userId := result.Subscription.UserId
+	model.RecordLogWithAdminInfo(userId, model.LogTypeManage, message, adminInfo)
+	recordManageAuditFor(c, userId, "subscription.user_update", map[string]interface{}{
+		"target_user_id":  userId,
+		"subscription_id": subId,
+		"before":          subscriptionAuditSnapshot(result.Before),
+		"after":           subscriptionAuditSnapshot(result.Subscription),
+	})
+	common.ApiSuccess(c, gin.H{
+		"message":      message,
+		"subscription": result.Subscription,
+	})
 }
 
 func AdminResetUserSubscriptionsByPlan(c *gin.Context) {

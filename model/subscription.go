@@ -308,6 +308,20 @@ type SubscriptionSummary struct {
 	Subscription *UserSubscription `json:"subscription"`
 }
 
+// UserSubscriptionUpdate contains the administrator-editable subscription fields.
+type UserSubscriptionUpdate struct {
+	EndTime     *int64
+	AmountUsed  *int64
+	AmountTotal *int64
+}
+
+// UserSubscriptionUpdateResult describes an administrator subscription edit.
+type UserSubscriptionUpdateResult struct {
+	Before       *UserSubscription
+	Subscription *UserSubscription
+	GroupChanged string
+}
+
 // refreshSubscriptionUserAuthCache publishes the user's final committed authorization state.
 func refreshSubscriptionUserAuthCache(userId int) {
 	if userId <= 0 {
@@ -1018,6 +1032,120 @@ func buildSubscriptionSummaries(subs []UserSubscription) []SubscriptionSummary {
 		})
 	}
 	return result
+}
+
+// AdminUpdateUserSubscription updates one subscription and applies validity side effects immediately.
+func AdminUpdateUserSubscription(userSubscriptionId int, update UserSubscriptionUpdate) (*UserSubscriptionUpdateResult, error) {
+	if userSubscriptionId <= 0 {
+		return nil, errors.New("invalid userSubscriptionId")
+	}
+	if update.EndTime == nil && update.AmountUsed == nil && update.AmountTotal == nil {
+		return nil, errors.New("至少需要修改一个字段")
+	}
+
+	result := &UserSubscriptionUpdateResult{}
+	userId := 0
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var sub UserSubscription
+		if err := lockForUpdate(tx).Where("id = ?", userSubscriptionId).First(&sub).Error; err != nil {
+			return err
+		}
+		before := sub
+		userId = sub.UserId
+
+		// Apply explicit zero values before validating the final persisted state.
+		if update.EndTime != nil {
+			sub.EndTime = *update.EndTime
+		}
+		if update.AmountUsed != nil {
+			sub.AmountUsed = *update.AmountUsed
+		}
+		if update.AmountTotal != nil {
+			sub.AmountTotal = *update.AmountTotal
+		}
+		if sub.EndTime <= 0 {
+			return errors.New("订阅结束时间无效")
+		}
+		if sub.AmountUsed < 0 || sub.AmountTotal < 0 {
+			return errors.New("订阅额度不能为负数")
+		}
+		if sub.AmountTotal > 0 && sub.AmountUsed > sub.AmountTotal {
+			return errors.New("已用额度不能超过总额度")
+		}
+
+		now := getDBTimestampTx(tx)
+		previousStatus := sub.Status
+		if previousStatus != "cancelled" {
+			if sub.EndTime > now {
+				sub.Status = "active"
+			} else {
+				sub.Status = "expired"
+			}
+		}
+
+		if update.EndTime != nil {
+			plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)
+			if err != nil {
+				return err
+			}
+			if sub.Status != "active" || NormalizeResetPeriod(plan.QuotaResetPeriod) == SubscriptionResetNever {
+				sub.NextResetTime = 0
+			} else if previousStatus != "active" {
+				// A restored subscription starts a fresh reset window and keeps the administrator-set usage.
+				sub.LastResetTime = now
+				sub.NextResetTime = calcNextResetTime(time.Unix(now, 0), plan, sub.EndTime)
+			} else if sub.NextResetTime <= now || sub.NextResetTime > sub.EndTime {
+				baseUnix := sub.LastResetTime
+				if baseUnix <= 0 {
+					baseUnix = sub.StartTime
+				}
+				base := time.Unix(baseUnix, 0)
+				next := calcNextResetTime(base, plan, sub.EndTime)
+				for next > 0 && next <= now {
+					base = time.Unix(next, 0)
+					next = calcNextResetTime(base, plan, sub.EndTime)
+				}
+				sub.LastResetTime = base.Unix()
+				sub.NextResetTime = next
+			}
+		}
+
+		if previousStatus == "active" && sub.Status == "expired" {
+			target, err := downgradeUserGroupForSubscriptionTx(tx, &sub, now)
+			if err != nil {
+				return err
+			}
+			result.GroupChanged = target
+		} else if previousStatus != "active" && sub.Status == "active" && strings.TrimSpace(sub.UpgradeGroup) != "" {
+			currentGroup, err := getUserGroupByIdTx(tx, sub.UserId)
+			if err != nil {
+				return err
+			}
+			upgradeGroup := strings.TrimSpace(sub.UpgradeGroup)
+			if currentGroup != upgradeGroup {
+				sub.PrevUserGroup = currentGroup
+				if err := tx.Model(&User{}).Where("id = ?", sub.UserId).Update("group", upgradeGroup).Error; err != nil {
+					return err
+				}
+				result.GroupChanged = upgradeGroup
+			}
+		}
+
+		if err := tx.Save(&sub).Error; err != nil {
+			return err
+		}
+		result.Before = &before
+		result.Subscription = &sub
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result.GroupChanged != "" {
+		_ = UpdateUserGroupCache(userId, result.GroupChanged)
+	}
+	refreshSubscriptionUserAuthCache(userId)
+	return result, nil
 }
 
 // AdminInvalidateUserSubscription marks a user subscription as cancelled and ends it immediately.

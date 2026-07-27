@@ -24,6 +24,7 @@ import type {
   PlanPayload,
   UserSubscriptionRecord,
   CreateUserSubscriptionRequest,
+  UpdateUserSubscriptionRequest,
   ResetUserSubscriptionsRequest,
   ResetPlanSubscriptionsRequest,
   SubscriptionResetResult,
@@ -95,6 +96,22 @@ export async function invalidateUserSubscription(
 ): Promise<ApiResponse<{ message?: string }>> {
   const res = await api.post(
     `/api/subscription/admin/user_subscriptions/${subId}/invalidate`
+  )
+  return res.data
+}
+
+export async function updateUserSubscription(
+  subId: number,
+  data: UpdateUserSubscriptionRequest
+): Promise<
+  ApiResponse<{
+    message?: string
+    subscription?: UserSubscriptionRecord['subscription']
+  }>
+> {
+  const res = await api.patch(
+    `/api/subscription/admin/user_subscriptions/${subId}`,
+    data
   )
   return res.data
 }
