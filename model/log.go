@@ -30,7 +30,7 @@ func applyExplicitLogTextFilter(tx *gorm.DB, column string, value string) (*gorm
 	return tx.Where(column+" = ?", value), nil
 }
 
-// keepLatestRequestLogs keeps the last log in the current scope for each non-empty request ID.
+// keepLatestRequestLogs keeps only the globally final log for each non-empty request ID.
 func keepLatestRequestLogs(tx *gorm.DB) *gorm.DB {
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		ranked := tx.Select("logs.*, row_number() OVER (PARTITION BY logs.request_id ORDER BY logs.created_at DESC, logs.id DESC) AS request_rank")
@@ -39,7 +39,7 @@ func keepLatestRequestLogs(tx *gorm.DB) *gorm.DB {
 	}
 
 	scoped := tx.Select("logs.*")
-	newer := LOG_DB.Table("(?) AS newer", scoped).
+	newer := LOG_DB.Table("logs AS newer").
 		Select("1").
 		Where("newer.request_id = logs.request_id").
 		Where("newer.created_at > logs.created_at OR (newer.created_at = logs.created_at AND newer.id > logs.id)")

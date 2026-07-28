@@ -58,6 +58,34 @@ func TestLogQueriesLatestPerRequest(t *testing.T) {
 	assert.ElementsMatch(t, []string{"success", "final same second"}, logContents(tokenLogs))
 }
 
+// TestLogQueriesLatestPerRequestAcrossTimeRange verifies an intermediate log is not treated as final at a time-range boundary.
+func TestLogQueriesLatestPerRequestAcrossTimeRange(t *testing.T) {
+	truncateTables(t)
+	logs := []*Log{
+		{UserId: 1, CreatedAt: 100, Type: LogTypeError, Content: "retry before boundary", RequestId: "req-cross-boundary"},
+		{UserId: 1, CreatedAt: 101, Type: LogTypeManage, Content: "legacy empty request"},
+		{UserId: 1, CreatedAt: 200, Type: LogTypeConsume, Content: "success after boundary", RequestId: "req-cross-boundary"},
+	}
+	require.NoError(t, LOG_DB.Create(&logs).Error)
+
+	allLogs, total, err := GetAllLogs(LogTypeUnknown, 0, 150, "", "", "", 0, 20, 0, "", "", "", false)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, total)
+	assert.ElementsMatch(t, []string{"retry before boundary", "legacy empty request"}, logContents(allLogs))
+
+	latestLogs, total, err := GetAllLogs(LogTypeUnknown, 0, 150, "", "", "", 0, 20, 0, "", "", "", true)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, total)
+	require.Len(t, latestLogs, 1)
+	assert.Equal(t, "legacy empty request", latestLogs[0].Content)
+
+	userLogs, total, err := GetUserLogs(1, LogTypeUnknown, 0, 150, "", "", 0, 20, "", "", "", true)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, total)
+	require.Len(t, userLogs, 1)
+	assert.Equal(t, "legacy empty request", userLogs[0].Content)
+}
+
 // logContents returns log content values for order-independent assertions.
 func logContents(logs []*Log) []string {
 	contents := make([]string, 0, len(logs))
