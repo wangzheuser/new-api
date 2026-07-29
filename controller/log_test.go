@@ -19,10 +19,11 @@ func TestLogListFinalResultVisibility(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.Log{}))
 	require.NoError(t, db.Create([]*model.Log{
-		{UserId: 1, CreatedAt: 100, Type: model.LogTypeError, Content: "retry upstream 503", RequestId: "req-success"},
+		{UserId: 1, CreatedAt: 100, Type: model.LogTypeError, Content: "retry upstream 503", RequestId: "req-success", IsIntermediate: true},
 		{UserId: 1, CreatedAt: 101, Type: model.LogTypeConsume, Content: "success", RequestId: "req-success"},
-		{UserId: 1, CreatedAt: 102, Type: model.LogTypeError, Content: "retry upstream 503", RequestId: "req-failure"},
+		{UserId: 1, CreatedAt: 102, Type: model.LogTypeError, Content: "retry upstream 503", RequestId: "req-failure", IsIntermediate: true},
 		{UserId: 1, CreatedAt: 103, Type: model.LogTypeError, Content: "当前分组上游负载已饱和", RequestId: "req-failure", Other: `{"public_error":true}`},
+		{UserId: 1, CreatedAt: 104, Type: model.LogTypeError, Content: "in-flight upstream 503", RequestId: "req-in-flight", IsIntermediate: true},
 	}).Error)
 
 	type logListResponse struct {
@@ -49,7 +50,7 @@ func TestLogListFinalResultVisibility(t *testing.T) {
 			name:         "admin can request every retry attempt",
 			url:          "/api/log/?p=1&page_size=20&latest_per_request=false",
 			handler:      GetAllLogs,
-			wantContents: []string{"retry upstream 503", "success", "retry upstream 503", "当前分组上游负载已饱和"},
+			wantContents: []string{"retry upstream 503", "success", "retry upstream 503", "当前分组上游负载已饱和", "in-flight upstream 503"},
 		},
 		{
 			name:         "user cannot disable final results",

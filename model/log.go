@@ -30,8 +30,9 @@ func applyExplicitLogTextFilter(tx *gorm.DB, column string, value string) (*gorm
 	return tx.Where(column+" = ?", value), nil
 }
 
-// keepLatestRequestLogs keeps only the globally final log for each non-empty request ID.
+// keepLatestRequestLogs keeps only the globally final, non-intermediate log for each non-empty request ID.
 func keepLatestRequestLogs(tx *gorm.DB) *gorm.DB {
+	tx = tx.Where("(logs.is_intermediate = ? OR logs.is_intermediate IS NULL)", false)
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		ranked := tx.Select("logs.*, row_number() OVER (PARTITION BY logs.request_id ORDER BY logs.created_at DESC, logs.id DESC) AS request_rank")
 		return LOG_DB.Table("(?) AS logs", ranked).
@@ -42,6 +43,7 @@ func keepLatestRequestLogs(tx *gorm.DB) *gorm.DB {
 	newer := LOG_DB.Table("logs AS newer").
 		Select("1").
 		Where("newer.request_id = logs.request_id").
+		Where("(newer.is_intermediate = ? OR newer.is_intermediate IS NULL)", false).
 		Where("newer.created_at > logs.created_at OR (newer.created_at = logs.created_at AND newer.id > logs.id)")
 	return LOG_DB.Table("(?) AS logs", scoped).
 		Where("logs.request_id = '' OR NOT EXISTS (?)", newer)
@@ -87,6 +89,7 @@ type Log struct {
 	CompletionTokens  int    `json:"completion_tokens" gorm:"default:0"`
 	UseTime           int    `json:"use_time" gorm:"default:0"`
 	IsStream          bool   `json:"is_stream"`
+	IsIntermediate    bool   `json:"is_intermediate,omitempty"`
 	ChannelId         int    `json:"channel" gorm:"index"`
 	ChannelName       string `json:"channel_name" gorm:"->"`
 	TokenId           int    `json:"token_id" gorm:"default:0;index"`
@@ -298,7 +301,7 @@ func RecordTopupLog(userId int, content string, callerIp string, paymentMethod s
 }
 
 func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string, tokenName string, content string, tokenId int, useTimeSeconds int,
-	isStream bool, group string, other map[string]interface{}) {
+	isStream bool, isIntermediate bool, group string, other map[string]interface{}) {
 	logger.LogInfo(c, fmt.Sprintf("record error log: userId=%d, channelId=%d, modelName=%s, tokenName=%s, content=%s", userId, channelId, modelName, tokenName, common.LocalLogPreview(content)))
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
@@ -326,6 +329,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 		TokenId:          tokenId,
 		UseTime:          useTimeSeconds,
 		IsStream:         isStream,
+		IsIntermediate:   isIntermediate,
 		Group:            group,
 		Ip: func() string {
 			if needRecordIp {

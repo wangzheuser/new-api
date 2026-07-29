@@ -96,6 +96,7 @@ func TestClickHouseLogCreateTableSQL(t *testing.T) {
 	assert.Contains(t, withoutTTL, "ENGINE = MergeTree()")
 	assert.Contains(t, withoutTTL, "PARTITION BY toYYYYMM(toDateTime(created_at))")
 	assert.Contains(t, withoutTTL, "ORDER BY (created_at, request_id)")
+	assert.Contains(t, withoutTTL, "is_intermediate UInt8 DEFAULT 0")
 	assert.NotContains(t, withoutTTL, "TTL ")
 
 	withTTL := clickHouseLogCreateTableSQL(30)
@@ -126,6 +127,7 @@ func TestKeepLatestRequestLogsUsesClickHouseWindow(t *testing.T) {
 		Find(&[]Log{})
 	require.NoError(t, query.Error)
 	assert.Contains(t, query.Statement.SQL.String(), "row_number() OVER (PARTITION BY logs.request_id")
+	assert.Contains(t, query.Statement.SQL.String(), "logs.is_intermediate")
 	assert.Contains(t, query.Statement.SQL.String(), "logs.request_id = '' OR logs.request_rank = 1")
 }
 

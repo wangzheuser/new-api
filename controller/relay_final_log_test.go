@@ -6,6 +6,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -46,6 +49,41 @@ func TestRelayClientErrorLogContent(t *testing.T) {
 			relayClientErrorLogContent(err, types.RelayFormatOpenAI),
 		)
 	})
+}
+
+// TestRecordRelayErrorLogPersistsIntermediateState protects final-only queries from in-flight retries.
+func TestRecordRelayErrorLogPersistsIntermediateState(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Log{}))
+
+	previousErrorLogEnabled := constant.ErrorLogEnabled
+	constant.ErrorLogEnabled = true
+	t.Cleanup(func() {
+		constant.ErrorLogEnabled = previousErrorLogEnabled
+	})
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	ctx.Set("id", 1)
+	ctx.Set("username", "test-user")
+	ctx.Set("original_model", "test-model")
+	ctx.Set(common.RequestIdKey, "req-intermediate")
+
+	relayError := types.NewOpenAIError(
+		errors.New("upstream unavailable"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusServiceUnavailable,
+	)
+	recordRelayErrorLog(ctx, relayError, "", nil, true)
+
+	ctx.Set(common.RequestIdKey, "req-terminal")
+	recordRelayErrorLog(ctx, relayError, "", nil, false)
+
+	var logs []model.Log
+	require.NoError(t, db.Order("id").Find(&logs).Error)
+	require.Len(t, logs, 2)
+	require.True(t, logs[0].IsIntermediate)
+	require.False(t, logs[1].IsIntermediate)
 }
 
 // TestResolveConfiguredFinalRelayError verifies channel precedence, system fallback, and leak-safe fallback.
