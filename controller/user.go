@@ -210,6 +210,10 @@ func Register(c *gin.Context) {
 			common.ApiErrorI18n(c, i18n.MsgUserEmailVerificationRequired)
 			return
 		}
+		if messageKey, args := validateEmailRestrictions(user.Email); messageKey != "" {
+			common.ApiErrorI18n(c, messageKey, args)
+			return
+		}
 		if !common.VerifyCodeWithKey(user.Email, user.VerificationCode, common.EmailVerificationPurpose) {
 			common.ApiErrorI18n(c, i18n.MsgUserVerificationCodeError)
 			return
@@ -1221,6 +1225,10 @@ func EmailBind(c *gin.Context) {
 	email := req.Email
 	email = model.NormalizeEmail(email)
 	code := req.Code
+	if messageKey, args := validateEmailRestrictions(email); messageKey != "" {
+		common.ApiErrorI18n(c, messageKey, args)
+		return
+	}
 	if !common.VerifyCodeWithKey(email, code, common.EmailVerificationPurpose) {
 		common.ApiErrorI18n(c, i18n.MsgUserVerificationCodeError)
 		return

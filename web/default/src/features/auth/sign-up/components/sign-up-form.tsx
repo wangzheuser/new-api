@@ -31,6 +31,7 @@ import { Button } from '@/components/ui/button'
 import {
   Form,
   FormControl,
+  FormDescription,
   FormField,
   FormItem,
   FormLabel,
@@ -99,6 +100,8 @@ export function SignUpForm({
   const emailValue = form.watch('email')
   const registrationCode = form.watch('registrationCode') ?? ''
   const emailVerificationRequired = !!status?.email_verification
+  const allowedEmailDomains = status?.allowed_email_domains ?? []
+  const emailAliasRestrictionEnabled = !!status?.email_alias_restriction_enabled
   const hasUserAgreement = Boolean(status?.user_agreement_enabled)
   const hasPrivacyPolicy = Boolean(status?.privacy_policy_enabled)
   const requiresLegalConsent = hasUserAgreement || hasPrivacyPolicy
@@ -189,7 +192,7 @@ export function SignUpForm({
       } else {
         toast.error(res?.message || t('Failed to create account'))
       }
-    } catch (_error) {
+    } catch {
       // Errors are handled by global interceptor
     } finally {
       setIsLoading(false)
@@ -234,11 +237,20 @@ export function SignUpForm({
       } else {
         toast.error(res?.message || t('Login failed'))
       }
-    } catch (_error) {
+    } catch {
       toast.error(t('Login failed'))
     } finally {
       setIsWeChatSubmitting(false)
     }
+  }
+
+  let verificationButtonContent: React.ReactNode = t('Send code')
+  if (isActive) {
+    verificationButtonContent = t('Resend ({{seconds}}s)', {
+      seconds: secondsLeft,
+    })
+  } else if (isSendingCode) {
+    verificationButtonContent = <Loader2 className='h-4 w-4 animate-spin' />
   }
 
   return (
@@ -262,26 +274,6 @@ export function SignUpForm({
             </FormItem>
           )}
         />
-
-        {registrationCodeRequired && (
-          <FormField
-            control={form.control}
-            name='registrationCode'
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>{t('Registration code')}</FormLabel>
-                <FormControl>
-                  <Input
-                    placeholder={t('Enter your registration code')}
-                    autoComplete='off'
-                    {...field}
-                  />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-        )}
 
         {/* Password Field */}
         <FormField
@@ -335,6 +327,23 @@ export function SignUpForm({
                       {...field}
                     />
                   </FormControl>
+                  {(allowedEmailDomains.length > 0 ||
+                    emailAliasRestrictionEnabled) && (
+                    <FormDescription className='space-y-1'>
+                      {allowedEmailDomains.length > 0 && (
+                        <span className='block'>
+                          {t('Supported email domains: {{domains}}', {
+                            domains: allowedEmailDomains.join(', '),
+                          })}
+                        </span>
+                      )}
+                      {emailAliasRestrictionEnabled && (
+                        <span className='block'>
+                          {t("Email aliases containing '+' are not allowed.")}
+                        </span>
+                      )}
+                    </FormDescription>
+                  )}
                   <FormMessage />
                 </FormItem>
               )}
@@ -361,16 +370,30 @@ export function SignUpForm({
                 }
                 onClick={handleSendVerificationCode}
               >
-                {isActive ? (
-                  t('Resend ({{seconds}}s)', { seconds: secondsLeft })
-                ) : isSendingCode ? (
-                  <Loader2 className='h-4 w-4 animate-spin' />
-                ) : (
-                  t('Send code')
-                )}
+                {verificationButtonContent}
               </Button>
             </div>
           </>
+        )}
+
+        {registrationCodeRequired && (
+          <FormField
+            control={form.control}
+            name='registrationCode'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Registration code')}</FormLabel>
+                <FormControl>
+                  <Input
+                    placeholder={t('Enter your registration code')}
+                    autoComplete='off'
+                    {...field}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
         )}
 
         {/* Turnstile */}

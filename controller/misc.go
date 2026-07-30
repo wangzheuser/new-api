@@ -125,6 +125,11 @@ func GetStatus(c *gin.Context) {
 		"checkin_enabled":             operation_setting.GetCheckinSetting().Enabled,
 	}
 
+	data["email_alias_restriction_enabled"] = common.EmailAliasRestrictionEnabled
+	if common.EmailDomainRestrictionEnabled {
+		data["allowed_email_domains"] = append([]string(nil), common.EmailDomainWhitelist...)
+	}
+
 	// 根据启用状态注入可选内容
 	if cs.ApiInfoEnabled {
 		data["api_info"] = console_setting.GetApiInfo()
@@ -234,22 +239,13 @@ func GetHomePageContent(c *gin.Context) {
 	return
 }
 
-func SendEmailVerification(c *gin.Context) {
-	email := model.NormalizeEmail(c.Query("email"))
-	if err := common.Validate.Var(email, "required,email"); err != nil {
-		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
-		return
+// validateEmailRestrictions validates the configured domain and alias restrictions.
+func validateEmailRestrictions(email string) (string, map[string]any) {
+	localPart, domainPart, found := strings.Cut(email, "@")
+	if !found || localPart == "" || domainPart == "" || strings.Contains(domainPart, "@") {
+		return i18n.MsgInvalidParams, nil
 	}
-	parts := strings.Split(email, "@")
-	if len(parts) != 2 {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "无效的邮箱地址",
-		})
-		return
-	}
-	localPart := parts[0]
-	domainPart := parts[1]
+
 	if common.EmailDomainRestrictionEnabled {
 		allowed := false
 		for _, domain := range common.EmailDomainWhitelist {
@@ -259,22 +255,31 @@ func SendEmailVerification(c *gin.Context) {
 			}
 		}
 		if !allowed {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "The administrator has enabled the email domain name whitelist, and your email address is not allowed due to special symbols or it's not in the whitelist.",
-			})
-			return
+			return i18n.MsgUserEmailDomainNotAllowed, map[string]any{
+				"Domain":         domainPart,
+				"AllowedDomains": strings.Join(common.EmailDomainWhitelist, ", "),
+			}
 		}
 	}
-	if common.EmailAliasRestrictionEnabled {
-		containsSpecialSymbols := strings.Contains(localPart, "+") || strings.Contains(localPart, ".")
-		if containsSpecialSymbols {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "管理员已启用邮箱地址别名限制，您的邮箱地址由于包含特殊符号而被拒绝。",
-			})
-			return
-		}
+
+	// “+tag” sub-addresses are aliases supported by many email providers.
+	if common.EmailAliasRestrictionEnabled && strings.Contains(localPart, "+") {
+		return i18n.MsgUserEmailAliasNotAllowed, nil
+	}
+
+	return "", nil
+}
+
+func SendEmailVerification(c *gin.Context) {
+	email := model.NormalizeEmail(c.Query("email"))
+	if err := common.Validate.Var(email, "required,email"); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+
+	if messageKey, args := validateEmailRestrictions(email); messageKey != "" {
+		common.ApiErrorI18n(c, messageKey, args)
+		return
 	}
 
 	if model.IsEmailAlreadyTaken(email) {

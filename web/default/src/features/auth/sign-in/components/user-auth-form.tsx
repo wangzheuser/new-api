@@ -45,7 +45,6 @@ import { OAuthProviders } from '@/features/auth/components/oauth-providers'
 import { loginFormSchema } from '@/features/auth/constants'
 import { useAuthRedirect } from '@/features/auth/hooks/use-auth-redirect'
 import { useTurnstile } from '@/features/auth/hooks/use-turnstile'
-import { saveRegistrationCode } from '@/features/auth/lib/storage'
 import { beginPasskeyLogin, finishPasskeyLogin } from '@/features/auth/passkey'
 import type { AuthFormProps } from '@/features/auth/types'
 import { useStatus } from '@/hooks/use-status'
@@ -69,7 +68,6 @@ export function UserAuthForm({
   const [isPasskeyLoading, setIsPasskeyLoading] = useState(false)
   const [isWeChatDialogOpen, setIsWeChatDialogOpen] = useState(false)
   const [isWeChatSubmitting, setIsWeChatSubmitting] = useState(false)
-  const [registrationCode, setRegistrationCode] = useState('')
   const legalConsentErrorMessage = t('Please agree to the legal terms first')
   const loginFailedMessage = t('Login failed')
 
@@ -108,14 +106,6 @@ export function UserAuthForm({
   )
   const hasAlternativeLogin =
     passkeyLoginEnabled || hasWeChatLogin || hasOAuthLogin
-  const registrationCodeRequired = Boolean(
-    status?.registration_code_required ??
-    status?.data?.registration_code_required
-  )
-
-  useEffect(() => {
-    saveRegistrationCode(registrationCode.trim())
-  }, [registrationCode])
 
   useEffect(() => {
     if (requiresLegalConsent) {
@@ -178,7 +168,7 @@ export function UserAuthForm({
         await handleLoginSuccess(res.data as { id?: number } | null, redirectTo)
         toast.success(t('Welcome back!'))
       }
-    } catch (_error) {
+    } catch {
       // Errors are handled by global interceptor
     } finally {
       setIsLoading(false)
@@ -219,7 +209,7 @@ export function UserAuthForm({
       } else {
         toast.error(res?.message || loginFailedMessage)
       }
-    } catch (_error) {
+    } catch {
       toast.error(loginFailedMessage)
     } finally {
       setIsWeChatSubmitting(false)
@@ -296,20 +286,6 @@ export function UserAuthForm({
 
   const alternativeLoginMethods = (
     <>
-      {registrationCodeRequired && (
-        <div className='grid gap-2'>
-          <Label htmlFor='oauth-registration-code'>
-            {t('Registration code')}
-          </Label>
-          <Input
-            id='oauth-registration-code'
-            value={registrationCode}
-            onChange={(event) => setRegistrationCode(event.target.value)}
-            placeholder={t('Only required when creating a new account')}
-            autoComplete='off'
-          />
-        </div>
-      )}
       {passkeyLoginEnabled && (
         <div className='mt-2 space-y-1'>
           <Button

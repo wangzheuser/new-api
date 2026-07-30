@@ -19,6 +19,8 @@ const newKeys = {
       'Delete selected registration codes?',
     'Disable selected registration codes':
       'Disable selected registration codes',
+    "Email aliases containing '+' are not allowed.":
+      "Email aliases containing '+' are not allowed.",
     'Enable selected registration codes': 'Enable selected registration codes',
     'Filter by name or registration code...':
       'Filter by name or registration code...',
@@ -30,6 +32,8 @@ const newKeys = {
     'Registration codes copied!': 'Registration codes copied!',
     'Store complete request and response bodies for this channel. Global conversation capture must also be enabled.':
       'Store complete request and response bodies for this channel. Global conversation capture must also be enabled.',
+    'Supported email domains: {{domains}}':
+      'Supported email domains: {{domains}}',
     'This will delete {{count}} selected registration code(s). Usage records will be retained.':
       'This will delete {{count}} selected registration code(s). Usage records will be retained.',
     'registration code': 'registration code',
@@ -41,6 +45,8 @@ const newKeys = {
     'Delete selected registration codes': '删除选中的注册码',
     'Delete selected registration codes?': '删除选中的注册码？',
     'Disable selected registration codes': '禁用选中的注册码',
+    "Email aliases containing '+' are not allowed.":
+      '不支持包含“+”的别名邮箱。',
     'Enable selected registration codes': '启用选中的注册码',
     'Filter by name or registration code...': '按名称或注册码筛选...',
     'Generate a registration code or adjust the filters.':
@@ -51,6 +57,7 @@ const newKeys = {
     'Registration codes copied!': '注册码已复制！',
     'Store complete request and response bodies for this channel. Global conversation capture must also be enabled.':
       '存储此渠道的完整请求与响应内容，同时必须开启全局对话采集。',
+    'Supported email domains: {{domains}}': '支持的邮箱域名：{{domains}}',
     'This will delete {{count}} selected registration code(s). Usage records will be retained.':
       '将删除选中的 {{count}} 个注册码，使用记录会保留。',
     'registration code': '注册码',
@@ -62,6 +69,8 @@ const newKeys = {
     'Delete selected registration codes': '刪除選取的註冊碼',
     'Delete selected registration codes?': '刪除選取的註冊碼？',
     'Disable selected registration codes': '停用選取的註冊碼',
+    "Email aliases containing '+' are not allowed.":
+      '不支援包含「+」的別名信箱。',
     'Enable selected registration codes': '啟用選取的註冊碼',
     'Filter by name or registration code...': '依名稱或註冊碼篩選...',
     'Generate a registration code or adjust the filters.':
@@ -72,6 +81,7 @@ const newKeys = {
     'Registration codes copied!': '註冊碼已複製！',
     'Store complete request and response bodies for this channel. Global conversation capture must also be enabled.':
       '儲存此渠道的完整請求與回應內容，同時必須啟用全域對話採集。',
+    'Supported email domains: {{domains}}': '支援的信箱網域：{{domains}}',
     'This will delete {{count}} selected registration code(s). Usage records will be retained.':
       '將刪除選取的 {{count}} 個註冊碼，使用記錄會保留。',
     'registration code': '註冊碼',
@@ -89,6 +99,8 @@ const newKeys = {
       'Supprimer les codes d’inscription sélectionnés ?',
     'Disable selected registration codes':
       'Désactiver les codes d’inscription sélectionnés',
+    "Email aliases containing '+' are not allowed.":
+      'Les alias d’e-mail contenant « + » ne sont pas autorisés.',
     'Enable selected registration codes':
       'Activer les codes d’inscription sélectionnés',
     'Filter by name or registration code...':
@@ -101,6 +113,8 @@ const newKeys = {
     'Registration codes copied!': 'Codes d’inscription copiés !',
     'Store complete request and response bodies for this channel. Global conversation capture must also be enabled.':
       'Stocke les requêtes et réponses complètes de ce canal. La capture globale des conversations doit aussi être activée.',
+    'Supported email domains: {{domains}}':
+      'Domaines d’e-mail pris en charge : {{domains}}',
     'This will delete {{count}} selected registration code(s). Usage records will be retained.':
       'Cette action supprimera {{count}} code(s) d’inscription sélectionné(s). Les journaux d’utilisation seront conservés.',
     'registration code': 'code d’inscription',
@@ -114,6 +128,8 @@ const newKeys = {
     'Delete selected registration codes': '選択した登録コードを削除',
     'Delete selected registration codes?': '選択した登録コードを削除しますか？',
     'Disable selected registration codes': '選択した登録コードを無効化',
+    "Email aliases containing '+' are not allowed.":
+      '「+」を含むメールエイリアスは使用できません。',
     'Enable selected registration codes': '選択した登録コードを有効化',
     'Filter by name or registration code...':
       '名前または登録コードで絞り込み...',
@@ -125,6 +141,8 @@ const newKeys = {
     'Registration codes copied!': '登録コードをコピーしました！',
     'Store complete request and response bodies for this channel. Global conversation capture must also be enabled.':
       'このチャネルのリクエストとレスポンス全文を保存します。グローバル会話キャプチャも有効にする必要があります。',
+    'Supported email domains: {{domains}}':
+      '対応しているメールドメイン：{{domains}}',
     'This will delete {{count}} selected registration code(s). Usage records will be retained.':
       '選択した {{count}} 個の登録コードを削除します。使用記録は保持されます。',
     'registration code': '登録コード',
@@ -140,6 +158,8 @@ const newKeys = {
       'Удалить выбранные коды регистрации?',
     'Disable selected registration codes':
       'Отключить выбранные коды регистрации',
+    "Email aliases containing '+' are not allowed.":
+      'Псевдонимы электронной почты со знаком «+» запрещены.',
     'Enable selected registration codes': 'Включить выбранные коды регистрации',
     'Filter by name or registration code...':
       'Фильтр по имени или коду регистрации...',
@@ -151,6 +171,8 @@ const newKeys = {
     'Registration codes copied!': 'Коды регистрации скопированы!',
     'Store complete request and response bodies for this channel. Global conversation capture must also be enabled.':
       'Сохраняет полные запросы и ответы этого канала. Глобальный сбор диалогов также должен быть включён.',
+    'Supported email domains: {{domains}}':
+      'Поддерживаемые домены электронной почты: {{domains}}',
     'This will delete {{count}} selected registration code(s). Usage records will be retained.':
       'Будет удалено выбранных кодов регистрации: {{count}}. Записи использования сохранятся.',
     'registration code': 'код регистрации',
@@ -163,6 +185,8 @@ const newKeys = {
     'Delete selected registration codes': 'Xóa mã đăng ký đã chọn',
     'Delete selected registration codes?': 'Xóa các mã đăng ký đã chọn?',
     'Disable selected registration codes': 'Tắt mã đăng ký đã chọn',
+    "Email aliases containing '+' are not allowed.":
+      "Không cho phép địa chỉ email bí danh chứa dấu '+'.",
     'Enable selected registration codes': 'Bật mã đăng ký đã chọn',
     'Filter by name or registration code...': 'Lọc theo tên hoặc mã đăng ký...',
     'Generate a registration code or adjust the filters.':
@@ -173,6 +197,8 @@ const newKeys = {
     'Registration codes copied!': 'Đã sao chép mã đăng ký!',
     'Store complete request and response bodies for this channel. Global conversation capture must also be enabled.':
       'Lưu toàn bộ nội dung yêu cầu và phản hồi của kênh này. Thu thập hội thoại toàn cục cũng phải được bật.',
+    'Supported email domains: {{domains}}':
+      'Miền email được hỗ trợ: {{domains}}',
     'This will delete {{count}} selected registration code(s). Usage records will be retained.':
       'Thao tác này sẽ xóa {{count}} mã đăng ký đã chọn. Bản ghi sử dụng vẫn được giữ lại.',
     'registration code': 'mã đăng ký',
