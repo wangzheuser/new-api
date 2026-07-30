@@ -181,6 +181,16 @@ func EstimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *rela
 	if !constant.CountToken {
 		return 0, nil
 	}
+	return countRequestToken(c, meta, info)
+}
+
+// CountRequestToken 为显式 token 统计接口返回本地估算结果。
+func CountRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *relaycommon.RelayInfo) (int, error) {
+	return countRequestToken(c, meta, info)
+}
+
+// countRequestToken 复用请求计费前的 token 估算逻辑。
+func countRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *relaycommon.RelayInfo) (int, error) {
 
 	if meta == nil {
 		return 0, errors.New("token count meta is nil")

@@ -264,6 +264,45 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 }
 
+// CountTokens 返回 Claude Messages 请求的本地输入 token 估算，不进入上游和计费链。
+func CountTokens(c *gin.Context) {
+	request, err := helper.GetAndValidateRequest(c, types.RelayFormatClaude)
+	if err != nil {
+		newAPIError := types.NewErrorWithStatusCode(
+			err,
+			types.ErrorCodeInvalidRequest,
+			http.StatusBadRequest,
+			types.ErrOptionWithSkipRetry(),
+		)
+		c.JSON(newAPIError.StatusCode, gin.H{
+			"type":  "error",
+			"error": newAPIError.ToClaudeError(),
+		})
+		return
+	}
+
+	relayInfo, err := relaycommon.GenRelayInfo(c, types.RelayFormatClaude, request, nil)
+	if err != nil {
+		newAPIError := types.NewError(err, types.ErrorCodeGenRelayInfoFailed, types.ErrOptionWithSkipRetry())
+		c.JSON(newAPIError.StatusCode, gin.H{
+			"type":  "error",
+			"error": newAPIError.ToClaudeError(),
+		})
+		return
+	}
+
+	tokens, err := service.CountRequestToken(c, request.GetTokenCountMeta(), relayInfo)
+	if err != nil {
+		newAPIError := types.NewError(err, types.ErrorCodeCountTokenFailed, types.ErrOptionWithSkipRetry())
+		c.JSON(newAPIError.StatusCode, gin.H{
+			"type":  "error",
+			"error": newAPIError.ToClaudeError(),
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"input_tokens": tokens})
+}
+
 var upgrader = websocket.Upgrader{
 	Subprotocols: []string{"realtime"}, // WS 握手支持的协议，如果有使用 Sec-WebSocket-Protocol，则必须在此声明对应的 Protocol TODO add other protocol
 	CheckOrigin: func(r *http.Request) bool {
