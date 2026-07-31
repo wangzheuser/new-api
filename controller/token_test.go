@@ -16,6 +16,8 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -109,7 +111,7 @@ func setupTokenControllerTestDB(t *testing.T) *gorm.DB {
 
 	db := openTokenControllerTestDB(t)
 	migrateTokenControllerTestDB(t, db)
-	if err := db.AutoMigrate(&model.User{}, &model.UserSubscription{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.UserSubscription{}, &model.Log{}); err != nil {
 		t.Fatalf("failed to migrate token authorization tables: %v", err)
 	}
 	return db
@@ -491,7 +493,7 @@ func TestUpdateTokenMasksKeyInResponse(t *testing.T) {
 		"unlimited_quota":      true,
 		"model_limits_enabled": false,
 		"model_limits":         "",
-		"group":                "default",
+		"group":                "",
 		"cross_group_retry":    false,
 	}
 
@@ -546,5 +548,181 @@ func TestGetTokenKeyRequiresOwnershipAndReturnsFullKey(t *testing.T) {
 	}
 	if strings.Contains(unauthorizedRecorder.Body.String(), token.Key) {
 		t.Fatalf("unauthorized key response leaked raw token key: %s", unauthorizedRecorder.Body.String())
+	}
+}
+
+func TestManagedTokenScopeAllowsAdministratorsToListLowerRoleTargetTokens(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	targetToken := seedToken(t, db, 2, "managed-token", "managed1234token5678")
+	seedToken(t, db, 3, "unrelated-token", "other1234token5678")
+
+	testCases := []struct {
+		name       string
+		operatorID int
+		role       int
+	}{
+		{name: "admin", operatorID: 10, role: common.RoleAdminUser},
+		{name: "root", operatorID: 99, role: common.RoleRootUser},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/api/token/?p=1&size=10&user_id=2", nil, testCase.operatorID)
+			ctx.Set("role", testCase.role)
+			GetAllTokens(ctx)
+
+			response := decodeAPIResponse(t, recorder)
+			require.True(t, response.Success, response.Message)
+
+			var page tokenPageResponse
+			require.NoError(t, common.Unmarshal(response.Data, &page))
+			require.Len(t, page.Items, 1)
+			assert.Equal(t, targetToken.Id, page.Items[0].ID)
+			assert.Equal(t, targetToken.GetMaskedKey(), page.Items[0].Key)
+			assert.NotContains(t, recorder.Body.String(), targetToken.Key)
+		})
+	}
+}
+
+func TestManagedTokenScopeRejectsUnauthorizedTarget(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	targetToken := seedToken(t, db, 2, "protected-token", "protected1234token5678")
+
+	commonUserCtx, commonUserRecorder := newAuthenticatedContext(
+		t,
+		http.MethodPost,
+		"/api/token/"+strconv.Itoa(targetToken.Id)+"/key?user_id=2",
+		nil,
+		1,
+	)
+	commonUserCtx.Set("role", common.RoleCommonUser)
+	commonUserCtx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(targetToken.Id)}}
+	GetTokenKey(commonUserCtx)
+
+	commonUserResponse := decodeAPIResponse(t, commonUserRecorder)
+	assert.False(t, commonUserResponse.Success)
+	assert.NotContains(t, commonUserRecorder.Body.String(), targetToken.Key)
+
+	require.NoError(t, db.Model(&model.User{}).Where("id = ?", 2).Update("role", common.RoleAdminUser).Error)
+	adminCtx, adminRecorder := newAuthenticatedContext(
+		t,
+		http.MethodGet,
+		"/api/token/?p=1&size=10&user_id=2",
+		nil,
+		10,
+	)
+	adminCtx.Set("role", common.RoleAdminUser)
+	GetAllTokens(adminCtx)
+
+	adminResponse := decodeAPIResponse(t, adminRecorder)
+	assert.False(t, adminResponse.Success)
+	assert.NotContains(t, adminRecorder.Body.String(), targetToken.Key)
+}
+
+func TestManagedTokenLifecycleReusesTargetOwnership(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	targetToken := seedToken(t, db, 2, "target-original", "target1234token5678")
+	require.NoError(t, db.Create(&model.User{
+		Id:       99,
+		Username: "root-operator",
+		Role:     common.RoleRootUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+		AffCode:  "root-operator-aff",
+	}).Error)
+
+	keyCtx, keyRecorder := newAuthenticatedContext(
+		t,
+		http.MethodPost,
+		"/api/token/"+strconv.Itoa(targetToken.Id)+"/key?user_id=2",
+		nil,
+		99,
+	)
+	keyCtx.Set("role", common.RoleRootUser)
+	keyCtx.Set("username", "root-operator")
+	keyCtx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(targetToken.Id)}}
+	GetTokenKey(keyCtx)
+
+	keyResponse := decodeAPIResponse(t, keyRecorder)
+	require.True(t, keyResponse.Success, keyResponse.Message)
+	var keyData tokenKeyResponse
+	require.NoError(t, common.Unmarshal(keyResponse.Data, &keyData))
+	assert.Equal(t, targetToken.GetFullKey(), keyData.Key)
+
+	updateBody := map[string]any{
+		"id":                   targetToken.Id,
+		"name":                 "target-updated",
+		"expired_time":         -1,
+		"remain_quota":         100,
+		"unlimited_quota":      true,
+		"model_limits_enabled": false,
+		"model_limits":         "",
+		"group":                "",
+		"cross_group_retry":    false,
+	}
+	updateCtx, updateRecorder := newAuthenticatedContext(
+		t,
+		http.MethodPut,
+		"/api/token/?user_id=2",
+		updateBody,
+		99,
+	)
+	updateCtx.Set("role", common.RoleRootUser)
+	updateCtx.Set("username", "root-operator")
+	UpdateToken(updateCtx)
+
+	updateResponse := decodeAPIResponse(t, updateRecorder)
+	require.True(t, updateResponse.Success, updateResponse.Message)
+	var updated model.Token
+	require.NoError(t, db.First(&updated, targetToken.Id).Error)
+	assert.Equal(t, 2, updated.UserId)
+	assert.Equal(t, "target-updated", updated.Name)
+
+	createBody := map[string]any{
+		"name":            "target-created",
+		"expired_time":    -1,
+		"remain_quota":    0,
+		"unlimited_quota": true,
+		"group":           "",
+	}
+	createCtx, createRecorder := newAuthenticatedContext(
+		t,
+		http.MethodPost,
+		"/api/token/?user_id=2",
+		createBody,
+		99,
+	)
+	createCtx.Set("role", common.RoleRootUser)
+	createCtx.Set("username", "root-operator")
+	AddToken(createCtx)
+
+	createResponse := decodeAPIResponse(t, createRecorder)
+	require.True(t, createResponse.Success, createResponse.Message)
+	var created model.Token
+	require.NoError(t, db.First(&created, "name = ?", "target-created").Error)
+	assert.Equal(t, 2, created.UserId)
+
+	deleteCtx, deleteRecorder := newAuthenticatedContext(
+		t,
+		http.MethodDelete,
+		"/api/token/"+strconv.Itoa(created.Id)+"/?user_id=2",
+		nil,
+		99,
+	)
+	deleteCtx.Set("role", common.RoleRootUser)
+	deleteCtx.Set("username", "root-operator")
+	deleteCtx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(created.Id)}}
+	DeleteToken(deleteCtx)
+
+	deleteResponse := decodeAPIResponse(t, deleteRecorder)
+	require.True(t, deleteResponse.Success, deleteResponse.Message)
+	assert.Error(t, db.First(&model.Token{}, created.Id).Error)
+
+	var auditLogs []model.Log
+	require.NoError(t, db.Where("user_id = ? AND type = ?", 99, model.LogTypeManage).Find(&auditLogs).Error)
+	require.Len(t, auditLogs, 4)
+	for _, log := range auditLogs {
+		assert.NotContains(t, log.Other, targetToken.Key)
+		assert.Contains(t, log.Other, `"target_user_id":2`)
 	}
 }

@@ -31,9 +31,16 @@ const apiKeySearchSchema = z.object({
     .catch([]),
   filter: z.string().optional().catch(''),
   token: z.string().optional().catch(''),
+  targetUserId: z.coerce.number().int().positive().optional().catch(undefined),
 })
 
 export const Route = createFileRoute('/_authenticated/keys/')({
   validateSearch: apiKeySearchSchema,
-  component: ApiKeys,
+  component: ApiKeysRoute,
 })
+
+// ApiKeysRoute passes the optional administrator target scope into the reused key page.
+function ApiKeysRoute() {
+  const { targetUserId } = Route.useSearch()
+  return <ApiKeys targetUserId={targetUserId} />
+}

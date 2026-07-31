@@ -28,6 +28,8 @@ import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { getUserModels } from '@/lib/api'
 
+import { useApiKeys } from '../api-keys-provider'
+
 const APP_CONFIGS = {
   claude: {
     label: 'Claude',
@@ -96,13 +98,14 @@ interface Props {
 
 export function CCSwitchDialog(props: Props) {
   const { t } = useTranslation()
+  const { targetUserId } = useApiKeys()
   const [app, setApp] = useState<AppType>('claude')
   const [name, setName] = useState<string>(APP_CONFIGS.claude.defaultName)
   const [models, setModels] = useState<Record<string, string>>({})
 
   const { data: modelsData } = useQuery({
-    queryKey: ['user-models-ccswitch'],
-    queryFn: getUserModels,
+    queryKey: ['user-models-ccswitch', targetUserId],
+    queryFn: () => getUserModels(targetUserId),
     enabled: props.open,
     staleTime: 5 * 60 * 1000,
   })

@@ -44,6 +44,7 @@ import {
   ModelLimitsCell,
   IpRestrictionsCell,
 } from './api-keys-cells'
+import { useApiKeys } from './api-keys-provider'
 import { DataTableRowActions } from './data-table-row-actions'
 
 function getQuotaProgressColor(percentage: number): string {
@@ -53,9 +54,10 @@ function getQuotaProgressColor(percentage: number): string {
 }
 
 function useGroupRatios(): Record<string, number> {
+  const { targetUserId } = useApiKeys()
   const { data } = useQuery({
-    queryKey: ['user-groups'],
-    queryFn: getUserGroups,
+    queryKey: ['user-groups', targetUserId],
+    queryFn: () => getUserGroups(targetUserId),
     staleTime: 0,
     select: (res) => {
       if (!res.success || !res.data) return {}

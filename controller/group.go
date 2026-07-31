@@ -27,7 +27,11 @@ func GetGroups(c *gin.Context) {
 func GetUserGroups(c *gin.Context) {
 	usableGroups := make(map[string]map[string]interface{})
 	userGroup := ""
-	userId := c.GetInt("id")
+	userId, err := resolveManagedUserID(c)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	userGroup, _ = model.GetUserGroup(userId, false)
 	userUsableGroups, err := service.GetUserEffectiveGroups(userId, userGroup)
 	if err != nil {

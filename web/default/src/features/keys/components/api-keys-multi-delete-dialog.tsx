@@ -40,7 +40,7 @@ export function ApiKeysMultiDeleteDialog<TData>({
   table,
 }: ApiKeysMultiDeleteDialogProps<TData>) {
   const { t } = useTranslation()
-  const { triggerRefresh } = useApiKeys()
+  const { triggerRefresh, targetUserId } = useApiKeys()
   const [isDeleting, setIsDeleting] = useState(false)
   const selectedRows = table.getFilteredSelectedRowModel().rows
 
@@ -48,7 +48,7 @@ export function ApiKeysMultiDeleteDialog<TData>({
     setIsDeleting(true)
     try {
       const ids = selectedRows.map((row) => (row.original as ApiKey).id)
-      const result = await batchDeleteApiKeys(ids)
+      const result = await batchDeleteApiKeys(ids, targetUserId)
 
       if (result.success) {
         const count = result.data || ids.length

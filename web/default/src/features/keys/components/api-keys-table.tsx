@@ -188,7 +188,7 @@ function ApiKeysMobileList({
 
 export function ApiKeysTable() {
   const { t } = useTranslation()
-  const { refreshTrigger } = useApiKeys()
+  const { refreshTrigger, targetUserId } = useApiKeys()
   const [now, setNow] = useState(() => Date.now())
   const columns = useApiKeysColumns(now)
 
@@ -239,20 +239,27 @@ export function ApiKeysTable() {
       pagination.pageSize,
       globalFilter,
       tokenFilter,
+      targetUserId,
       refreshTrigger,
     ],
     queryFn: async () => {
       const result = shouldSearch
-        ? await searchApiKeys({
-            keyword: globalFilter,
-            token: tokenFilter,
-            p: pagination.pageIndex + 1,
-            size: pagination.pageSize,
-          })
-        : await getApiKeys({
-            p: pagination.pageIndex + 1,
-            size: pagination.pageSize,
-          })
+        ? await searchApiKeys(
+            {
+              keyword: globalFilter,
+              token: tokenFilter,
+              p: pagination.pageIndex + 1,
+              size: pagination.pageSize,
+            },
+            targetUserId
+          )
+        : await getApiKeys(
+            {
+              p: pagination.pageIndex + 1,
+              size: pagination.pageSize,
+            },
+            targetUserId
+          )
 
       if (!result.success) {
         toast.error(

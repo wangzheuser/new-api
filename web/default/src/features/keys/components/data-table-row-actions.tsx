@@ -88,6 +88,7 @@ export function DataTableRowActions<TData>({
     resolveRealKey,
     resolvedKeys,
     loadingKeys,
+    targetUserId,
   } = useApiKeys()
   const isEnabled = apiKey.status === API_KEY_STATUS.ENABLED
   const { chatPresets, serverAddress } = useChatPresets()
@@ -165,7 +166,11 @@ export function DataTableRowActions<TData>({
 
     setIsTogglingStatus(true)
     try {
-      const result = await updateApiKeyStatus(apiKey.id, newStatus)
+      const result = await updateApiKeyStatus(
+        apiKey.id,
+        newStatus,
+        targetUserId
+      )
       if (result.success) {
         const message = isEnabled
           ? t(SUCCESS_MESSAGES.API_KEY_DISABLED)

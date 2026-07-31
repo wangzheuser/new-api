@@ -25,12 +25,20 @@ import { ApiKeysPrimaryButtons } from './components/api-keys-primary-buttons'
 import { ApiKeysProvider } from './components/api-keys-provider'
 import { ApiKeysTable } from './components/api-keys-table'
 
-export function ApiKeys() {
+type ApiKeysProps = {
+  targetUserId?: number
+}
+
+export function ApiKeys({ targetUserId }: ApiKeysProps) {
   const { t } = useTranslation()
   return (
-    <ApiKeysProvider>
+    <ApiKeysProvider key={targetUserId ?? 'self'} targetUserId={targetUserId}>
       <SectionPageLayout fixedContent>
-        <SectionPageLayout.Title>{t('API Keys')}</SectionPageLayout.Title>
+        <SectionPageLayout.Title>
+          {targetUserId
+            ? t('API Keys for User #{{id}}', { id: targetUserId })
+            : t('API Keys')}
+        </SectionPageLayout.Title>
         <SectionPageLayout.Actions>
           <ApiKeysPrimaryButtons />
         </SectionPageLayout.Actions>

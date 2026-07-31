@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { Row } from '@tanstack/react-table'
+import { useNavigate } from '@tanstack/react-router'
 import {
   Pencil,
   Trash2,
@@ -28,6 +29,7 @@ import {
   ShieldAlert,
   Link2,
   CreditCard,
+  Key,
 } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -66,6 +68,7 @@ interface DataTableRowActionsProps {
 
 export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const user = row.original
   const { setOpen, setCurrentRow, triggerRefresh } = useUsers()
   const [resetPasskeyOpen, setResetPasskeyOpen] = useState(false)
@@ -219,6 +222,20 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           {t('Manage Subscriptions')}
           <DropdownMenuShortcut>
             <CreditCard size={16} />
+          </DropdownMenuShortcut>
+        </DropdownMenuItem>
+
+        <DropdownMenuItem
+          onClick={() =>
+            navigate({
+              to: '/keys',
+              search: { targetUserId: user.id },
+            })
+          }
+        >
+          {t('Manage API Keys')}
+          <DropdownMenuShortcut>
+            <Key size={16} />
           </DropdownMenuShortcut>
         </DropdownMenuItem>
 

@@ -187,22 +187,26 @@ export async function getSelf() {
 }
 
 // Get user available models
-export async function getUserModels(): Promise<{
+export async function getUserModels(targetUserId?: number): Promise<{
   success: boolean
   message?: string
   data?: string[]
 }> {
-  const res = await api.get('/api/user/models')
+  const res = await api.get('/api/user/models', {
+    params: targetUserId ? { user_id: targetUserId } : undefined,
+  })
   return res.data
 }
 
 // Get user groups with descriptions and ratios
-export async function getUserGroups(): Promise<{
+export async function getUserGroups(targetUserId?: number): Promise<{
   success: boolean
   message?: string
   data?: Record<string, { desc: string; ratio: number | string }>
 }> {
-  const res = await api.get('/api/user/self/groups')
+  const res = await api.get('/api/user/self/groups', {
+    params: targetUserId ? { user_id: targetUserId } : undefined,
+  })
   return res.data
 }
 

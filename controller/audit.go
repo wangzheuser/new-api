@@ -28,6 +28,13 @@ var auditContentTemplates = map[string]string{
 	"user.passkey_register": "Registered a passkey",
 	"user.passkey_delete":   "Deleted a passkey",
 	"user.reset_passkey":    "Reset the user passkey",
+	"token.create":          "Created API key ${name} (ID: ${id}) for user ${target_user_id}",
+	"token.update":          "Updated API key ${name} (ID: ${id}) for user ${target_user_id}",
+	"token.status_update":   "Updated API key status for ${name} (ID: ${id}) for user ${target_user_id}",
+	"token.delete":          "Deleted API key (ID: ${id}) for user ${target_user_id}",
+	"token.delete_batch":    "Batch deleted ${count} API keys for user ${target_user_id}",
+	"token.key_view":        "Viewed API key ${name} (ID: ${id}) for user ${target_user_id}",
+	"token.key_view_batch":  "Viewed ${count} API keys for user ${target_user_id}",
 	"option.update":         "Updated system setting ${key}",
 
 	"channel.create":             "Created channel ${name} (type ${type}, count ${count})",

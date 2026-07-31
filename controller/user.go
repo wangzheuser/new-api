@@ -616,9 +616,10 @@ func generateDefaultSidebarConfig(userRole int) string {
 }
 
 func GetUserModels(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
+	id, err := resolveManagedUserID(c)
 	if err != nil {
-		id = c.GetInt("id")
+		common.ApiError(c, err)
+		return
 	}
 	user, err := model.GetUserCache(id)
 	if err != nil {

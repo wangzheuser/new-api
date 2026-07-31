@@ -27,6 +27,7 @@ import { ERROR_MESSAGES } from '../constants'
 import { type ApiKey, type ApiKeysDialogType } from '../types'
 
 type ApiKeysContextType = {
+  targetUserId?: number
   open: ApiKeysDialogType | null
   setOpen: (str: ApiKeysDialogType | null) => void
   currentRow: ApiKey | null
@@ -45,7 +46,15 @@ type ApiKeysContextType = {
 
 const ApiKeysContext = React.createContext<ApiKeysContextType | null>(null)
 
-export function ApiKeysProvider({ children }: { children: React.ReactNode }) {
+type ApiKeysProviderProps = {
+  children: React.ReactNode
+  targetUserId?: number
+}
+
+export function ApiKeysProvider({
+  children,
+  targetUserId,
+}: ApiKeysProviderProps) {
   const { t } = useTranslation()
   const [open, setOpen] = useDialogState<ApiKeysDialogType>(null)
   const [currentRow, setCurrentRow] = useState<ApiKey | null>(null)
@@ -81,7 +90,7 @@ export function ApiKeysProvider({ children }: { children: React.ReactNode }) {
       const request = (async () => {
         setLoadingKeys((prev) => ({ ...prev, [id]: true }))
         try {
-          const res = await fetchTokenKey(id)
+          const res = await fetchTokenKey(id, targetUserId)
           if (res.success && res.data?.key) {
             const fullKey = `sk-${res.data.key}`
             setResolvedKeys((prev) => ({ ...prev, [id]: fullKey }))
@@ -105,7 +114,7 @@ export function ApiKeysProvider({ children }: { children: React.ReactNode }) {
       pendingRequests.current[id] = request
       return request
     },
-    [resolvedKeys, t]
+    [resolvedKeys, t, targetUserId]
   )
 
   const resolveRealKeysBatch = useCallback(
@@ -122,7 +131,7 @@ export function ApiKeysProvider({ children }: { children: React.ReactNode }) {
       }
 
       try {
-        const res = await fetchTokenKeysBatch(uncachedIds)
+        const res = await fetchTokenKeysBatch(uncachedIds, targetUserId)
         if (res.success && res.data?.keys) {
           const newKeys: Record<number, string> = {}
           for (const [idStr, key] of Object.entries(res.data.keys)) {
@@ -151,12 +160,13 @@ export function ApiKeysProvider({ children }: { children: React.ReactNode }) {
         }
       }
     },
-    [resolvedKeys, t]
+    [resolvedKeys, t, targetUserId]
   )
 
   return (
     <ApiKeysContext
       value={{
+        targetUserId,
         open,
         setOpen,
         currentRow,
