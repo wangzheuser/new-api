@@ -55,6 +55,8 @@ interface BuildDescriptor {
   readonly at: number
 }
 
+declare const __APP_BUILD_VERSION__: string
+
 declare global {
   interface Window {
     __APP_BUILD__?: BuildDescriptor
@@ -62,14 +64,11 @@ declare global {
 }
 
 function readEnvRevision(): string | undefined {
-  try {
-    const env = (
-      import.meta as unknown as { env?: Record<string, string | undefined> }
-    ).env
-    const raw = env?.VITE_REACT_APP_VERSION
-    if (typeof raw === 'string' && raw.length > 0) return raw
-  } catch {
-    // import.meta may be unavailable in some test environments.
+  if (
+    typeof __APP_BUILD_VERSION__ === 'string' &&
+    __APP_BUILD_VERSION__.length > 0
+  ) {
+    return __APP_BUILD_VERSION__
   }
   return undefined
 }

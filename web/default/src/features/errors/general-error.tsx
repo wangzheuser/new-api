@@ -17,9 +17,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useNavigate, useRouter } from '@tanstack/react-router'
+import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import {
+  recoverFromChunkLoadError,
+  refreshForLatestBuild,
+} from '@/lib/chunk-load-error'
 import { cn } from '@/lib/utils'
 
 const FEEDBACK_URL = 'https://github.com/QuantumNous/new-api/issues'
@@ -54,6 +59,10 @@ export function GeneralError({
     ? t('Please wait a moment before trying again.')
     : t('Please try again later.')
 
+  useEffect(() => {
+    recoverFromChunkLoadError(error)
+  }, [error])
+
   return (
     <div className={cn('h-svh w-full', className)}>
       <div className='m-auto flex h-full w-full flex-col items-center justify-center gap-2'>
@@ -73,6 +82,9 @@ export function GeneralError({
         )}
         {!minimal && (
           <div className='mt-6 flex flex-wrap justify-center gap-4'>
+            <Button variant='outline' onClick={refreshForLatestBuild}>
+              {t('Refresh')}
+            </Button>
             <Button variant='outline' onClick={() => history.go(-1)}>
               {t('Go Back')}
             </Button>

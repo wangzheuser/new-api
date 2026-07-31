@@ -1,7 +1,7 @@
 package router
 
 import (
-	"embed"
+	"io/fs"
 	"net/http"
 	"strings"
 
@@ -15,9 +15,9 @@ import (
 
 // ThemeAssets holds the embedded frontend assets for both themes.
 type ThemeAssets struct {
-	DefaultBuildFS   embed.FS
+	DefaultBuildFS   fs.FS
 	DefaultIndexPage []byte
-	ClassicBuildFS   embed.FS
+	ClassicBuildFS   fs.FS
 	ClassicIndexPage []byte
 }
 
@@ -32,6 +32,11 @@ func SetWebRouter(router *gin.Engine, assets ThemeAssets) {
 	router.Use(static.Serve("/", themeFS))
 	router.NoRoute(func(c *gin.Context) {
 		c.Set(middleware.RouteTagKey, "web")
+		if isFrontendAssetPath(c.Request.URL.Path) {
+			c.Header("Cache-Control", "no-store")
+			c.Status(http.StatusNotFound)
+			return
+		}
 		if strings.HasPrefix(c.Request.RequestURI, "/v1") || strings.HasPrefix(c.Request.RequestURI, "/api") || strings.HasPrefix(c.Request.RequestURI, "/assets") {
 			controller.RelayNotFound(c)
 			return
@@ -43,4 +48,9 @@ func SetWebRouter(router *gin.Engine, assets ThemeAssets) {
 			c.Data(http.StatusOK, "text/html; charset=utf-8", assets.DefaultIndexPage)
 		}
 	})
+}
+
+// isFrontendAssetPath reports whether a missing path is a compiled frontend asset.
+func isFrontendAssetPath(path string) bool {
+	return strings.HasPrefix(path, "/static/")
 }

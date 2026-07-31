@@ -16,6 +16,7 @@ COPY web/package.json web/bun.lock ./
 COPY web/default/package.json ./default/package.json
 COPY web/classic/package.json ./classic/package.json
 RUN bun install --filter ./classic --frozen-lockfile
+COPY web/default/scripts/verify-build-recovery.mjs ./default/scripts/verify-build-recovery.mjs
 COPY ./web/classic ./classic
 COPY ./VERSION /build/VERSION
 RUN cd classic && VITE_REACT_APP_VERSION=$(cat /build/VERSION) bun run build
