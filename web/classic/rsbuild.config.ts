@@ -45,6 +45,8 @@ export default defineConfig(({ envMode }) => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),
+        // Classic Semi UI requires date-fns v2 while the shared workspace also contains v4.
+        'date-fns': path.resolve(semiUiDir, 'node_modules/date-fns'),
         '@douyinfe/semi-ui/dist/css/semi.css': path.resolve(
           semiUiDir,
           'dist/css/semi.css',
@@ -68,9 +70,12 @@ export default defineConfig(({ envMode }) => {
     },
     performance: {
       removeConsole: isProd ? ['log'] : false,
-      buildCache: {
-        cacheDigest: [process.env.VITE_REACT_APP_VERSION],
-      },
+      buildCache:
+        process.env.RSBUILD_CACHE === 'false'
+          ? false
+          : {
+              cacheDigest: [process.env.VITE_REACT_APP_VERSION],
+            },
     },
     tools: {
       rspack: {

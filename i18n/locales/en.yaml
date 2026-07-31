@@ -59,6 +59,9 @@ redemption.expired: "This redemption code has expired"
 redemption.failed: "Redemption failed, please try again later"
 redemption.not_provided: "Redemption code not provided"
 redemption.expire_time_invalid: "Expiration time cannot be earlier than current time"
+redemption.quota_positive: "Redemption quota must be greater than 0"
+redemption.plan_invalid: "The selected subscription plan does not exist"
+redemption.used_immutable: "Used redemption codes cannot be modified"
 
 # User messages
 user.password_login_disabled: "Password login has been disabled by administrator"

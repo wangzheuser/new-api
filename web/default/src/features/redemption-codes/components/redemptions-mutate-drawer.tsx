@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
+import { CircleDollarSign, Crown, Info } from 'lucide-react'
 import { type FormEvent, useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
@@ -41,6 +42,16 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import {
   Sheet,
   SheetClose,
@@ -50,6 +61,9 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { getAdminPlans } from '@/features/subscriptions/api'
+import { formatDuration, formatResetPeriod } from '@/features/subscriptions/lib'
+import type { PlanRecord } from '@/features/subscriptions/types'
 import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
 import { formatQuota, parseQuotaFromDollars } from '@/lib/format'
 import { addTimeToDate } from '@/lib/time'
@@ -58,12 +72,12 @@ import { createRedemption, updateRedemption, getRedemption } from '../api'
 import { SUCCESS_MESSAGES } from '../constants'
 import {
   getRedemptionFormSchema,
-  type RedemptionFormValues,
   REDEMPTION_FORM_DEFAULT_VALUES,
   transformFormDataToPayload,
   transformRedemptionToFormDefaults,
+  type RedemptionFormValues,
 } from '../lib'
-import { type Redemption } from '../types'
+import type { Redemption } from '../types'
 import { useRedemptions } from './redemptions-provider'
 
 type RedemptionsMutateDrawerProps = {
@@ -81,23 +95,35 @@ export function RedemptionsMutateDrawer({
   const isUpdate = !!currentRow
   const { triggerRefresh } = useRedemptions()
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [plans, setPlans] = useState<PlanRecord[]>([])
+  const [plansLoading, setPlansLoading] = useState(false)
 
   const form = useForm<RedemptionFormValues>({
     resolver: zodResolver(getRedemptionFormSchema(t)),
     defaultValues: REDEMPTION_FORM_DEFAULT_VALUES,
   })
 
-  // Load existing data when updating
+  // Load the latest plan configuration and existing code data when the drawer opens.
   useEffect(() => {
-    if (open && isUpdate && currentRow) {
-      // For update, fetch fresh data
-      getRedemption(currentRow.id).then((result) => {
-        if (result.success && result.data) {
-          form.reset(transformRedemptionToFormDefaults(result.data))
-        }
+    if (!open) return
+
+    setPlansLoading(true)
+    void getAdminPlans()
+      .then((result) => {
+        setPlans(result.success ? result.data || [] : [])
       })
+      .catch(() => setPlans([]))
+      .finally(() => setPlansLoading(false))
+
+    if (open && isUpdate && currentRow) {
+      void getRedemption(currentRow.id)
+        .then((result) => {
+          if (result.success && result.data) {
+            form.reset(transformRedemptionToFormDefaults(result.data))
+          }
+        })
+        .catch(() => undefined)
     } else if (open && !isUpdate) {
-      // For create, reset to defaults
       form.reset(REDEMPTION_FORM_DEFAULT_VALUES)
     }
   }, [open, isUpdate, currentRow, form])
@@ -142,8 +168,19 @@ export function RedemptionsMutateDrawer({
     if (!isUpdate) {
       const name = form.getValues('name')
       if (!name?.trim()) {
-        const quota = parseQuotaFromDollars(form.getValues('quota_dollars'))
-        form.setValue('name', formatQuota(quota), { shouldValidate: true })
+        if (form.getValues('benefit_type') === 'subscription') {
+          const plan = plans.find(
+            (item) => item.plan.id === form.getValues('plan_id')
+          )
+          if (plan) {
+            form.setValue('name', [...plan.plan.title].slice(0, 20).join(''), {
+              shouldValidate: true,
+            })
+          }
+        } else {
+          const quota = parseQuotaFromDollars(form.getValues('quota_dollars'))
+          form.setValue('name', formatQuota(quota), { shouldValidate: true })
+        }
       }
     }
 
@@ -162,6 +199,9 @@ export function RedemptionsMutateDrawer({
   const quotaPlaceholder = tokensOnly
     ? t('Enter quota in tokens')
     : t('Enter quota in {{currency}}', { currency: currencyLabel })
+  const benefitType = form.watch('benefit_type')
+  const selectedPlanId = form.watch('plan_id')
+  const selectedPlan = plans.find((item) => item.plan.id === selectedPlanId)
 
   return (
     <Sheet
@@ -215,32 +255,196 @@ export function RedemptionsMutateDrawer({
 
               <FormField
                 control={form.control}
-                name='quota_dollars'
+                name='benefit_type'
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{quotaLabel}</FormLabel>
+                    <FormLabel>{t('Redemption Benefit')}</FormLabel>
                     <FormControl>
-                      <Input
-                        {...field}
-                        type='number'
-                        step={tokensOnly ? 1 : 0.01}
-                        placeholder={quotaPlaceholder}
-                        onChange={(e) =>
-                          field.onChange(parseFloat(e.target.value) || 0)
-                        }
-                      />
+                      <RadioGroup
+                        value={field.value}
+                        onValueChange={(value) => {
+                          const next = value as 'quota' | 'subscription'
+                          field.onChange(next)
+                          if (next === 'quota') {
+                            form.setValue('plan_id', 0, {
+                              shouldValidate: true,
+                            })
+                          }
+                        }}
+                        className='grid gap-3 sm:grid-cols-2'
+                      >
+                        <Label
+                          htmlFor='benefit-quota'
+                          className='hover:border-primary/40 has-data-[checked]:border-primary has-data-[checked]:ring-primary/15 flex cursor-pointer items-start gap-3 rounded-xl border p-3.5 font-normal transition-all has-data-[checked]:ring-2'
+                        >
+                          <RadioGroupItem
+                            id='benefit-quota'
+                            value='quota'
+                            className='mt-0.5'
+                          />
+                          <div className='min-w-0'>
+                            <div className='flex items-center gap-2 font-medium'>
+                              <CircleDollarSign className='text-primary size-4' />
+                              {t('Wallet Quota')}
+                            </div>
+                            <p className='text-muted-foreground mt-1 text-xs leading-5'>
+                              {t('Add a fixed quota amount to the user wallet')}
+                            </p>
+                          </div>
+                        </Label>
+                        <Label
+                          htmlFor='benefit-subscription'
+                          className='hover:border-primary/40 has-data-[checked]:border-primary has-data-[checked]:ring-primary/15 flex cursor-pointer items-start gap-3 rounded-xl border p-3.5 font-normal transition-all has-data-[checked]:ring-2'
+                        >
+                          <RadioGroupItem
+                            id='benefit-subscription'
+                            value='subscription'
+                            className='mt-0.5'
+                          />
+                          <div className='min-w-0'>
+                            <div className='flex items-center gap-2 font-medium'>
+                              <Crown className='text-primary size-4' />
+                              {t('Subscription Plan')}
+                            </div>
+                            <p className='text-muted-foreground mt-1 text-xs leading-5'>
+                              {t('Grant one subscription plan entitlement')}
+                            </p>
+                          </div>
+                        </Label>
+                      </RadioGroup>
                     </FormControl>
-                    <FormDescription>
-                      {tokensOnly
-                        ? t('Enter the quota amount in tokens')
-                        : t('Enter the quota amount in {{currency}}', {
-                            currency: currencyLabel,
-                          })}
-                    </FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
               />
+
+              {benefitType === 'quota' ? (
+                <FormField
+                  control={form.control}
+                  name='quota_dollars'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{quotaLabel}</FormLabel>
+                      <FormControl>
+                        <Input
+                          {...field}
+                          type='number'
+                          min={tokensOnly ? 1 : 0.01}
+                          step={tokensOnly ? 1 : 0.01}
+                          placeholder={quotaPlaceholder}
+                          onChange={(e) =>
+                            field.onChange(
+                              Number.parseFloat(e.target.value) || 0
+                            )
+                          }
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {tokensOnly
+                          ? t('Enter the quota amount in tokens')
+                          : t('Enter the quota amount in {{currency}}', {
+                              currency: currencyLabel,
+                            })}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              ) : (
+                <FormField
+                  control={form.control}
+                  name='plan_id'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Subscription Plan')}</FormLabel>
+                      <Select
+                        value={field.value > 0 ? String(field.value) : null}
+                        onValueChange={(value) => {
+                          if (typeof value === 'string') {
+                            field.onChange(Number(value))
+                          }
+                        }}
+                        disabled={plansLoading}
+                      >
+                        <FormControl>
+                          <SelectTrigger className='w-full'>
+                            <SelectValue
+                              placeholder={
+                                plansLoading
+                                  ? t('Loading plans...')
+                                  : t('Select a subscription plan')
+                              }
+                            />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent alignItemWithTrigger={false}>
+                          <SelectGroup>
+                            {plans.map(({ plan }) => (
+                              <SelectItem key={plan.id} value={String(plan.id)}>
+                                <span className='flex items-center gap-2'>
+                                  <span>{plan.title}</span>
+                                  {!plan.enabled && (
+                                    <span className='text-muted-foreground text-xs'>
+                                      ({t('Disabled')})
+                                    </span>
+                                  )}
+                                </span>
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                      {selectedPlan && (
+                        <div className='bg-muted/35 grid grid-cols-2 gap-x-4 gap-y-2 rounded-lg border px-3 py-2.5 text-xs'>
+                          <div>
+                            <span className='text-muted-foreground'>
+                              {t('Duration')}
+                            </span>
+                            <div className='mt-0.5 font-medium'>
+                              {formatDuration(selectedPlan.plan, t)}
+                            </div>
+                          </div>
+                          <div>
+                            <span className='text-muted-foreground'>
+                              {t('Quota')}
+                            </span>
+                            <div className='mt-0.5 font-medium'>
+                              {selectedPlan.plan.total_amount > 0
+                                ? formatQuota(selectedPlan.plan.total_amount)
+                                : t('Unlimited')}
+                            </div>
+                          </div>
+                          <div className='col-span-2'>
+                            <span className='text-muted-foreground'>
+                              {t('Reset Period')}
+                            </span>
+                            <div className='mt-0.5 font-medium'>
+                              {formatResetPeriod(selectedPlan.plan, t)}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      <FormDescription>
+                        {t(
+                          'The code grants the latest configuration of this plan when redeemed.'
+                        )}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
+
+              {benefitType === 'subscription' && (
+                <div className='bg-muted/30 text-muted-foreground flex gap-2 rounded-lg border px-3 py-2.5 text-xs leading-5'>
+                  <Info className='mt-0.5 size-3.5 shrink-0' />
+                  <span>
+                    {t(
+                      'Changing the plan later also changes the benefit of every unused code linked to it.'
+                    )}
+                  </span>
+                </div>
+              )}
 
               <FormField
                 control={form.control}
@@ -314,7 +518,9 @@ export function RedemptionsMutateDrawer({
                           max='100'
                           placeholder={t('Number of codes to create')}
                           onChange={(e) =>
-                            field.onChange(parseInt(e.target.value, 10) || 1)
+                            field.onChange(
+                              Number.parseInt(e.target.value, 10) || 1
+                            )
                           }
                         />
                       </FormControl>

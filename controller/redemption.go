@@ -61,6 +61,26 @@ func GetRedemption(c *gin.Context) {
 	return
 }
 
+// normalizeRedemptionBenefit validates and normalizes the mutually exclusive redemption benefits.
+func normalizeRedemptionBenefit(redemption *model.Redemption) (*model.SubscriptionPlan, string) {
+	if redemption.PlanId < 0 {
+		return nil, i18n.MsgRedemptionPlanInvalid
+	}
+	if redemption.PlanId > 0 {
+		plan, err := model.GetSubscriptionPlanById(redemption.PlanId)
+		if err != nil {
+			return nil, i18n.MsgRedemptionPlanInvalid
+		}
+		redemption.Quota = 0
+		return plan, ""
+	}
+	if redemption.Quota <= 0 {
+		return nil, i18n.MsgRedemptionQuotaPositive
+	}
+	redemption.PlanId = 0
+	return nil, ""
+}
+
 func AddRedemption(c *gin.Context) {
 	if !operation_setting.IsPaymentComplianceConfirmed() {
 		common.ApiErrorI18n(c, i18n.MsgPaymentComplianceRequired)
@@ -89,6 +109,11 @@ func AddRedemption(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": msg})
 		return
 	}
+	plan, msgKey := normalizeRedemptionBenefit(&redemption)
+	if msgKey != "" {
+		common.ApiErrorI18n(c, msgKey)
+		return
+	}
 	var keys []string
 	for i := 0; i < redemption.Count; i++ {
 		key := common.GetUUID()
@@ -98,6 +123,7 @@ func AddRedemption(c *gin.Context) {
 			Key:         key,
 			CreatedTime: common.GetTimestamp(),
 			Quota:       redemption.Quota,
+			PlanId:      redemption.PlanId,
 			ExpiredTime: redemption.ExpiredTime,
 		}
 		err = cleanRedemption.Insert()
@@ -112,11 +138,19 @@ func AddRedemption(c *gin.Context) {
 		}
 		keys = append(keys, key)
 	}
-	recordManageAudit(c, "redemption.create", map[string]interface{}{
+	auditParams := map[string]interface{}{
 		"name":  redemption.Name,
 		"count": redemption.Count,
-		"quota": logger.LogQuota(redemption.Quota),
-	})
+	}
+	if plan == nil {
+		auditParams["type"] = model.RedemptionTypeQuota
+		auditParams["quota"] = logger.LogQuota(redemption.Quota)
+	} else {
+		auditParams["type"] = model.RedemptionTypeSubscription
+		auditParams["plan_id"] = plan.Id
+		auditParams["plan_title"] = plan.Title
+	}
+	recordManageAudit(c, "redemption.create", auditParams)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -152,14 +186,23 @@ func UpdateRedemption(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if cleanRedemption.Status == common.RedemptionCodeStatusUsed {
+		common.ApiErrorI18n(c, i18n.MsgRedemptionUsedImmutable)
+		return
+	}
 	if statusOnly == "" {
 		if valid, msg := validateExpiredTime(c, redemption.ExpiredTime); !valid {
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": msg})
 			return
 		}
+		if _, msgKey := normalizeRedemptionBenefit(&redemption); msgKey != "" {
+			common.ApiErrorI18n(c, msgKey)
+			return
+		}
 		// If you add more fields, please also update redemption.Update()
 		cleanRedemption.Name = redemption.Name
 		cleanRedemption.Quota = redemption.Quota
+		cleanRedemption.PlanId = redemption.PlanId
 		cleanRedemption.ExpiredTime = redemption.ExpiredTime
 	}
 	if statusOnly != "" {

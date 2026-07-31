@@ -577,13 +577,13 @@ const RechargeCard = ({
         )}
       </Card>
 
-      {/* 兑换码充值 */}
+      {/* 兑换码兑换 */}
       {enableRedemption ? (
         <Card
           className='!rounded-xl w-full'
           title={
             <Text type='tertiary' strong>
-              {t('兑换码充值')}
+              {t('兑换码兑换')}
             </Text>
           }
         >

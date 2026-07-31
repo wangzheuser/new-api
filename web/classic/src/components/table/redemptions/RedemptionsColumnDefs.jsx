@@ -105,13 +105,26 @@ export const getRedemptionsColumns = ({
       },
     },
     {
-      title: t('额度'),
+      title: t('类型'),
+      dataIndex: 'plan_id',
+      render: (planId) => {
+        return (
+          <Tag color={planId > 0 ? 'blue' : 'grey'} shape='circle'>
+            {planId > 0 ? t('订阅套餐') : t('余额额度')}
+          </Tag>
+        );
+      },
+    },
+    {
+      title: t('兑换权益'),
       dataIndex: 'quota',
-      render: (text) => {
+      render: (text, record) => {
         return (
           <div>
             <Tag color='grey' shape='circle'>
-              {renderQuota(parseInt(text))}
+              {record.plan_id > 0
+                ? `${t('套餐')} #${record.plan_id}`
+                : renderQuota(parseInt(text))}
             </Tag>
           </div>
         );

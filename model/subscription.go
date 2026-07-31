@@ -33,6 +33,10 @@ const (
 	SubscriptionResetCustom  = "custom"
 )
 
+const (
+	SubscriptionSourceRedemption = "redemption"
+)
+
 var (
 	ErrSubscriptionOrderNotFound      = errors.New("subscription order not found")
 	ErrSubscriptionOrderStatusInvalid = errors.New("subscription order status invalid")
@@ -271,7 +275,7 @@ type UserSubscription struct {
 	EndTime   int64  `json:"end_time" gorm:"bigint;index;index:idx_user_sub_active,priority:3"`
 	Status    string `json:"status" gorm:"type:varchar(32);index;index:idx_user_sub_active,priority:2"` // active/expired/cancelled
 
-	Source string `json:"source" gorm:"type:varchar(32);default:'order'"` // order/admin
+	Source string `json:"source" gorm:"type:varchar(32);default:'order'"` // order/admin/balance/redemption
 
 	LastResetTime int64 `json:"last_reset_time" gorm:"type:bigint;default:0"`
 	NextResetTime int64 `json:"next_reset_time" gorm:"type:bigint;default:0;index"`
