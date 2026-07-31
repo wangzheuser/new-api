@@ -1,4 +1,5 @@
 import path from 'path';
+import { existsSync } from 'fs';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import { defineConfig, loadEnv } from '@rsbuild/core';
@@ -10,6 +11,10 @@ const semiUiDir = path.resolve(
   path.dirname(require.resolve('@douyinfe/semi-ui')),
   '../..',
 );
+const semiDateFnsDir = path.resolve(semiUiDir, 'node_modules/date-fns');
+const dateFnsDir = existsSync(semiDateFnsDir)
+  ? semiDateFnsDir
+  : path.dirname(require.resolve('date-fns/package.json'));
 
 export default defineConfig(({ envMode }) => {
   const env = loadEnv({ mode: envMode, prefixes: ['VITE_'] });
@@ -46,7 +51,7 @@ export default defineConfig(({ envMode }) => {
       alias: {
         '@': path.resolve(__dirname, './src'),
         // Classic Semi UI requires date-fns v2 while the shared workspace also contains v4.
-        'date-fns': path.resolve(semiUiDir, 'node_modules/date-fns'),
+        'date-fns': dateFnsDir,
         '@douyinfe/semi-ui/dist/css/semi.css': path.resolve(
           semiUiDir,
           'dist/css/semi.css',
