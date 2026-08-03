@@ -182,7 +182,7 @@ deploy/blue-green/build-local.sh prepare \
 - PostgreSQL、Redis 和共享运行配置可用；
 - 当前入口资源可访问；
 - 缺失 `/static/` 资源返回 `404` 和 `Cache-Control: no-store`；
-- Nginx 配置 SHA 与备份一致；
+- 去除 `nginx -T` 成功诊断行后，Nginx 配置 SHA 与备份一致；
 - 最近日志没有 panic、fatal、OOM 或连接失败。
 
 全量旧资源使用本地文件和 SHA 校验，不通过 HTTP 批量请求，避免触发
