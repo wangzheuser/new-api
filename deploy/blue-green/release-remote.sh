@@ -419,13 +419,25 @@ action_finalize() {
 action_rollback() {
   load_config
   local mode="${1:---dry-run}"
-  # shellcheck disable=SC1090
-  source "$STATE_DIR/role-state.env"
   if [[ "$mode" == --dry-run ]]; then
+    if [[ -r "$STATE_DIR/role-state.env" ]]; then
+      # shellcheck disable=SC1090
+      source "$STATE_DIR/role-state.env"
+    else
+      # Before cutover, derive the rollback target from the verified stage state.
+      # shellcheck disable=SC1090
+      source "$STATE_DIR/stage.env"
+      OLD="$PRODUCTION"
+      NEW="$CANDIDATE"
+      OLD_IP="$(container_ip "$OLD")"
+      OLD_VERSION="$(container_version "$OLD")"
+    fi
     [[ -n "$OLD_IP" && -n "$OLD_VERSION" ]]
     printf 'rollback_dry_run=passed old=%s old_version=%s\n' "$OLD" "$OLD_VERSION"
     return
   fi
+  # shellcheck disable=SC1090
+  source "$STATE_DIR/role-state.env"
   [[ "$mode" == --execute && "${CONFIRM_ROLLBACK:-}" == "$RELEASE_ID" ]]
   exec 9>"${CUTOVER_LOCK:-/var/lock/new-api-cutover.lock}"
   flock -n 9
