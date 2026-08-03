@@ -186,7 +186,6 @@ export function UserSubscriptionsDialog(props: Props) {
         setSelectedPlanId('')
         setApplyMode('plan_default')
         await loadData()
-        props.onSuccess?.()
       }
     } catch {
       toast.error(t('Request failed'))
