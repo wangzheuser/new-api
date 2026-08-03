@@ -339,14 +339,12 @@ EOF
   disconnect_if_connected "$CANDIDATE"
   disconnect_if_connected "$PRODUCTION"
   connect_with_retry "$CANDIDATE" "$production_ip" "$PROXY_ALIAS"
-  connect_with_retry "$PRODUCTION" '' new-api-standby
-  local standby_ip
-  standby_ip="$(container_ip "$PRODUCTION")"
-  [[ "$(container_ip "$CANDIDATE")" == "$production_ip" && -n "$standby_ip" && "$standby_ip" != "$production_ip" ]]
+  # Only production joins the proxy network. A physical slot name may equal the
+  # stable alias, so connecting standby would make Docker DNS resolve both slots.
+  [[ "$(container_ip "$CANDIDATE")" == "$production_ip" && -z "$(container_ip "$PRODUCTION")" ]]
   [[ "$(proxy_version)" == "$VERSION" ]]
   [[ "$(public_version)" == "$VERSION" ]]
   [[ "$(nginx_hash)" == "$baseline_hash" ]]
-  printf 'STANDBY_IP=%s\n' "$standby_ip" >> "$STATE_DIR/role-state.env"
   switched=1
   trap - ERR
   printf 'cutover=passed production=%s standby=%s version=%s\n' "$CANDIDATE" "$PRODUCTION" "$VERSION"
@@ -457,7 +455,6 @@ action_rollback() {
   disconnect_if_connected "$NEW"
   disconnect_if_connected "$OLD"
   connect_with_retry "$OLD" "$OLD_IP" "$PROXY_ALIAS"
-  connect_with_retry "$NEW" '' new-api-standby
   local i internal public
   for i in $(seq 1 12); do
     internal="$(proxy_version 2>/dev/null || true)"

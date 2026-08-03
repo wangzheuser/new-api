@@ -207,7 +207,7 @@ CONFIRM_CUTOVER=<release-id> ./release-remote.sh cutover --execute
 切流后必须验证：
 
 - 候选持有原生产 IP 和稳定别名；
-- 旧槽位持有唯一待机 IP；
+- 旧槽位保持运行但断开代理网络，避免物理槽位名与稳定别名同名时出现 Docker DNS 轮询；
 - Nginx 内部和公网均返回目标版本；
 - Nginx 配置哈希未变；
 - 真实公网浏览器门禁通过。
