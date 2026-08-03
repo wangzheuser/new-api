@@ -42,11 +42,11 @@ extract_clean_dist() {
   fi
 }
 
-wait_for_container() {
+wait_for_status() {
   local container="$1"
   local i
   for i in $(seq 1 60); do
-    if [[ "$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container" 2>/dev/null || true)" == healthy ]]; then
+    if docker exec "$container" wget -qO- http://127.0.0.1:3000/api/status >/dev/null 2>&1; then
       return 0
     fi
     sleep 2
@@ -216,8 +216,11 @@ docker buildx build \
 [[ "$(docker image inspect -f '{{.Os}}/{{.Architecture}}' "$IMAGE_TAG")" == linux/amd64 ]]
 [[ "$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE_TAG")" == "$COMMIT" ]]
 
-docker run -d --rm --name "$SMOKE_CONTAINER" "$IMAGE_TAG" >/dev/null
-wait_for_container "$SMOKE_CONTAINER"
+docker run -d --rm --platform linux/amd64 --name "$SMOKE_CONTAINER" "$IMAGE_TAG" >/dev/null
+if ! wait_for_status "$SMOKE_CONTAINER"; then
+  docker logs "$SMOKE_CONTAINER" >&2
+  exit 1
+fi
 status_json="$(docker exec "$SMOKE_CONTAINER" wget -qO- http://127.0.0.1:3000/api/status)"
 status_version="$(printf '%s' "$status_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["version"])')"
 [[ "$status_version" == "$VERSION" ]]
