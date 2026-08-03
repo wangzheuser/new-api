@@ -59,8 +59,9 @@ if [[ "${1:-}" == self-check ]]; then
     require_command "$command"
   done
   docker info >/dev/null
+  GO_BIN="${GO_BIN:-$(go env GOROOT)/bin/go}"
   printf 'self_check=passed bash=%s bun=%s go=%s docker=%s zstd=%s\n' \
-    "${BASH_VERSION}" "$(bun --version)" "$(go version | awk '{print $3}')" \
+    "${BASH_VERSION}" "$(bun --version)" "$("$GO_BIN" version | awk '{print $3}')" \
     "$(docker version --format '{{.Server.Version}}')" "$(zstd --version | awk '{print $2}')"
   exit 0
 fi
@@ -90,6 +91,8 @@ done
 for command in bun docker git go python3 tar zstd; do
   require_command "$command"
 done
+GO_BIN="${GO_BIN:-$(go env GOROOT)/bin/go}"
+[[ -x "$GO_BIN" ]]
 
 REPO="$(git rev-parse --show-toplevel)"
 COMMIT="$(git -C "$REPO" rev-parse "${COMMIT}^{commit}")"
@@ -193,9 +196,9 @@ cp -R "$CLASSIC_TREE/web/classic/dist"/. "$DEFAULT_TREE/web/classic/dist"/
 (cd "$DEFAULT_TREE/web/default" && node --test scripts/merge-previous-assets.test.mjs)
 
 go_start="$(date +%s)"
-(cd "$DEFAULT_TREE" && go test ./...) >"$OUTPUT/logs/go-test.log" 2>&1
+(cd "$DEFAULT_TREE" && "$GO_BIN" test ./...) >"$OUTPUT/logs/go-test.log" 2>&1
 (cd "$DEFAULT_TREE" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 GOEXPERIMENT=greenteagc \
-  go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$VERSION'" -o "$RUNTIME_CONTEXT/new-api")
+  "$GO_BIN" build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$VERSION'" -o "$RUNTIME_CONTEXT/new-api")
 printf 'go_test_build_seconds=%s\n' "$(( $(date +%s) - go_start ))"
 
 cp "$DEFAULT_TREE/LICENSE" "$DEFAULT_TREE/NOTICE" "$DEFAULT_TREE/THIRD-PARTY-LICENSES.md" "$RUNTIME_CONTEXT/"
@@ -246,7 +249,7 @@ DEFAULT_CLEAN_DIST_ARCHIVE=$DEFAULT_CLEAN_DIST_ARCHIVE
 DEFAULT_CLEAN_DIST_SHA256=$DEFAULT_CLEAN_DIST_SHA256
 CLASSIC_CLEAN_DIST_ARCHIVE=$CLASSIC_CLEAN_DIST_ARCHIVE
 CLASSIC_CLEAN_DIST_SHA256=$CLASSIC_CLEAN_DIST_SHA256
-GO_VERSION=$(go version | awk '{print $3}')
+GO_VERSION=$("$GO_BIN" version | awk '{print $3}')
 BUN_VERSION=$(bun --version)
 EOF
 chmod 600 "$MANIFEST"
