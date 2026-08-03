@@ -153,7 +153,7 @@ disconnect_if_connected() {
 }
 
 render_compose() {
-  local slot="$1"
+  local slot="$1" service="new-api-$1"
   export SLOT="$slot"
   export HOST_PORT="$(slot_value "$slot" PORT)"
   export DATA_DIR="$(slot_value "$slot" DATA_DIR)"
@@ -161,7 +161,8 @@ render_compose() {
   export NODE_NAME="$(slot_value "$slot" NODE_NAME)"
   export RUNTIME_ENV_FILE="$(slot_value "$slot" RUNTIME_ENV_FILE)"
   export APP_NETWORK RUNTIME_ENV_FILE IMAGE_TAG
-  docker compose -p "$(slot_value "$slot" PROJECT)" -f "$COMPOSE_TEMPLATE" config
+  sed "s/^  new-api:/  $service:/" "$COMPOSE_TEMPLATE" |
+    docker compose -p "$(slot_value "$slot" PROJECT)" -f - config
 }
 
 action_self_check() {
@@ -229,17 +230,16 @@ action_stage() {
   [[ "$(docker image inspect -f '{{.Os}}/{{.Architecture}}' "$IMAGE_TAG")" == linux/amd64 ]]
   [[ "$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE_TAG")" == "$COMMIT_SHA" ]]
 
-  local production candidate slot project
+  local production candidate slot project service compose_file
   production="$(production_container)"
   candidate="$(other_container "$production")"
   slot="$(slot_name "$candidate")"
   project="$(slot_value "$slot" PROJECT)"
-  render_compose "$slot" > "$STATE_DIR/$slot.compose.rendered.yml"
-  export SLOT="$slot" HOST_PORT="$(slot_value "$slot" PORT)" DATA_DIR="$(slot_value "$slot" DATA_DIR)" \
-    LOG_DIR="$(slot_value "$slot" LOG_DIR)" NODE_NAME="$(slot_value "$slot" NODE_NAME)" \
-    RUNTIME_ENV_FILE="$(slot_value "$slot" RUNTIME_ENV_FILE)" APP_NETWORK IMAGE_TAG
+  service="new-api-$slot"
+  compose_file="$STATE_DIR/$slot.compose.rendered.yml"
+  render_compose "$slot" > "$compose_file"
   mkdir -p "$DATA_DIR" "$LOG_DIR"
-  docker compose -p "$project" -f "$COMPOSE_TEMPLATE" up -d --force-recreate --no-deps new-api
+  docker compose -p "$project" -f "$compose_file" up -d --force-recreate --no-deps "$service"
   wait_healthy "$candidate"
   [[ "$(container_version "$candidate")" == "$VERSION" ]]
   networks="$(docker inspect "$candidate" | python3 -c 'import json,sys; print(",".join(sorted(json.load(sys.stdin)[0]["NetworkSettings"]["Networks"])))')"
