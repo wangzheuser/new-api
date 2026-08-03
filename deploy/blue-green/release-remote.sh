@@ -363,6 +363,14 @@ action_observe() {
   # shellcheck disable=SC1090
   source "$STATE_DIR/role-state.env"
   local baseline_hash start end iterations i baseline_lines end_lines sample_count errors_5xx
+  observe_on_error() {
+    local rc=$?
+    trap - ERR
+    printf 'observation_failed line=%s command=%s rc=%s\n' "$LINENO" "$BASH_COMMAND" "$rc" |
+      tee "$STATE_DIR/observation.failed" >&2
+    exit "$rc"
+  }
+  trap observe_on_error ERR
   baseline_hash="$(awk '{print $1}' "$BACKUP_ROOT/$RELEASE_ID/nginx-config.sha256")"
   start="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   baseline_lines="$(docker exec "$PROXY_CONTAINER" sh -c "wc -l < '$NGINX_ACCESS_LOG'")"
@@ -385,6 +393,7 @@ action_observe() {
   (( sample_count > 0 ))
   errors_5xx="$(docker exec "$PROXY_CONTAINER" sh -c "tail -n '$sample_count' '$NGINX_ACCESS_LOG'" | grep -Ec '" 5[0-9][0-9] ' || true)"
   [[ "$errors_5xx" -eq 0 ]]
+  trap - ERR
   printf 'observation=passed start=%s end=%s version=%s samples=%s errors_5xx=%s\n' "$start" "$end" "$VERSION" "$sample_count" "$errors_5xx" | tee "$STATE_DIR/observation.result"
 }
 
