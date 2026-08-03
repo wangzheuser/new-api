@@ -1,3 +1,4 @@
+# This workflow is not used by the US local-build blue-green deployment.
 name: Publish dev image to GHCR
 
 on:

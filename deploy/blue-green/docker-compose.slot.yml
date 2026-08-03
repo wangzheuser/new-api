@@ -1,0 +1,34 @@
+services:
+  new-api:
+    image: ${IMAGE_TAG:?IMAGE_TAG is required}
+    container_name: new-api-${SLOT:?SLOT is required}
+    restart: always
+    command: --log-dir /app/logs
+    ports:
+      - "127.0.0.1:${HOST_PORT:?HOST_PORT is required}:3000"
+    env_file:
+      - ${RUNTIME_ENV_FILE:?RUNTIME_ENV_FILE is required}
+    environment:
+      NODE_NAME: ${NODE_NAME:?NODE_NAME is required}
+    volumes:
+      - ${DATA_DIR:?DATA_DIR is required}:/data
+      - ${LOG_DIR:?LOG_DIR is required}:/app/logs
+    networks:
+      - app-network
+    mem_limit: ${MEM_LIMIT:-768m}
+    memswap_limit: ${MEMSWAP_LIMIT:-1g}
+    cpus: ${CPU_LIMIT:-1}
+    pids_limit: ${PIDS_LIMIT:-256}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -qO- http://127.0.0.1:3000/api/status | grep -q '"success":true'
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+networks:
+  app-network:
+    external: true
+    name: ${APP_NETWORK:?APP_NETWORK is required}

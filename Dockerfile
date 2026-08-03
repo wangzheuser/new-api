@@ -39,15 +39,31 @@ COPY --from=builder /build/web/default/dist ./web/default/dist
 COPY --from=builder-classic /build/web/classic/dist ./web/classic/dist
 RUN go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat VERSION)'" -o new-api
 
-FROM debian:bookworm-slim@sha256:f06537653ac770703bc45b4b113475bd402f451e85223f0f2837acbf89ab020a
+FROM debian:bookworm-slim@sha256:f06537653ac770703bc45b4b113475bd402f451e85223f0f2837acbf89ab020a AS runtime-base
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata libasan8 wget \
     && rm -rf /var/lib/apt/lists/* \
     && update-ca-certificates
 
-COPY --from=builder2 /build/new-api /
-COPY LICENSE NOTICE THIRD-PARTY-LICENSES.md /licenses/
 EXPOSE 3000
 WORKDIR /data
 ENTRYPOINT ["/new-api"]
+
+# Local blue-green releases cross-compile the binary on the host and only use
+# Docker to assemble the pinned linux/amd64 runtime image.
+FROM runtime-base AS runtime-local
+
+ARG RELEASE_VERSION
+ARG RELEASE_REVISION
+
+COPY new-api /
+COPY LICENSE NOTICE THIRD-PARTY-LICENSES.md /licenses/
+
+LABEL org.opencontainers.image.version="${RELEASE_VERSION}" \
+      org.opencontainers.image.revision="${RELEASE_REVISION}"
+
+FROM runtime-base AS runtime
+
+COPY --from=builder2 /build/new-api /
+COPY LICENSE NOTICE THIRD-PARTY-LICENSES.md /licenses/
