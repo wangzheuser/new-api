@@ -134,6 +134,15 @@ nginx_hash() {
   docker exec "$PROXY_CONTAINER" nginx -T 2>&1 | sha256sum | awk '{print $1}'
 }
 
+nginx_hash_matches() {
+  local expected="$1" i
+  for i in 1 2 3; do
+    [[ "$(nginx_hash)" == "$expected" ]] && return 0
+    [[ "$i" -eq 3 ]] || sleep 2
+  done
+  return 1
+}
+
 connect_with_retry() {
   local container="$1" ip="$2" alias="$3" i
   for i in $(seq 1 20); do
@@ -279,7 +288,7 @@ action_gate() {
   grep -qE '^HTTP/[^ ]+ 404' <<<"$headers"
   grep -qiE '^Cache-Control:.*no-store' <<<"$headers"
   baseline_hash="$(awk '{print $1}' "$BACKUP_ROOT/$RELEASE_ID/nginx-config.sha256")"
-  [[ "$(nginx_hash)" == "$baseline_hash" ]]
+  nginx_hash_matches "$baseline_hash"
   if docker logs --since 10m "$CANDIDATE" 2>&1 | grep -Eqi 'panic:|fatal|out of memory|connection refused'; then
     printf 'candidate_log_gate=failed\n' >&2
     exit 1
@@ -305,7 +314,8 @@ action_cutover() {
   production_ip="$(container_ip "$PRODUCTION")"
   production_version="$(container_version "$PRODUCTION")"
   baseline_hash="$(awk '{print $1}' "$BACKUP_ROOT/$RELEASE_ID/nginx-config.sha256")"
-  [[ -n "$production_ip" && "$(nginx_hash)" == "$baseline_hash" ]]
+  [[ -n "$production_ip" ]]
+  nginx_hash_matches "$baseline_hash"
   if [[ "$mode" == --dry-run ]]; then
     printf 'cutover_dry_run=passed production=%s candidate=%s production_version=%s target_version=%s\n' "$PRODUCTION" "$CANDIDATE" "$production_version" "$VERSION"
     return
@@ -344,7 +354,7 @@ EOF
   [[ "$(container_ip "$CANDIDATE")" == "$production_ip" && -z "$(container_ip "$PRODUCTION")" ]]
   [[ "$(proxy_version)" == "$VERSION" ]]
   [[ "$(public_version)" == "$VERSION" ]]
-  [[ "$(nginx_hash)" == "$baseline_hash" ]]
+  nginx_hash_matches "$baseline_hash"
   switched=1
   trap - ERR
   printf 'cutover=passed production=%s standby=%s version=%s\n' "$CANDIDATE" "$PRODUCTION" "$VERSION"
@@ -382,7 +392,7 @@ action_observe() {
     [[ "$(docker inspect -f '{{.RestartCount}}' "$NEW")" == 0 ]]
     [[ "$(docker inspect -f '{{.State.OOMKilled}}' "$NEW")" == false ]]
     [[ "$(proxy_version)" == "$VERSION" ]]
-    [[ "$(nginx_hash)" == "$baseline_hash" ]]
+    nginx_hash_matches "$baseline_hash"
     [[ "$i" -eq "$iterations" ]] || sleep "$interval"
   done
   [[ "$(public_version)" == "$VERSION" ]]
