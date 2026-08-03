@@ -900,7 +900,11 @@ export function ChannelMutateDrawer({
   // Transform groups to multi-select options
   const groupOptions = useMemo(() => {
     if (!groupsData?.data) return []
-    const allGroups = new Set([...groupsData.data, ...(currentGroups || [])])
+    const allGroups = new Set([
+      'all',
+      ...groupsData.data,
+      ...(currentGroups || []),
+    ])
     return [...allGroups].map((group) => ({
       value: group,
       label: group,
