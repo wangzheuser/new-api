@@ -30,7 +30,7 @@ function toUnixTime(value: string) {
 export function RegistrationCodes() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const [name, setName] = useState('Registration')
+  const [name, setName] = useState('')
   const [count, setCount] = useState(1)
   const [maxUses, setMaxUses] = useState(1)
   const [openTime, setOpenTime] = useState('')
