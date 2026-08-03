@@ -24,6 +24,7 @@ type Redemption struct {
 	RedeemedTime int64          `json:"redeemed_time" gorm:"bigint"`
 	Count        int            `json:"count" gorm:"-:all"` // only for api request
 	UsedUserId   int            `json:"used_user_id"`
+	UsedUsername string         `json:"used_username,omitempty" gorm:"-"`
 	DeletedAt    gorm.DeletedAt `gorm:"index"`
 	ExpiredTime  int64          `json:"expired_time" gorm:"bigint"` // 过期时间，0 表示不过期
 }
@@ -66,6 +67,10 @@ func GetAllRedemptions(startIdx int, num int) (redemptions []*Redemption, total 
 		tx.Rollback()
 		return nil, 0, err
 	}
+	if err = attachRedemptionUsernames(tx, redemptions); err != nil {
+		tx.Rollback()
+		return nil, 0, err
+	}
 
 	// 提交事务
 	if err = tx.Commit().Error; err != nil {
@@ -90,9 +95,9 @@ func SearchRedemptions(keyword string, status string, startIdx int, num int) (re
 
 	if keyword != "" {
 		if id, err := strconv.Atoi(keyword); err == nil {
-			query = query.Where("id = ? OR name LIKE ?", id, keyword+"%")
+			query = query.Where(commonKeyCol+" = ? OR id = ? OR name LIKE ?", keyword, id, keyword+"%")
 		} else {
-			query = query.Where("name LIKE ?", keyword+"%")
+			query = query.Where(commonKeyCol+" = ? OR name LIKE ?", keyword, keyword+"%")
 		}
 	}
 
@@ -131,12 +136,52 @@ func SearchRedemptions(keyword string, status string, startIdx int, num int) (re
 		tx.Rollback()
 		return nil, 0, err
 	}
+	if err = attachRedemptionUsernames(tx, redemptions); err != nil {
+		tx.Rollback()
+		return nil, 0, err
+	}
 
 	if err = tx.Commit().Error; err != nil {
 		return nil, 0, err
 	}
 
 	return redemptions, total, nil
+}
+
+// attachRedemptionUsernames adds current usernames to one page without per-row queries.
+func attachRedemptionUsernames(tx *gorm.DB, redemptions []*Redemption) error {
+	userIds := make([]int, 0, len(redemptions))
+	seen := make(map[int]struct{}, len(redemptions))
+	for _, redemption := range redemptions {
+		if redemption.UsedUserId == 0 {
+			continue
+		}
+		if _, exists := seen[redemption.UsedUserId]; exists {
+			continue
+		}
+		seen[redemption.UsedUserId] = struct{}{}
+		userIds = append(userIds, redemption.UsedUserId)
+	}
+	if len(userIds) == 0 {
+		return nil
+	}
+
+	var users []struct {
+		Id       int
+		Username string
+	}
+	if err := tx.Model(&User{}).Select("id", "username").Where("id IN ?", userIds).Scan(&users).Error; err != nil {
+		return err
+	}
+
+	usernames := make(map[int]string, len(users))
+	for _, user := range users {
+		usernames[user.Id] = user.Username
+	}
+	for _, redemption := range redemptions {
+		redemption.UsedUsername = usernames[redemption.UsedUserId]
+	}
+	return nil
 }
 
 func GetRedemptionById(id int) (*Redemption, error) {

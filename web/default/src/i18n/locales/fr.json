@@ -2012,7 +2012,6 @@
     "Filter by MjProxy task ID": "Filtrer par ID de tâche MjProxy",
     "Filter by model name...": "Filtrer par nom du modèle...",
     "Filter by model...": "Filtrer par modèle...",
-    "Filter by name or ID...": "Filtrer par nom ou ID...",
     "Filter by name or registration code...": "Filtrer par nom ou code d’inscription...",
     "Filter by name, ID, or key...": "Filtrer par nom, ID ou clé...",
     "Filter by name...": "Filtrer par nom...",
@@ -5285,6 +5284,11 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Filter by name, ID, or full redemption code...": "Filtrer par nom, ID ou code d’échange complet...",
+    "View usage records": "Voir l’historique d’utilisation",
+    "Used At": "Utilisé le",
+    "Usage Records": "Historique d’utilisation",
+    "No usage records found": "Aucun historique d’utilisation trouvé"
   }
 }

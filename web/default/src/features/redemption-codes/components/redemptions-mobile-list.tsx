@@ -111,6 +111,7 @@ export function RedemptionsMobileList(props: RedemptionsMobileListProps) {
         )
         const statusConfig = REDEMPTION_STATUSES[redemption.status]
         const maskedKey = `${redemption.key.slice(0, 8)}******${redemption.key.slice(-8)}`
+        const usedUsername = redemption.used_username?.trim()
 
         return (
           <div
@@ -171,6 +172,19 @@ export function RedemptionsMobileList(props: RedemptionsMobileListProps) {
                   : formatQuota(redemption.quota)}
               </span>
             </div>
+
+            {redemption.used_user_id > 0 && (
+              <div className='flex items-center justify-between gap-2 text-xs'>
+                <span className='text-muted-foreground'>
+                  {t('Redeemed By')}
+                </span>
+                <span className='font-medium'>
+                  {usedUsername
+                    ? `${usedUsername} (#${redemption.used_user_id})`
+                    : t('User {{id}}', { id: redemption.used_user_id })}
+                </span>
+              </div>
+            )}
           </div>
         )
       })}

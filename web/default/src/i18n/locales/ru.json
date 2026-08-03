@@ -2012,7 +2012,6 @@
     "Filter by MjProxy task ID": "Фильтр по ID задачи MjProxy",
     "Filter by model name...": "Фильтр по имени модели...",
     "Filter by model...": "Фильтровать по модели...",
-    "Filter by name or ID...": "Фильтр по имени или ID...",
     "Filter by name or registration code...": "Фильтр по имени или коду регистрации...",
     "Filter by name, ID, or key...": "Фильтровать по имени, ID или ключу...",
     "Filter by name...": "Фильтр по имени...",
@@ -5285,6 +5284,11 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Filter by name, ID, or full redemption code...": "Фильтр по названию, ID или полному коду погашения...",
+    "View usage records": "Просмотреть историю использования",
+    "Used At": "Использовано",
+    "Usage Records": "История использования",
+    "No usage records found": "Записи об использовании не найдены"
   }
 }

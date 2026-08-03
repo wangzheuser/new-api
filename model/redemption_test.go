@@ -50,6 +50,27 @@ func TestSearchRedemptionsFiltersAndPaginates(t *testing.T) {
 			wantIds:   []int{3, 2, 1},
 		},
 		{
+			name:      "keyword matches full redemption code",
+			keyword:   "00000000000000000000000000000004",
+			num:       10,
+			wantTotal: 1,
+			wantIds:   []int{4},
+		},
+		{
+			name:      "keyword does not partially match redemption code",
+			keyword:   "0000000000000000000000000000000",
+			num:       10,
+			wantTotal: 0,
+			wantIds:   []int{},
+		},
+		{
+			name:      "numeric keyword matches id",
+			keyword:   "4",
+			num:       10,
+			wantTotal: 1,
+			wantIds:   []int{4},
+		},
+		{
 			name:      "enabled status excludes expired rows",
 			status:    "1",
 			num:       10,
@@ -98,6 +119,40 @@ func TestSearchRedemptionsFiltersAndPaginates(t *testing.T) {
 			assert.Equal(t, tt.wantIds, gotIds)
 		})
 	}
+}
+
+// TestRedemptionListsAttachCurrentUsername verifies list responses enrich users without persisted snapshots.
+func TestRedemptionListsAttachCurrentUsername(t *testing.T) {
+	require.NoError(t, DB.AutoMigrate(&Redemption{}, &User{}))
+	require.NoError(t, DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&Redemption{}).Error)
+	require.NoError(t, DB.Exec("DELETE FROM users").Error)
+	t.Cleanup(func() {
+		require.NoError(t, DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&Redemption{}).Error)
+		require.NoError(t, DB.Exec("DELETE FROM users").Error)
+	})
+
+	user := User{Username: "lookup-before", Password: "password", Status: common.UserStatusEnabled}
+	require.NoError(t, DB.Create(&user).Error)
+	redemptions := []Redemption{
+		{Name: "lookup-found", Key: "10000000000000000000000000000001", Status: common.RedemptionCodeStatusUsed, UsedUserId: user.Id},
+		{Name: "lookup-missing", Key: "10000000000000000000000000000002", Status: common.RedemptionCodeStatusUsed, UsedUserId: user.Id + 9999},
+	}
+	require.NoError(t, DB.Create(&redemptions).Error)
+
+	items, total, err := GetAllRedemptions(0, 10)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, total)
+	require.Len(t, items, 2)
+	assert.Empty(t, items[0].UsedUsername)
+	assert.Equal(t, "lookup-before", items[1].UsedUsername)
+
+	require.NoError(t, DB.Model(&user).Update("username", "lookup-after").Error)
+	items, total, err = SearchRedemptions("lookup", "", 0, 10)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, total)
+	require.Len(t, items, 2)
+	assert.Empty(t, items[0].UsedUsername)
+	assert.Equal(t, "lookup-after", items[1].UsedUsername)
 }
 
 func setupRedeemFixture(t *testing.T, quota int) (userId int, key string) {

@@ -9,7 +9,7 @@ License, or (at your option) any later version.
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
 import type { ColumnDef, RowSelectionState, Table } from '@tanstack/react-table'
-import { Power, PowerOff, Trash2 } from 'lucide-react'
+import { History, Power, PowerOff, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -31,7 +31,9 @@ import {
 } from '@/components/ui/tooltip'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { api } from '@/lib/api'
+import { formatTimestampToDate } from '@/lib/format'
 
+import { RegistrationCodeUsagesDialog } from './registration-code-usages-dialog'
 import type {
   ApiResponse,
   RegistrationCode,
@@ -196,6 +198,7 @@ export function RegistrationCodesTable() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
+  const [usageCode, setUsageCode] = useState<RegistrationCode | null>(null)
 
   const {
     globalFilter,
@@ -307,6 +310,11 @@ export function RegistrationCodesTable() {
         size: 40,
       },
       {
+        accessorKey: 'id',
+        header: t('ID'),
+        cell: ({ row }) => <span>{row.original.id}</span>,
+      },
+      {
         accessorKey: 'name',
         header: t('Name'),
         cell: ({ row }) => (
@@ -341,6 +349,15 @@ export function RegistrationCodesTable() {
         ),
       },
       {
+        accessorKey: 'created_time',
+        header: t('Created At'),
+        cell: ({ row }) => (
+          <span className='font-mono text-xs tabular-nums'>
+            {formatTimestampToDate(row.original.created_time)}
+          </span>
+        ),
+      },
+      {
         id: 'usage',
         accessorFn: (code) => {
           if (code.used_count === 0) return 'unused'
@@ -363,6 +380,22 @@ export function RegistrationCodesTable() {
         header: () => <div className='text-right'>{t('Actions')}</div>,
         cell: ({ row }) => (
           <div className='flex justify-end gap-2'>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant='ghost'
+                    size='icon'
+                    disabled={row.original.used_count === 0}
+                    onClick={() => setUsageCode(row.original)}
+                    aria-label={t('View usage records')}
+                  />
+                }
+              >
+                <History />
+              </TooltipTrigger>
+              <TooltipContent>{t('View usage records')}</TooltipContent>
+            </Tooltip>
             <CopyButton value={row.original.code} />
             <Button
               variant='outline'
@@ -459,43 +492,53 @@ export function RegistrationCodesTable() {
   )
 
   return (
-    <DataTablePage
-      table={table}
-      columns={columns}
-      isLoading={isLoading}
-      isFetching={isFetching}
-      fixedHeight={false}
-      paginationInFooter={false}
-      applyHeaderSize
-      emptyTitle={t('No registration codes found')}
-      emptyDescription={t(
-        'Generate a registration code or adjust the filters.'
+    <>
+      <DataTablePage
+        table={table}
+        columns={columns}
+        isLoading={isLoading}
+        isFetching={isFetching}
+        fixedHeight={false}
+        paginationInFooter={false}
+        applyHeaderSize
+        emptyTitle={t('No registration codes found')}
+        emptyDescription={t(
+          'Generate a registration code or adjust the filters.'
+        )}
+        toolbarProps={{
+          searchPlaceholder: t('Filter by name or registration code...'),
+          searchDebounceMs: 250,
+          filters: [
+            {
+              columnId: 'status',
+              title: t('Status'),
+              options: statusOptions,
+              singleSelect: true,
+            },
+            {
+              columnId: 'usage',
+              title: t('Usage'),
+              options: usageOptions,
+              singleSelect: true,
+            },
+            {
+              columnId: 'validity',
+              title: t('Validity'),
+              options: validityOptions,
+              singleSelect: true,
+            },
+          ],
+        }}
+        bulkActions={<RegistrationCodeBulkActions table={table} />}
+      />
+
+      {usageCode && (
+        <RegistrationCodeUsagesDialog
+          code={usageCode}
+          open
+          onOpenChange={(open) => !open && setUsageCode(null)}
+        />
       )}
-      toolbarProps={{
-        searchPlaceholder: t('Filter by name or registration code...'),
-        searchDebounceMs: 250,
-        filters: [
-          {
-            columnId: 'status',
-            title: t('Status'),
-            options: statusOptions,
-            singleSelect: true,
-          },
-          {
-            columnId: 'usage',
-            title: t('Usage'),
-            options: usageOptions,
-            singleSelect: true,
-          },
-          {
-            columnId: 'validity',
-            title: t('Validity'),
-            options: validityOptions,
-            singleSelect: true,
-          },
-        ],
-      }}
-      bulkActions={<RegistrationCodeBulkActions table={table} />}
-    />
+    </>
   )
 }

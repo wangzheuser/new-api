@@ -2012,7 +2012,6 @@
     "Filter by MjProxy task ID": "MjProxyタスクIDでフィルター",
     "Filter by model name...": "モデル名でフィルター...",
     "Filter by model...": "モデルでフィルタリング...",
-    "Filter by name or ID...": "名前またはIDでフィルター...",
     "Filter by name or registration code...": "名前または登録コードで絞り込み...",
     "Filter by name, ID, or key...": "名前、ID、またはキーでフィルター...",
     "Filter by name...": "名前でフィルター...",
@@ -5285,6 +5284,11 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Filter by name, ID, or full redemption code...": "名前、ID、または完全な交換コードで絞り込み...",
+    "View usage records": "使用履歴を表示",
+    "Used At": "使用日時",
+    "Usage Records": "使用履歴",
+    "No usage records found": "使用履歴がありません"
   }
 }

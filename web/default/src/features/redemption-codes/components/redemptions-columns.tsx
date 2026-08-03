@@ -242,12 +242,17 @@ export function useRedemptionsColumns(): ColumnDef<Redemption>[] {
           return <span className='text-muted-foreground text-sm'>-</span>
         }
 
+        const username = redemption.used_username?.trim()
+        const userLabel = username
+          ? `${username} (#${userId})`
+          : t('User {{id}}', { id: userId })
+
         return (
           <Tooltip>
             <TooltipTrigger
               render={
                 <StatusBadge
-                  label={t('User {{id}}', { id: userId })}
+                  label={userLabel}
                   variant='neutral'
                   copyable={false}
                   className='cursor-help'

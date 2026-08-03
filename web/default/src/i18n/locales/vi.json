@@ -2012,7 +2012,6 @@
     "Filter by MjProxy task ID": "Lọc theo ID nhiệm vụ MjProxy",
     "Filter by model name...": "Lọc theo tên mô hình...",
     "Filter by model...": "Lọc theo mẫu...",
-    "Filter by name or ID...": "Lọc theo tên hoặc ID...",
     "Filter by name or registration code...": "Lọc theo tên hoặc mã đăng ký...",
     "Filter by name, ID, or key...": "Lọc theo tên, ID hoặc khóa...",
     "Filter by name...": "Lọc theo tên...",
@@ -5285,6 +5284,11 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Filter by name, ID, or full redemption code...": "Lọc theo tên, ID hoặc mã đổi thưởng đầy đủ...",
+    "View usage records": "Xem lịch sử sử dụng",
+    "Used At": "Đã sử dụng lúc",
+    "Usage Records": "Lịch sử sử dụng",
+    "No usage records found": "Không tìm thấy lịch sử sử dụng"
   }
 }

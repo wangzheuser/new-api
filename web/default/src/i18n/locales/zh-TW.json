@@ -2012,7 +2012,6 @@
     "Filter by MjProxy task ID": "按 MjProxy 任務 ID 篩選",
     "Filter by model name...": "按模型名稱篩選...",
     "Filter by model...": "按模型篩選...",
-    "Filter by name or ID...": "按名稱或 ID 篩選...",
     "Filter by name or registration code...": "依名稱或註冊碼篩選...",
     "Filter by name, ID, or key...": "按名稱、ID 或金鑰篩選...",
     "Filter by name...": "按名稱篩選...",
@@ -5285,6 +5284,11 @@
     "Zero retention": "零數據保留",
     "Zhipu": "智譜",
     "Zhipu V4": "智譜 V4",
-    "Zoom": "縮放"
+    "Zoom": "縮放",
+    "Filter by name, ID, or full redemption code...": "按名稱、ID 或完整兌換碼篩選...",
+    "View usage records": "查看使用記錄",
+    "Used At": "使用時間",
+    "Usage Records": "使用記錄",
+    "No usage records found": "找不到使用記錄"
   }
 }

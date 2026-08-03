@@ -24,6 +24,20 @@ export type RegistrationCodePage = {
   total: number
 }
 
+export type RegistrationCodeUsage = {
+  id: number
+  registration_code_id: number
+  user_id: number
+  username: string
+  source: string
+  used_time: number
+}
+
+export type RegistrationCodeUsagePage = {
+  items: RegistrationCodeUsage[]
+  total: number
+}
+
 export type ApiResponse<T = null> = {
   success: boolean
   message?: string
