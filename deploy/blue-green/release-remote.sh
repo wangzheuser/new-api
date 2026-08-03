@@ -40,9 +40,9 @@ load_config() {
   source "$SERVER_ENV"
   for name in RELEASE_ID COMMIT_SHA VERSION IMAGE_TAG IMAGE_ARCHIVE IMAGE_SHA256 \
     BACKUP_ROOT APP_NETWORK PROXY_NETWORK PROXY_ALIAS PROXY_CONTAINER PUBLIC_STATUS_URL \
-    POSTGRES_CONTAINER POSTGRES_USER POSTGRES_DB REDIS_CONTAINER RUNTIME_ENV_FILE NGINX_ACCESS_LOG \
-    BLUE_PORT BLUE_DATA_DIR BLUE_LOG_DIR BLUE_NODE_NAME BLUE_PROJECT \
-    GREEN_PORT GREEN_DATA_DIR GREEN_LOG_DIR GREEN_NODE_NAME GREEN_PROJECT; do
+    POSTGRES_CONTAINER POSTGRES_USER POSTGRES_DB REDIS_CONTAINER NGINX_ACCESS_LOG \
+    BLUE_PORT BLUE_DATA_DIR BLUE_LOG_DIR BLUE_NODE_NAME BLUE_PROJECT BLUE_RUNTIME_ENV_FILE \
+    GREEN_PORT GREEN_DATA_DIR GREEN_LOG_DIR GREEN_NODE_NAME GREEN_PROJECT GREEN_RUNTIME_ENV_FILE; do
     require_variable "$name"
   done
   RELEASE_DIR="$(cd "$(dirname "$RELEASE_ENV")" && pwd)"
@@ -159,6 +159,7 @@ render_compose() {
   export DATA_DIR="$(slot_value "$slot" DATA_DIR)"
   export LOG_DIR="$(slot_value "$slot" LOG_DIR)"
   export NODE_NAME="$(slot_value "$slot" NODE_NAME)"
+  export RUNTIME_ENV_FILE="$(slot_value "$slot" RUNTIME_ENV_FILE)"
   export APP_NETWORK RUNTIME_ENV_FILE IMAGE_TAG
   docker compose -p "$(slot_value "$slot" PROJECT)" -f "$COMPOSE_TEMPLATE" config
 }
@@ -236,7 +237,7 @@ action_stage() {
   render_compose "$slot" > "$STATE_DIR/$slot.compose.rendered.yml"
   export SLOT="$slot" HOST_PORT="$(slot_value "$slot" PORT)" DATA_DIR="$(slot_value "$slot" DATA_DIR)" \
     LOG_DIR="$(slot_value "$slot" LOG_DIR)" NODE_NAME="$(slot_value "$slot" NODE_NAME)" \
-    APP_NETWORK RUNTIME_ENV_FILE IMAGE_TAG
+    RUNTIME_ENV_FILE="$(slot_value "$slot" RUNTIME_ENV_FILE)" APP_NETWORK IMAGE_TAG
   mkdir -p "$DATA_DIR" "$LOG_DIR"
   docker compose -p "$project" -f "$COMPOSE_TEMPLATE" up -d --force-recreate --no-deps new-api
   wait_healthy "$candidate"
