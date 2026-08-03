@@ -184,8 +184,8 @@ printf 'frontend_build_seconds=%s\n' "$(( $(date +%s) - start_epoch ))"
 # Archive clean outputs before adding previous-production assets.
 DEFAULT_CLEAN_DIST_ARCHIVE="artifacts/default-clean-${SHORT_SHA}.tar.zst"
 CLASSIC_CLEAN_DIST_ARCHIVE="artifacts/classic-clean-${SHORT_SHA}.tar.zst"
-tar -C "$DEFAULT_TREE/web/default" -cf - dist | zstd -T0 -3 -q -o "$OUTPUT/$DEFAULT_CLEAN_DIST_ARCHIVE"
-tar -C "$CLASSIC_TREE/web/classic" -cf - dist | zstd -T0 -3 -q -o "$OUTPUT/$CLASSIC_CLEAN_DIST_ARCHIVE"
+tar -C "$DEFAULT_TREE/web/default" -cf - dist | zstd -T0 -3 -q -f -o "$OUTPUT/$DEFAULT_CLEAN_DIST_ARCHIVE"
+tar -C "$CLASSIC_TREE/web/classic" -cf - dist | zstd -T0 -3 -q -f -o "$OUTPUT/$CLASSIC_CLEAN_DIST_ARCHIVE"
 
 mkdir -p "$DEFAULT_TREE/web/classic/dist"
 cp -R "$CLASSIC_TREE/web/classic/dist"/. "$DEFAULT_TREE/web/classic/dist"/
@@ -228,7 +228,7 @@ docker exec "$SMOKE_CONTAINER" wget -qO- http://127.0.0.1:3000/ | grep -q 'id="r
 docker rm -f "$SMOKE_CONTAINER" >/dev/null
 
 IMAGE_ARCHIVE="artifacts/new-api-${VERSION}.tar.zst"
-docker save "$IMAGE_TAG" | zstd -T0 -3 -q -o "$OUTPUT/$IMAGE_ARCHIVE"
+docker save "$IMAGE_TAG" | zstd -T0 -3 -q -f -o "$OUTPUT/$IMAGE_ARCHIVE"
 zstd -t "$OUTPUT/$IMAGE_ARCHIVE" >/dev/null
 IMAGE_SHA256="$(sha256_file "$OUTPUT/$IMAGE_ARCHIVE")"
 DEFAULT_CLEAN_DIST_SHA256="$(sha256_file "$OUTPUT/$DEFAULT_CLEAN_DIST_ARCHIVE")"
