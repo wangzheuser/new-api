@@ -105,7 +105,8 @@ func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
 	return channelQuery, nil
 }
 
-func GetChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
+// GetChannel 从数据库候选中选择渠道，重试时优先排除本次请求已使用的渠道。
+func GetChannel(group string, model string, retry int, requestPath string, usedChannelIds map[int]struct{}) (*Channel, error) {
 	var abilities []Ability
 
 	var err error = nil
@@ -122,6 +123,19 @@ func GetChannel(group string, model string, retry int, requestPath string) (*Cha
 		return nil, err
 	}
 	abilities = filterAbilitiesByRequestPathAndModel(abilities, requestPath, model)
+	candidateIds := make([]int, 0, len(abilities))
+	for _, ability := range abilities {
+		candidateIds = append(candidateIds, ability.ChannelId)
+	}
+	if untriedIds := preferredUntriedChannelIds(candidateIds, usedChannelIds); untriedIds != nil {
+		filtered := abilities[:0]
+		for _, ability := range abilities {
+			if _, ok := untriedIds[ability.ChannelId]; ok {
+				filtered = append(filtered, ability)
+			}
+		}
+		abilities = filtered
+	}
 	channel := Channel{}
 	if len(abilities) > 0 {
 		// Randomly choose one
@@ -144,6 +158,23 @@ func GetChannel(group string, model string, retry int, requestPath string) (*Cha
 	}
 	err = DB.First(&channel, "id = ?", channel.Id).Error
 	return &channel, err
+}
+
+// preferredUntriedChannelIds 返回未使用候选；全部用过时返回 nil 以允许兜底复用。
+func preferredUntriedChannelIds(candidateIds []int, usedChannelIds map[int]struct{}) map[int]struct{} {
+	if len(usedChannelIds) == 0 {
+		return nil
+	}
+	untriedIds := make(map[int]struct{}, len(candidateIds))
+	for _, channelId := range candidateIds {
+		if _, used := usedChannelIds[channelId]; !used {
+			untriedIds[channelId] = struct{}{}
+		}
+	}
+	if len(untriedIds) == 0 {
+		return nil
+	}
+	return untriedIds
 }
 
 // filterAbilitiesByRequestPathAndModel restricts candidates by request path and

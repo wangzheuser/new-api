@@ -56,6 +56,7 @@ export type PerfSummaryAllData = {
   success: boolean
   message?: string
   data: {
+    success_rate: number
     models: PerfModelSummary[]
   }
 }

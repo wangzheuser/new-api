@@ -33,11 +33,12 @@ import {
 } from '@/features/performance-metrics/lib/format'
 import type { PerfModelSummary } from '@/features/performance-metrics/types'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/auth-store'
 
 const PERFORMANCE_WINDOW_HOURS = 24
 const TOP_MODEL_LIMIT = 6
 
-type WeightedMetric = 'avg_latency_ms' | 'avg_tps' | 'success_rate'
+type WeightedMetric = 'avg_latency_ms' | 'avg_tps'
 
 function simpleAverage(
   rows: PerfModelSummary[],
@@ -57,9 +58,10 @@ function simpleAverage(
 
 export function PerformanceHealthPanel() {
   const { t } = useTranslation()
+  const userGroup = useAuthStore((state) => state.auth.user?.group)
   const metricsQuery = useQuery({
-    queryKey: ['perf-metrics-summary', PERFORMANCE_WINDOW_HOURS],
-    queryFn: () => getPerfMetricsSummary(PERFORMANCE_WINDOW_HOURS),
+    queryKey: ['perf-metrics-summary', PERFORMANCE_WINDOW_HOURS, userGroup],
+    queryFn: () => getPerfMetricsSummary(PERFORMANCE_WINDOW_HOURS, userGroup),
     staleTime: 60 * 1000,
     retry: false,
   })
@@ -83,9 +85,9 @@ export function PerformanceHealthPanel() {
         'avg_tps',
         (v) => Number.isFinite(v) && v > 0
       ),
-      successRate: simpleAverage(models, 'success_rate', Number.isFinite),
+      successRate: metricsQuery.data?.data.success_rate ?? Number.NaN,
     }
-  }, [models])
+  }, [metricsQuery.data, models])
 
   const topModels = useMemo(() => models.slice(0, TOP_MODEL_LIMIT), [models])
   const loading = metricsQuery.isLoading

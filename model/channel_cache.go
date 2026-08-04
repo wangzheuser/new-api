@@ -111,10 +111,11 @@ func SyncChannelCache(frequency int) {
 	}
 }
 
-func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
+// GetRandomSatisfiedChannel 按优先级和权重选择渠道，重试时优先选择未使用渠道。
+func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string, usedChannelIds map[int]struct{}) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannel(group, model, retry, requestPath)
+		return GetChannel(group, model, retry, requestPath, usedChannelIds)
 	}
 
 	channelSyncLock.RLock()
@@ -160,12 +161,10 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 	targetPriority := int64(sortedUniquePriorities[retry])
 
 	// get the priority for the given retry number
-	var sumWeight = 0
 	var targetChannels []*Channel
 	for _, channelId := range channels {
 		if channel, ok := channelsIDM[channelId]; ok {
 			if channel.GetPriority() == targetPriority {
-				sumWeight += channel.GetWeight()
 				targetChannels = append(targetChannels, channel)
 			}
 		} else {
@@ -175,6 +174,24 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 
 	if len(targetChannels) == 0 {
 		return nil, errors.New(fmt.Sprintf("no channel found, group: %s, model: %s, priority: %d", group, model, targetPriority))
+	}
+	targetIds := make([]int, 0, len(targetChannels))
+	for _, channel := range targetChannels {
+		targetIds = append(targetIds, channel.Id)
+	}
+	if untriedIds := preferredUntriedChannelIds(targetIds, usedChannelIds); untriedIds != nil {
+		filtered := targetChannels[:0]
+		for _, channel := range targetChannels {
+			if _, ok := untriedIds[channel.Id]; ok {
+				filtered = append(filtered, channel)
+			}
+		}
+		targetChannels = filtered
+	}
+
+	sumWeight := 0
+	for _, channel := range targetChannels {
+		sumWeight += channel.GetWeight()
 	}
 
 	// smoothing factor and adjustment

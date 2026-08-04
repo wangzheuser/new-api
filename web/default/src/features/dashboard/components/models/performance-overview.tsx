@@ -37,7 +37,7 @@ import { cn } from '@/lib/utils'
 const PERFORMANCE_WINDOW_HOURS = 24
 const TOP_MODEL_LIMIT = 6
 
-type WeightedMetric = 'avg_latency_ms' | 'avg_tps' | 'success_rate'
+type WeightedMetric = 'avg_latency_ms' | 'avg_tps'
 
 type PerformanceSummary = {
   totalRequests: number
@@ -64,7 +64,10 @@ function simpleAverage(
   return count > 0 ? total / count : Number.NaN
 }
 
-function buildPerformanceSummary(rows: PerfModelSummary[]): PerformanceSummary {
+function buildPerformanceSummary(
+  rows: PerfModelSummary[],
+  successRate: number
+): PerformanceSummary {
   return {
     totalRequests: rows.length,
     avgLatencyMs: Math.round(
@@ -79,7 +82,7 @@ function buildPerformanceSummary(rows: PerfModelSummary[]): PerformanceSummary {
       'avg_tps',
       (value) => Number.isFinite(value) && value > 0
     ),
-    successRate: simpleAverage(rows, 'success_rate', Number.isFinite),
+    successRate,
   }
 }
 
@@ -96,7 +99,14 @@ export function PerformanceOverview() {
     () => metricsQuery.data?.data.models ?? [],
     [metricsQuery.data]
   )
-  const summary = useMemo(() => buildPerformanceSummary(models), [models])
+  const summary = useMemo(
+    () =>
+      buildPerformanceSummary(
+        models,
+        metricsQuery.data?.data.success_rate ?? Number.NaN
+      ),
+    [metricsQuery.data, models]
+  )
   const topModels = useMemo(() => models.slice(0, TOP_MODEL_LIMIT), [models])
   const loading = metricsQuery.isLoading
   const hasData = models.length > 0

@@ -279,6 +279,7 @@ export function Pricing() {
               priceRate={priceRate ?? 1}
               usdExchangeRate={usdExchangeRate ?? 1}
               tokenUnit={tokenUnit}
+              selectedGroup={groupFilter}
               showRechargePrice={showRechargePrice}
             />
           )}

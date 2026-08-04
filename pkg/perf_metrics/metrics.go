@@ -20,6 +20,8 @@ var hotBuckets sync.Map
 // hiding fields or making response-only privacy hardening changes.
 const seriesSchema = "dbcd0a3c01b55203"
 
+const publicMinRequestCount int64 = 100
+
 func Init() {
 	go flushLoop()
 }
@@ -171,9 +173,20 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 		return true
 	})
 
+	return buildSummaryAllResult(totals, modelBuckets), nil
+}
+
+// buildSummaryAllResult 汇总请求量加权成功率，并过滤不足以公开展示的小样本模型。
+func buildSummaryAllResult(totals map[string]counters, modelBuckets map[string]map[int64]counters) SummaryAllResult {
+	overall := counters{}
 	models := make([]ModelSummary, 0, len(totals))
 	for name, total := range totals {
 		if total.requestCount == 0 {
+			continue
+		}
+		overall.requestCount += total.requestCount
+		overall.successCount += total.successCount
+		if total.requestCount < publicMinRequestCount {
 			continue
 		}
 		avgLatency := total.totalLatencyMs / total.requestCount
@@ -195,7 +208,10 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 		return models[i].RequestCount > models[j].RequestCount
 	})
 
-	return SummaryAllResult{Models: models}, nil
+	return SummaryAllResult{
+		SuccessRate: math.Round(successRate(overall)*100) / 100,
+		Models:      models,
+	}
 }
 
 func mergeModelTotals(totals map[string]counters, modelName string, value counters) {
@@ -288,6 +304,7 @@ func mergeCounters(merged map[bucketKey]counters, key bucketKey, value counters)
 
 func buildQueryResult(modelName string, merged map[bucketKey]counters) QueryResult {
 	groupBuckets := map[string]map[int64]counters{}
+	requestCount := int64(0)
 	for key, value := range merged {
 		if value.requestCount == 0 {
 			continue
@@ -295,7 +312,11 @@ func buildQueryResult(modelName string, merged map[bucketKey]counters) QueryResu
 		if _, ok := groupBuckets[key.group]; !ok {
 			groupBuckets[key.group] = map[int64]counters{}
 		}
+		requestCount += value.requestCount
 		groupBuckets[key.group][key.bucketTs] = value
+	}
+	if requestCount < publicMinRequestCount {
+		return QueryResult{ModelName: modelName, SeriesSchema: seriesSchema, Groups: []GroupResult{}}
 	}
 
 	groups := make([]string, 0, len(groupBuckets))

@@ -24,7 +24,11 @@ import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { getPerfMetricsSummary } from '@/features/performance-metrics/api'
 
-import { DEFAULT_PRICING_PAGE_SIZE, DEFAULT_TOKEN_UNIT } from '../constants'
+import {
+  DEFAULT_PRICING_PAGE_SIZE,
+  DEFAULT_TOKEN_UNIT,
+  FILTER_ALL,
+} from '../constants'
 import type { PricingModel, TokenUnit } from '../types'
 import { ModelCard } from './model-card'
 import type { ModelPerfBadgeData } from './model-perf-badge'
@@ -44,12 +48,14 @@ export function ModelCardGrid(props: ModelCardGridProps) {
   const [page, setPage] = useState(1)
   const pageSize = DEFAULT_PRICING_PAGE_SIZE
   const tokenUnit = props.tokenUnit ?? DEFAULT_TOKEN_UNIT
+  const performanceGroup =
+    props.selectedGroup === FILTER_ALL ? undefined : props.selectedGroup
   const totalPages = Math.max(1, Math.ceil(props.models.length / pageSize))
   const currentPage = Math.min(page, totalPages)
 
   const perfQuery = useQuery({
-    queryKey: ['perf-metrics-summary', 24],
-    queryFn: () => getPerfMetricsSummary(24),
+    queryKey: ['perf-metrics-summary', 24, performanceGroup],
+    queryFn: () => getPerfMetricsSummary(24, performanceGroup),
     staleTime: 60 * 1000,
     retry: false,
   })

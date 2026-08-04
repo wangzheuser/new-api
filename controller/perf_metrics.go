@@ -19,7 +19,19 @@ func GetPerfMetricsSummary(c *gin.Context) {
 		}
 	}
 
-	activeGroups := append(lo.Keys(ratio_setting.GetGroupRatioCopy()), "auto")
+	activeRatios := ratio_setting.GetGroupRatioCopy()
+	activeGroups := append(lo.Keys(activeRatios), "auto")
+	if group := c.Query("group"); group != "" {
+		if _, ok := activeRatios[group]; !ok && group != "auto" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "group is invalid",
+			})
+			return
+		}
+		activeGroups = []string{group}
+	}
+
 	result, err := perfmetrics.QuerySummaryAll(hours, activeGroups)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{

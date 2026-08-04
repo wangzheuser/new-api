@@ -58,7 +58,7 @@ import {
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { cn } from '@/lib/utils'
 
-import { DEFAULT_TOKEN_UNIT } from '../constants'
+import { DEFAULT_TOKEN_UNIT, FILTER_ALL } from '../constants'
 import { usePricingData } from '../hooks/use-pricing-data'
 import {
   getDynamicPriceEntries,
@@ -174,11 +174,16 @@ function OverviewMetric(props: {
   )
 }
 
-function OverviewSummaryGrid(props: { model: PricingModel }) {
+function OverviewSummaryGrid(props: {
+  model: PricingModel
+  selectedGroup?: string
+}) {
   const { t } = useTranslation()
+  const performanceGroup =
+    props.selectedGroup === FILTER_ALL ? undefined : props.selectedGroup
   const metricsQuery = useQuery({
-    queryKey: ['perf-metrics', props.model.model_name],
-    queryFn: () => getPerfMetrics(props.model.model_name, 24),
+    queryKey: ['perf-metrics', props.model.model_name, performanceGroup],
+    queryFn: () => getPerfMetrics(props.model.model_name, 24, performanceGroup),
     staleTime: 60 * 1000,
   })
 
@@ -1134,6 +1139,7 @@ export interface ModelDetailsContentProps {
   priceRate: number
   usdExchangeRate: number
   tokenUnit: TokenUnit
+  selectedGroup?: string
   showRechargePrice?: boolean
 }
 
@@ -1167,7 +1173,10 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
         </TabsList>
 
         <TabsContent value='overview' className='space-y-6 outline-none'>
-          <OverviewSummaryGrid model={props.model} />
+          <OverviewSummaryGrid
+            model={props.model}
+            selectedGroup={props.selectedGroup}
+          />
 
           <section className='bg-card/60 space-y-5 rounded-xl border p-4 shadow-sm'>
             <SectionTitle>{t('Pricing')}</SectionTitle>
@@ -1197,7 +1206,10 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
         </TabsContent>
 
         <TabsContent value='performance' className='outline-none'>
-          <ModelDetailsPerformance model={props.model} />
+          <ModelDetailsPerformance
+            model={props.model}
+            selectedGroup={props.selectedGroup}
+          />
         </TabsContent>
 
         <TabsContent value='api' className='outline-none'>
@@ -1337,6 +1349,7 @@ export function ModelDetails() {
           priceRate={priceRate ?? 1}
           usdExchangeRate={usdExchangeRate ?? 1}
           tokenUnit={tokenUnit}
+          selectedGroup={search.group}
           showRechargePrice={search.rechargePrice ?? false}
           endpointMap={
             (endpointMap as Record<
