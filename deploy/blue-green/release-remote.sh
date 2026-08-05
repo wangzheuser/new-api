@@ -434,7 +434,10 @@ action_finalize() {
     [[ "$(public_version)" == "$VERSION" ]]
     [[ "$i" -eq 5 ]] || sleep 5
   done
-  printf 'finalize=passed production=%s old=%s old_state=exited version=%s\n' "$NEW" "$OLD" "$VERSION" | tee "$STATE_DIR/final.result"
+  # Only prune disposable Docker data; the stopped slot and its tagged image remain rollback-ready.
+  docker image prune --force >/dev/null
+  docker builder prune --force >/dev/null
+  printf 'finalize=passed production=%s old=%s old_state=exited version=%s docker_cleanup=passed\n' "$NEW" "$OLD" "$VERSION" | tee "$STATE_DIR/final.result"
 }
 
 action_rollback() {

@@ -233,6 +233,9 @@ CONFIRM_FINALIZE=<release-id> ./release-remote.sh finalize --execute
 ```
 
 旧容器和旧镜像保留用于回滚。停止后连续验证新槽位健康、Nginx 内部版本和公网版本。
+验证通过后，`finalize` 自动执行 `docker image prune --force` 和
+`docker builder prune --force`，清理 dangling 镜像与构建缓存。该清理不使用 `-a`，不会
+移除仍由容器引用或带标签的回滚镜像，也不会清理卷、网络和运行中的容器。
 
 ## 10. 回滚
 
