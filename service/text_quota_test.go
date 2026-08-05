@@ -196,6 +196,7 @@ func TestCalculateTextQuotaSummaryUsesClaudeBillingUsageBeforeTopLevelUsage(t *t
 	require.Equal(t, 20, summary.CacheCreationTokens)
 	require.Equal(t, 12, summary.CacheCreationTokens5m)
 	require.Equal(t, 8, summary.CacheCreationTokens1h)
+	require.Equal(t, 70, summary.InputTokens)
 	require.Equal(t, 118, summary.Quota)
 }
 
@@ -237,6 +238,7 @@ func TestCalculateTextQuotaSummaryUsesGeminiBillingUsageBeforeTopLevelUsage(t *t
 	require.Equal(t, 105, summary.PromptTokens)
 	require.Equal(t, 23, summary.CompletionTokens)
 	require.Equal(t, 7, summary.CacheTokens)
+	require.Equal(t, 98, summary.InputTokens)
 	require.Equal(t, 128, summary.TotalTokens)
 	require.Equal(t, 145, summary.Quota)
 }
@@ -273,6 +275,7 @@ func TestCalculateTextQuotaSummaryUsesOpenAIBillingUsageBeforeTopLevelUsage(t *t
 	require.False(t, summary.IsClaudeUsageSemantic)
 	require.Equal(t, dto.BillingUsageSemanticOpenAI, summary.UsageSemantic)
 	require.Equal(t, 80, summary.PromptTokens)
+	require.Equal(t, 80, summary.InputTokens)
 	require.Equal(t, 9, summary.CompletionTokens)
 	require.Equal(t, 89, summary.TotalTokens)
 	require.Equal(t, 98, summary.Quota)
@@ -405,6 +408,7 @@ func TestCalculateTextQuotaSummaryBillsOpenAICacheWriteTokens(t *testing.T) {
 		summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
 
 		require.Equal(t, 1470, summary.CacheCreationTokens)
+		require.Equal(t, 3, summary.InputTokens)
 		// (1473-0-1470) + 1470*1.25 + 19*2 = 3 + 1837.5 + 38 = 1878.5 => 1879
 		require.Equal(t, 1879, summary.Quota)
 	})
@@ -426,6 +430,7 @@ func TestCalculateTextQuotaSummaryBillsOpenAICacheWriteTokens(t *testing.T) {
 
 		require.Equal(t, 3619, summary.PromptTokens)
 		require.Equal(t, 3616, summary.CacheCreationTokens)
+		require.Zero(t, summary.InputTokens)
 		// max(3619-2921-3616, 0) + 2921*0.1 + 3616*1.25 + 36*2 = 4884.1 => 4884
 		require.Equal(t, 4884, summary.Quota)
 	})
@@ -465,6 +470,7 @@ func TestCalculateTextQuotaSummarySeparatesOpenRouterCacheReadFromPromptBilling(
 	// but billing still separates normal input from cache read tokens.
 	// quota = (2604 - 2432) + 2432*0.1 + 383 = 798.2 => 798
 	require.Equal(t, 2604, summary.PromptTokens)
+	require.Equal(t, 172, summary.InputTokens)
 	require.Equal(t, 798, summary.Quota)
 }
 
@@ -500,6 +506,7 @@ func TestCalculateTextQuotaSummarySeparatesOpenRouterCacheCreationFromPromptBill
 	// prompt_tokens is still logged as total input, but cache creation is billed separately.
 	// quota = (2604 - 100) + 100*1.25 + 383 = 3012
 	require.Equal(t, 2604, summary.PromptTokens)
+	require.Equal(t, 2504, summary.InputTokens)
 	require.Equal(t, 3012, summary.Quota)
 }
 

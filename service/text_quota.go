@@ -24,6 +24,7 @@ import (
 type textQuotaSummary struct {
 	PromptTokens             int
 	CompletionTokens         int
+	InputTokens              int
 	TotalTokens              int
 	CacheTokens              int
 	CacheCreationTokens      int
@@ -228,6 +229,15 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 			}
 		}
 		summary.PromptTokens -= summary.CacheCreationTokens
+	}
+
+	// 归一化常规输入，确保它与缓存读取、缓存创建是互斥统计口径。
+	summary.InputTokens = summary.PromptTokens
+	if !summary.IsClaudeUsageSemantic && !legacyClaudeDerived {
+		summary.InputTokens -= summary.CacheTokens + summary.CacheCreationTokens
+	}
+	if summary.InputTokens < 0 {
+		summary.InputTokens = 0
 	}
 
 	dPromptTokens := decimal.NewFromInt(int64(summary.PromptTokens))
@@ -489,18 +499,21 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	attachQuotaSaturation(ctx, relayInfo, other)
 
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
-		ChannelId:        relayInfo.ChannelId,
-		PromptTokens:     summary.PromptTokens,
-		CompletionTokens: summary.CompletionTokens,
-		ModelName:        logModel,
-		TokenName:        summary.TokenName,
-		Quota:            summary.Quota,
-		Content:          logContent,
-		TokenId:          relayInfo.TokenId,
-		UseTimeSeconds:   int(summary.UseTimeSeconds),
-		IsStream:         relayInfo.IsStream,
-		Group:            relayInfo.UsingGroup,
-		Other:            other,
+		ChannelId:           relayInfo.ChannelId,
+		PromptTokens:        summary.PromptTokens,
+		CompletionTokens:    summary.CompletionTokens,
+		InputTokens:         &summary.InputTokens,
+		CacheCreationTokens: cacheWriteTokens,
+		CacheReadTokens:     summary.CacheTokens,
+		ModelName:           logModel,
+		TokenName:           summary.TokenName,
+		Quota:               summary.Quota,
+		Content:             logContent,
+		TokenId:             relayInfo.TokenId,
+		UseTimeSeconds:      int(summary.UseTimeSeconds),
+		IsStream:            relayInfo.IsStream,
+		Group:               relayInfo.UsingGroup,
+		Other:               other,
 	})
 	gopool.Go(func() {
 		perfmetrics.RecordRelaySample(relayInfo, true, int64(summary.CompletionTokens))

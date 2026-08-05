@@ -424,8 +424,16 @@ func migrateClickHouseLogDB() error {
 	if err := LOG_DB.Exec(clickHouseLogCreateTableSQL(ttlDays)).Error; err != nil {
 		return err
 	}
-	if err := LOG_DB.Exec("ALTER TABLE logs ADD COLUMN IF NOT EXISTS is_intermediate UInt8 DEFAULT 0 AFTER is_stream").Error; err != nil {
-		return err
+	columns := []string{
+		"is_intermediate UInt8 DEFAULT 0 AFTER is_stream",
+		"input_tokens Int32 DEFAULT 0 AFTER completion_tokens",
+		"cache_creation_tokens Int32 DEFAULT 0 AFTER input_tokens",
+		"cache_read_tokens Int32 DEFAULT 0 AFTER cache_creation_tokens",
+	}
+	for _, column := range columns {
+		if err := LOG_DB.Exec("ALTER TABLE logs ADD COLUMN IF NOT EXISTS " + column).Error; err != nil {
+			return err
+		}
 	}
 	return syncClickHouseLogTTL(ttlDays)
 }
@@ -467,6 +475,9 @@ CREATE TABLE IF NOT EXISTS logs (
 	quota Int32 DEFAULT 0,
 	prompt_tokens Int32 DEFAULT 0,
 	completion_tokens Int32 DEFAULT 0,
+	input_tokens Int32 DEFAULT 0,
+	cache_creation_tokens Int32 DEFAULT 0,
+	cache_read_tokens Int32 DEFAULT 0,
 	use_time Int32 DEFAULT 0,
 	is_stream UInt8 DEFAULT 0,
 	is_intermediate UInt8 DEFAULT 0,

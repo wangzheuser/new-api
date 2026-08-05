@@ -76,28 +76,31 @@ func sanitizeClickHouseLikePattern(input string) (string, error) {
 }
 
 type Log struct {
-	Id                int    `json:"id" gorm:"index:idx_created_at_id,priority:2;index:idx_user_id_id,priority:2"`
-	UserId            int    `json:"user_id" gorm:"index;index:idx_user_id_id,priority:1"`
-	CreatedAt         int64  `json:"created_at" gorm:"bigint;index:idx_created_at_id,priority:1;index:idx_created_at_type"`
-	Type              int    `json:"type" gorm:"index:idx_created_at_type"`
-	Content           string `json:"content"`
-	Username          string `json:"username" gorm:"index;index:index_username_model_name,priority:2;default:''"`
-	TokenName         string `json:"token_name" gorm:"index;default:''"`
-	ModelName         string `json:"model_name" gorm:"index;index:index_username_model_name,priority:1;default:''"`
-	Quota             int    `json:"quota" gorm:"default:0"`
-	PromptTokens      int    `json:"prompt_tokens" gorm:"default:0"`
-	CompletionTokens  int    `json:"completion_tokens" gorm:"default:0"`
-	UseTime           int    `json:"use_time" gorm:"default:0"`
-	IsStream          bool   `json:"is_stream"`
-	IsIntermediate    bool   `json:"is_intermediate,omitempty"`
-	ChannelId         int    `json:"channel" gorm:"index"`
-	ChannelName       string `json:"channel_name" gorm:"->"`
-	TokenId           int    `json:"token_id" gorm:"default:0;index"`
-	Group             string `json:"group" gorm:"index"`
-	Ip                string `json:"ip" gorm:"index;default:''"`
-	RequestId         string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
-	UpstreamRequestId string `json:"upstream_request_id,omitempty" gorm:"type:varchar(128);index:idx_logs_upstream_request_id;default:''"`
-	Other             string `json:"other"`
+	Id                  int    `json:"id" gorm:"index:idx_created_at_id,priority:2;index:idx_user_id_id,priority:2"`
+	UserId              int    `json:"user_id" gorm:"index;index:idx_user_id_id,priority:1"`
+	CreatedAt           int64  `json:"created_at" gorm:"bigint;index:idx_created_at_id,priority:1;index:idx_created_at_type"`
+	Type                int    `json:"type" gorm:"index:idx_created_at_type"`
+	Content             string `json:"content"`
+	Username            string `json:"username" gorm:"index;index:index_username_model_name,priority:2;default:''"`
+	TokenName           string `json:"token_name" gorm:"index;default:''"`
+	ModelName           string `json:"model_name" gorm:"index;index:index_username_model_name,priority:1;default:''"`
+	Quota               int    `json:"quota" gorm:"default:0"`
+	PromptTokens        int    `json:"prompt_tokens" gorm:"default:0"`
+	CompletionTokens    int    `json:"completion_tokens" gorm:"default:0"`
+	InputTokens         int    `json:"-" gorm:"default:0"`
+	CacheCreationTokens int    `json:"-" gorm:"default:0"`
+	CacheReadTokens     int    `json:"-" gorm:"default:0"`
+	UseTime             int    `json:"use_time" gorm:"default:0"`
+	IsStream            bool   `json:"is_stream"`
+	IsIntermediate      bool   `json:"is_intermediate,omitempty"`
+	ChannelId           int    `json:"channel" gorm:"index"`
+	ChannelName         string `json:"channel_name" gorm:"->"`
+	TokenId             int    `json:"token_id" gorm:"default:0;index"`
+	Group               string `json:"group" gorm:"index"`
+	Ip                  string `json:"ip" gorm:"index;default:''"`
+	RequestId           string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
+	UpstreamRequestId   string `json:"upstream_request_id,omitempty" gorm:"type:varchar(128);index:idx_logs_upstream_request_id;default:''"`
+	Other               string `json:"other"`
 }
 
 // don't use iota, avoid change log type value
@@ -348,20 +351,24 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 }
 
 type RecordConsumeLogParams struct {
-	ChannelId        int                    `json:"channel_id"`
-	PromptTokens     int                    `json:"prompt_tokens"`
-	CompletionTokens int                    `json:"completion_tokens"`
-	ModelName        string                 `json:"model_name"`
-	TokenName        string                 `json:"token_name"`
-	Quota            int                    `json:"quota"`
-	Content          string                 `json:"content"`
-	TokenId          int                    `json:"token_id"`
-	UseTimeSeconds   int                    `json:"use_time_seconds"`
-	IsStream         bool                   `json:"is_stream"`
-	Group            string                 `json:"group"`
-	Other            map[string]interface{} `json:"other"`
+	ChannelId           int                    `json:"channel_id"`
+	PromptTokens        int                    `json:"prompt_tokens"`
+	CompletionTokens    int                    `json:"completion_tokens"`
+	InputTokens         *int                   `json:"input_tokens,omitempty"`
+	CacheCreationTokens int                    `json:"cache_creation_tokens"`
+	CacheReadTokens     int                    `json:"cache_read_tokens"`
+	ModelName           string                 `json:"model_name"`
+	TokenName           string                 `json:"token_name"`
+	Quota               int                    `json:"quota"`
+	Content             string                 `json:"content"`
+	TokenId             int                    `json:"token_id"`
+	UseTimeSeconds      int                    `json:"use_time_seconds"`
+	IsStream            bool                   `json:"is_stream"`
+	Group               string                 `json:"group"`
+	Other               map[string]interface{} `json:"other"`
 }
 
+// RecordConsumeLog persists one settled consumption record and its normalized token breakdown.
 func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) {
 	if !common.LogConsumeEnabled {
 		return
@@ -372,6 +379,11 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
 	createdAt := common.GetTimestamp()
 	otherStr := common.MapToJsonStr(params.Other)
+	inputTokens := params.PromptTokens
+	if params.InputTokens != nil {
+		// 使用计费阶段归一化后的常规输入，避免缓存 Token 在汇总时重复计算。
+		inputTokens = *params.InputTokens
+	}
 	// 判断是否需要记录 IP
 	needRecordIp := false
 	if settingMap, err := GetUserSetting(userId, false); err == nil {
@@ -380,21 +392,24 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		}
 	}
 	log := &Log{
-		UserId:           userId,
-		Username:         username,
-		CreatedAt:        createdAt,
-		Type:             LogTypeConsume,
-		Content:          params.Content,
-		PromptTokens:     params.PromptTokens,
-		CompletionTokens: params.CompletionTokens,
-		TokenName:        params.TokenName,
-		ModelName:        params.ModelName,
-		Quota:            params.Quota,
-		ChannelId:        params.ChannelId,
-		TokenId:          params.TokenId,
-		UseTime:          params.UseTimeSeconds,
-		IsStream:         params.IsStream,
-		Group:            params.Group,
+		UserId:              userId,
+		Username:            username,
+		CreatedAt:           createdAt,
+		Type:                LogTypeConsume,
+		Content:             params.Content,
+		PromptTokens:        params.PromptTokens,
+		CompletionTokens:    params.CompletionTokens,
+		InputTokens:         inputTokens,
+		CacheCreationTokens: params.CacheCreationTokens,
+		CacheReadTokens:     params.CacheReadTokens,
+		TokenName:           params.TokenName,
+		ModelName:           params.ModelName,
+		Quota:               params.Quota,
+		ChannelId:           params.ChannelId,
+		TokenId:             params.TokenId,
+		UseTime:             params.UseTimeSeconds,
+		IsStream:            params.IsStream,
+		Group:               params.Group,
 		Ip: func() string {
 			if needRecordIp {
 				return c.ClientIP()
@@ -634,13 +649,24 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 }
 
 type Stat struct {
-	Quota int `json:"quota"`
-	Rpm   int `json:"rpm"`
-	Tpm   int `json:"tpm"`
+	Quota               int   `json:"quota"`
+	Rpm                 int   `json:"rpm"`
+	Tpm                 int   `json:"tpm"`
+	RequestCount        int64 `json:"request_count"`
+	InputTokens         int64 `json:"input_tokens"`
+	OutputTokens        int64 `json:"output_tokens"`
+	CacheCreationTokens int64 `json:"cache_creation_tokens"`
+	CacheReadTokens     int64 `json:"cache_read_tokens"`
 }
 
-func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
-	tx := LOG_DB.Table("logs").Select("COALESCE(sum(quota), 0) quota")
+// SumUsedQuota returns usage rates and optionally the administrator-only range breakdown.
+func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string, requestId string, upstreamRequestId string, includeTokenBreakdown bool) (stat Stat, err error) {
+	rangeColumns := "COALESCE(sum(quota), 0) quota"
+	if includeTokenBreakdown {
+		// 管理员明细随现有范围扫描一次聚合，避免额外查询和 JSON 解析。
+		rangeColumns += ", count(*) request_count, COALESCE(sum(CASE WHEN input_tokens = 0 AND cache_creation_tokens = 0 AND cache_read_tokens = 0 THEN prompt_tokens ELSE input_tokens END), 0) input_tokens, COALESCE(sum(completion_tokens), 0) output_tokens, COALESCE(sum(cache_creation_tokens), 0) cache_creation_tokens, COALESCE(sum(cache_read_tokens), 0) cache_read_tokens"
+	}
+	tx := LOG_DB.Table("logs").Select(rangeColumns)
 
 	// 为rpm和tpm创建单独的查询
 	rpmTpmQuery := LOG_DB.Table("logs").Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm")
@@ -654,6 +680,14 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	if tokenName != "" {
 		tx = tx.Where("token_name = ?", tokenName)
 		rpmTpmQuery = rpmTpmQuery.Where("token_name = ?", tokenName)
+	}
+	if requestId != "" {
+		tx = tx.Where("request_id = ?", requestId)
+		rpmTpmQuery = rpmTpmQuery.Where("request_id = ?", requestId)
+	}
+	if upstreamRequestId != "" {
+		tx = tx.Where("upstream_request_id = ?", upstreamRequestId)
+		rpmTpmQuery = rpmTpmQuery.Where("upstream_request_id = ?", upstreamRequestId)
 	}
 	if startTimestamp != 0 {
 		tx = tx.Where("created_at >= ?", startTimestamp)

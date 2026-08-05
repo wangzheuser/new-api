@@ -3,7 +3,9 @@ package controller
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -13,6 +15,58 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestLogStatsExposeTokenBreakdownOnlyToAdmin verifies the aggregate contract and self-query isolation.
+func TestLogStatsExposeTokenBreakdownOnlyToAdmin(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Log{}))
+	now := time.Now().Unix()
+	require.NoError(t, db.Create([]*model.Log{
+		{
+			UserId: 1, Username: "alice", CreatedAt: now, Type: model.LogTypeConsume,
+			Quota: 100, PromptTokens: 170, CompletionTokens: 20, InputTokens: 100,
+			CacheCreationTokens: 30, CacheReadTokens: 40, RequestId: "req-new",
+		},
+		{
+			UserId: 1, Username: "alice", CreatedAt: now, Type: model.LogTypeConsume,
+			Quota: 50, PromptTokens: 50, CompletionTokens: 5, RequestId: "req-legacy",
+		},
+	}).Error)
+
+	type logStatsResponse struct {
+		Success bool                   `json:"success"`
+		Data    map[string]interface{} `json:"data"`
+	}
+
+	adminRecorder := httptest.NewRecorder()
+	adminContext, _ := gin.CreateTestContext(adminRecorder)
+	adminContext.Request = httptest.NewRequest(http.MethodGet, "/api/log/stat?start_timestamp="+strconv.FormatInt(now-1, 10), nil)
+	GetLogsStat(adminContext)
+
+	var adminResponse logStatsResponse
+	require.NoError(t, common.Unmarshal(adminRecorder.Body.Bytes(), &adminResponse))
+	require.True(t, adminResponse.Success)
+	assert.EqualValues(t, 2, adminResponse.Data["request_count"])
+	assert.EqualValues(t, 150, adminResponse.Data["input_tokens"])
+	assert.EqualValues(t, 25, adminResponse.Data["output_tokens"])
+	assert.EqualValues(t, 30, adminResponse.Data["cache_creation_tokens"])
+	assert.EqualValues(t, 40, adminResponse.Data["cache_read_tokens"])
+
+	selfRecorder := httptest.NewRecorder()
+	selfContext, _ := gin.CreateTestContext(selfRecorder)
+	selfContext.Request = httptest.NewRequest(http.MethodGet, "/api/log/self/stat?start_timestamp="+strconv.FormatInt(now-1, 10), nil)
+	selfContext.Set("username", "alice")
+	GetLogsSelfStat(selfContext)
+
+	var selfResponse logStatsResponse
+	require.NoError(t, common.Unmarshal(selfRecorder.Body.Bytes(), &selfResponse))
+	require.True(t, selfResponse.Success)
+	assert.NotContains(t, selfResponse.Data, "request_count")
+	assert.NotContains(t, selfResponse.Data, "input_tokens")
+	assert.NotContains(t, selfResponse.Data, "output_tokens")
+	assert.NotContains(t, selfResponse.Data, "cache_creation_tokens")
+	assert.NotContains(t, selfResponse.Data, "cache_read_tokens")
+}
 
 // TestLogListFinalResultVisibility verifies the admin default and the user-enforced final-result contract.
 func TestLogListFinalResultVisibility(t *testing.T) {
