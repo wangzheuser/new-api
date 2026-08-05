@@ -52,6 +52,7 @@ export const subscriptionPlanSchema = z.object({
     .default('independent'),
   total_amount: z.number(),
   entitlement_group: z.string().optional(),
+  grant_groups: z.array(z.string()).optional().default([]),
   upgrade_group: z.string().optional(),
   downgrade_group: z.string().optional(),
   stripe_price_id: z.string().optional(),
@@ -81,6 +82,7 @@ export const userSubscriptionSchema = z.object({
   amount_used: z.number(),
   allocation_count: z.number().optional().default(1),
   entitlement_group: z.string().optional(),
+  grant_groups: z.array(z.string()).optional().default([]),
   next_reset_time: z.number().optional(),
 })
 

@@ -428,6 +428,9 @@ func HardDeleteUserById(id int) error {
 		if err := deleteUserOAuthBindingsByUserId(tx, id); err != nil {
 			return err
 		}
+		if err := tx.Where("user_id = ?", id).Delete(&UserGroupGrant{}).Error; err != nil {
+			return err
+		}
 		return tx.Unscoped().Delete(&User{}, "id = ?", id).Error
 	}); err != nil {
 		return err

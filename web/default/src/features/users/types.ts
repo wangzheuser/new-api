@@ -131,6 +131,40 @@ export interface ManageUserQuotaPayload {
   value: number
 }
 
+export interface UserGroupGrant {
+  id: number
+  user_id: number
+  group: string
+  expires_at: number
+  created_at: number
+  updated_at: number
+  active: boolean
+}
+
+export interface SubscriptionGroupGrant {
+  subscription_id: number
+  plan_id: number
+  groups: string[]
+  start_time: number
+  end_time: number
+  status: string
+}
+
+export interface UserGroupGrantData {
+  base_group: string
+  system_groups: string[]
+  manual_grants: UserGroupGrant[]
+  subscription_grants: SubscriptionGroupGrant[]
+  effective_groups: string[]
+}
+
+export interface ReplaceUserGroupGrantsPayload {
+  grants: Array<{
+    group: string
+    expires_at: number
+  }>
+}
+
 // ============================================================================
 // Dialog Types
 // ============================================================================

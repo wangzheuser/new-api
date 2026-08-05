@@ -146,11 +146,14 @@ export function ApiKeyGroupCombobox({
         <span className='flex min-w-0 flex-1 items-center justify-between gap-2 sm:gap-3'>
           <span className='min-w-0'>
             <span className='block truncate font-medium'>
-              {selectedOption?.label || placeholder || t('Select a group')}
+              {selectedOption?.label ||
+                value ||
+                placeholder ||
+                t('Select a group')}
             </span>
-            {selectedOption?.desc && (
+            {(selectedOption?.desc || (value && !selectedOption)) && (
               <span className='text-muted-foreground block truncate text-[11px] sm:text-xs'>
-                {selectedOption.desc}
+                {selectedOption?.desc || t('Unavailable group')}
               </span>
             )}
           </span>

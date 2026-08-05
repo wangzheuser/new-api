@@ -27,6 +27,8 @@ import type {
   UserFormData,
   ManageUserAction,
   ManageUserQuotaPayload,
+  ReplaceUserGroupGrantsPayload,
+  UserGroupGrantData,
   ApiResponse,
 } from './types'
 
@@ -148,6 +150,27 @@ export async function resetUserTwoFA(id: number): Promise<ApiResponse> {
  */
 export async function getGroups(): Promise<ApiResponse<string[]>> {
   const res = await api.get('/api/group/')
+  return res.data
+}
+
+/**
+ * Get a user's base group and all manual or subscription group benefits.
+ */
+export async function getUserGroupGrants(
+  userId: number
+): Promise<ApiResponse<UserGroupGrantData>> {
+  const res = await api.get(`/api/user/${userId}/group-grants`)
+  return res.data
+}
+
+/**
+ * Replace all administrator-managed group benefits for a user.
+ */
+export async function replaceUserGroupGrants(
+  userId: number,
+  payload: ReplaceUserGroupGrantsPayload
+): Promise<ApiResponse<UserGroupGrantData>> {
+  const res = await api.put(`/api/user/${userId}/group-grants`, payload)
   return res.data
 }
 

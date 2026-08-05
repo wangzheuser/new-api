@@ -319,14 +319,24 @@ export function SubscriptionPurchaseDialog(props: Props) {
               <span className='text-right text-sm'>{repeatPurchaseLabel}</span>
             </div>
           )}
-          {plan.entitlement_group && (
-            <div className='flex items-center justify-between gap-4'>
-              <span className='text-muted-foreground text-sm'>
-                {t('Entitlement Group')}
-              </span>
-              <GroupBadge group={plan.entitlement_group} />
-            </div>
-          )}
+          {[
+            ...new Set([
+              ...(plan.grant_groups || []),
+              plan.entitlement_group || '',
+            ]),
+          ]
+            .filter(Boolean)
+            .map((group) => (
+              <div
+                key={group}
+                className='flex items-center justify-between gap-4'
+              >
+                <span className='text-muted-foreground text-sm'>
+                  {t('Benefit Group')}
+                </span>
+                <GroupBadge group={group} />
+              </div>
+            ))}
           {plan.upgrade_group && (
             <div className='flex items-center justify-between'>
               <span className='text-muted-foreground text-sm'>

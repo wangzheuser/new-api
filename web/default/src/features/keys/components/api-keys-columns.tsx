@@ -53,30 +53,40 @@ function getQuotaProgressColor(percentage: number): string {
   return '[&_[data-slot=progress-indicator]]:bg-emerald-500'
 }
 
-function useGroupRatios(): Record<string, number> {
+function useGroupAccess(): {
+  ratios: Record<string, number>
+  availableGroups: string[]
+  loaded: boolean
+} {
   const { targetUserId } = useApiKeys()
   const { data } = useQuery({
     queryKey: ['user-groups', targetUserId],
     queryFn: () => getUserGroups(targetUserId),
     staleTime: 0,
     select: (res) => {
-      if (!res.success || !res.data) return {}
+      if (!res.success || !res.data) {
+        return { ratios: {}, availableGroups: [], loaded: false }
+      }
       const ratios: Record<string, number> = {}
       for (const [group, info] of Object.entries(res.data)) {
         if (typeof info.ratio === 'number') {
           ratios[group] = info.ratio
         }
       }
-      return ratios
+      return { ratios, availableGroups: Object.keys(res.data), loaded: true }
     },
   })
 
-  return data ?? {}
+  return {
+    ratios: data?.ratios ?? {},
+    availableGroups: data?.availableGroups ?? [],
+    loaded: data?.loaded ?? false,
+  }
 }
 
 export function useApiKeysColumns(now: number): ColumnDef<ApiKey>[] {
   const { t, i18n } = useTranslation()
-  const groupRatios = useGroupRatios()
+  const groupAccess = useGroupAccess()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const justNowLabel = t('Just now')
   const staleAccessThreshold = dayjs(now).subtract(3, 'month').valueOf()
@@ -203,7 +213,12 @@ export function useApiKeysColumns(now: number): ColumnDef<ApiKey>[] {
       cell: ({ row }) => {
         const apiKey = row.original
         const group = row.getValue('group') as string
-        const ratio = group && group !== 'auto' ? groupRatios[group] : undefined
+        const ratio =
+          group && group !== 'auto' ? groupAccess.ratios[group] : undefined
+        const unavailable =
+          groupAccess.loaded &&
+          !!group &&
+          !groupAccess.availableGroups.includes(group)
 
         if (group === 'auto') {
           return (
@@ -228,6 +243,18 @@ export function useApiKeysColumns(now: number): ColumnDef<ApiKey>[] {
                 </span>
               </TooltipContent>
             </Tooltip>
+          )
+        }
+        if (unavailable) {
+          return (
+            <BadgeCell className='-ml-1.5 gap-1.5'>
+              <GroupBadge group={group} />
+              <StatusBadge
+                label={t('Unavailable group')}
+                variant='danger'
+                copyable={false}
+              />
+            </BadgeCell>
           )
         }
         return (

@@ -111,7 +111,7 @@ func setupTokenControllerTestDB(t *testing.T) *gorm.DB {
 
 	db := openTokenControllerTestDB(t)
 	migrateTokenControllerTestDB(t, db)
-	if err := db.AutoMigrate(&model.User{}, &model.UserSubscription{}, &model.Log{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.UserSubscription{}, &model.UserGroupGrant{}, &model.Log{}); err != nil {
 		t.Fatalf("failed to migrate token authorization tables: %v", err)
 	}
 	return db

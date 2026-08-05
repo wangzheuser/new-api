@@ -31,6 +31,7 @@ import {
   sideDrawerFormClassName,
   sideDrawerHeaderClassName,
 } from '@/components/drawer-layout'
+import { GroupBadge } from '@/components/group-badge'
 import { StatusBadge } from '@/components/status-badge'
 import { TableId } from '@/components/table-id'
 import { Button } from '@/components/ui/button'
@@ -369,6 +370,16 @@ export function UserSubscriptionsDialog(props: Props) {
                           {t('Allocation count')}:{' '}
                           {Math.max(1, Number(sub.allocation_count || 1))}
                         </div>
+                        {[
+                          ...new Set([
+                            ...(sub.grant_groups || []),
+                            sub.entitlement_group || '',
+                          ]),
+                        ]
+                          .filter(Boolean)
+                          .map((group) => (
+                            <GroupBadge key={group} group={group} />
+                          ))}
                       </div>
                     )
                   },

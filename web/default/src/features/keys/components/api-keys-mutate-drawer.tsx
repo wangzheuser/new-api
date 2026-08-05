@@ -159,9 +159,10 @@ export function ApiKeysMutateDrawer({
     targetUserId,
   ])
 
-  // Correct group after groups load: if the form value is not in available groups, fall back
+  // New keys need a valid initial group; existing keys retain a revoked group so
+  // the operator can see why the key stopped working and choose a replacement.
   useEffect(() => {
-    if (groups.length === 0) return
+    if (isUpdate || groups.length === 0) return
     const currentGroup = form.getValues('group')
     if (currentGroup && !groups.some((g) => g.value === currentGroup)) {
       const fallback =
@@ -173,7 +174,7 @@ export function ApiKeysMutateDrawer({
         form.setValue('cross_group_retry', false)
       }
     }
-  }, [groups, form])
+  }, [groups, form, isUpdate])
 
   const onSubmit = async (data: ApiKeyFormValues) => {
     setIsSubmitting(true)
@@ -262,6 +263,11 @@ export function ApiKeysMutateDrawer({
     ? t('Enter quota in tokens')
     : t('Enter quota in {{currency}}', { currency: currencyLabel })
   const selectedGroup = form.watch('group')
+  const selectedGroupUnavailable =
+    isUpdate &&
+    groupsData?.success === true &&
+    !!selectedGroup &&
+    !groups.some((group) => group.value === selectedGroup)
   const unlimitedQuota = form.watch('unlimited_quota')
 
   return (
@@ -328,6 +334,13 @@ export function ApiKeysMutateDrawer({
                         placeholder={t('Select a group')}
                       />
                     </FormControl>
+                    {selectedGroupUnavailable && (
+                      <FormDescription className='text-destructive'>
+                        {t(
+                          'This API key group is no longer available. The key is inactive until another available group is selected.'
+                        )}
+                      </FormDescription>
+                    )}
                     <FormMessage />
                   </FormItem>
                 )}

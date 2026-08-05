@@ -56,7 +56,7 @@ export function getPlanFormSchema(t: TFunction) {
         'replace',
       ]),
       total_amount: z.coerce.number().min(0),
-      entitlement_group: z.string().optional(),
+      grant_groups: z.array(z.string()).default([]),
       upgrade_group: z.string().optional(),
       downgrade_group: z.string().optional(),
       stripe_price_id: z.string().optional(),
@@ -65,14 +65,14 @@ export function getPlanFormSchema(t: TFunction) {
     })
     .superRefine((values, context) => {
       if (
-        values.entitlement_group &&
-        (values.upgrade_group || values.downgrade_group)
+        values.upgrade_group &&
+        values.grant_groups.includes(values.upgrade_group)
       ) {
         context.addIssue({
           code: 'custom',
-          path: ['entitlement_group'],
+          path: ['grant_groups'],
           message: t(
-            'Entitlement group cannot be combined with upgrade or downgrade group'
+            'The upgrade group is already available as the base group'
           ),
         })
       }
@@ -97,7 +97,7 @@ export const PLAN_FORM_DEFAULTS: PlanFormValues = {
   max_purchase_per_user: 0,
   repeat_purchase_mode: 'independent',
   total_amount: 0,
-  entitlement_group: '',
+  grant_groups: [],
   upgrade_group: '',
   downgrade_group: '',
   stripe_price_id: '',
@@ -122,7 +122,9 @@ export function planToFormValues(plan: SubscriptionPlan): PlanFormValues {
     max_purchase_per_user: Number(plan.max_purchase_per_user || 0),
     repeat_purchase_mode: plan.repeat_purchase_mode || 'independent',
     total_amount: quotaUnitsToDollars(Number(plan.total_amount || 0)),
-    entitlement_group: plan.entitlement_group || '',
+    grant_groups: [
+      ...new Set([...(plan.grant_groups || []), plan.entitlement_group || '']),
+    ].filter(Boolean),
     upgrade_group: plan.upgrade_group || '',
     downgrade_group: plan.downgrade_group || '',
     stripe_price_id: plan.stripe_price_id || '',
@@ -147,7 +149,8 @@ export function formValuesToPlanPayload(values: PlanFormValues): PlanPayload {
       sort_order: Number(values.sort_order || 0),
       max_purchase_per_user: Number(values.max_purchase_per_user || 0),
       total_amount: parseQuotaFromDollars(Number(values.total_amount || 0)),
-      entitlement_group: values.entitlement_group || '',
+      entitlement_group: '',
+      grant_groups: values.grant_groups,
       upgrade_group: values.upgrade_group || '',
       downgrade_group: values.downgrade_group || '',
     },

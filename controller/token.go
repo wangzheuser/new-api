@@ -191,6 +191,9 @@ func validateUserTokenGroup(userId int, group string) error {
 	if group == "" {
 		return nil
 	}
+	if err := model.ReconcileDueUserSubscriptions(userId); err != nil {
+		return err
+	}
 	userGroup, err := model.GetUserGroup(userId, false)
 	if err != nil {
 		return err

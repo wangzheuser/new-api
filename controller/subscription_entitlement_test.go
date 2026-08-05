@@ -18,4 +18,11 @@ func TestNormalizeSubscriptionPlanGroups(t *testing.T) {
 
 	missing := &model.SubscriptionPlan{EntitlementGroup: "missing-entitlement-group"}
 	require.ErrorContains(t, normalizeSubscriptionPlanGroups(missing), "权益分组不存在")
+
+	combined := &model.SubscriptionPlan{UpgradeGroup: "vip", GrantGroups: model.GroupNames{" default ", "default"}}
+	require.NoError(t, normalizeSubscriptionPlanGroups(combined))
+	assert.Equal(t, model.GroupNames{"default"}, combined.GrantGroups)
+
+	duplicateUpgrade := &model.SubscriptionPlan{UpgradeGroup: "vip", GrantGroups: model.GroupNames{"vip"}}
+	require.ErrorContains(t, normalizeSubscriptionPlanGroups(duplicateUpgrade), "已自动可用")
 }

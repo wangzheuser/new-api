@@ -130,3 +130,30 @@ func TestNewBillingSessionLegacySubscriptionIgnoresOtherEntitlementGroups(t *tes
 	require.NoError(t, model.DB.First(&scoped, 7602).Error)
 	assert.Zero(t, scoped.AmountUsed)
 }
+
+// TestNewBillingSessionUsesMultiGroupSubscription verifies every snapshotted group selects the same subscription quota.
+func TestNewBillingSessionUsesMultiGroupSubscription(t *testing.T) {
+	truncate(t)
+	seedUser(t, 7701, 1000)
+	plan := &model.SubscriptionPlan{
+		Id: 7702, Title: "multi-group", Currency: "USD", DurationUnit: model.SubscriptionDurationHour,
+		DurationValue: 24, Enabled: true, TotalAmount: 100, GrantGroups: model.GroupNames{"group-a", "group-b"},
+	}
+	require.NoError(t, model.DB.Create(plan).Error)
+	now := time.Now().Unix()
+	require.NoError(t, model.DB.Create(&model.UserSubscription{
+		Id: 7702, UserId: 7701, PlanId: plan.Id, AmountTotal: 100, Status: "active",
+		StartTime: now - 60, EndTime: now + 3600, GrantGroups: model.GroupNames{"group-a", "group-b"},
+	}).Error)
+	relayInfo := &relaycommon.RelayInfo{
+		RequestId: "billing-multi-group", UserId: 7701, UsingGroup: "group-b", OriginModelName: "shared-model",
+		IsPlayground: true, UserSetting: dto.UserSetting{BillingPreference: "wallet_only"},
+	}
+
+	session, apiErr := NewBillingSession(newEntitlementBillingContext(), relayInfo, 25)
+	require.Nil(t, apiErr)
+	require.NotNil(t, session)
+	assert.Equal(t, BillingSourceSubscription, relayInfo.BillingSource)
+	assert.Equal(t, "group-b", relayInfo.SubscriptionEntitlementGroup)
+	assert.Equal(t, 7702, relayInfo.SubscriptionId)
+}

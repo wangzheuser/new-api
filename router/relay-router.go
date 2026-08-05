@@ -62,7 +62,7 @@ func SetRelayRouter(router *gin.Engine) {
 	playgroundRouter := router.Group("/pg")
 	playgroundRouter.Use(middleware.RouteTag("relay"))
 	playgroundRouter.Use(middleware.SystemPerformanceCheck())
-	playgroundRouter.Use(middleware.UserAuth(), middleware.Distribute())
+	playgroundRouter.Use(middleware.UserAuth(), middleware.Distribute(), middleware.ModelRequestRateLimit())
 	{
 		playgroundRouter.POST("/chat/completions", controller.Playground)
 	}
@@ -180,11 +180,11 @@ func SetRelayRouter(router *gin.Engine) {
 	relaySunoRouter := router.Group("/suno")
 	relaySunoRouter.Use(middleware.RouteTag("relay"))
 	relaySunoRouter.Use(middleware.SystemPerformanceCheck())
-	relaySunoRouter.Use(middleware.TokenAuth(), middleware.Distribute())
+	relaySunoRouter.Use(middleware.TokenAuth())
 	{
-		relaySunoRouter.POST("/submit/:action", controller.RelayTask)
-		relaySunoRouter.POST("/fetch", controller.RelayTaskFetch)
-		relaySunoRouter.GET("/fetch/:id", controller.RelayTaskFetch)
+		relaySunoRouter.POST("/submit/:action", middleware.ModelRequestRateLimit(), middleware.Distribute(), controller.RelayTask)
+		relaySunoRouter.POST("/fetch", middleware.Distribute(), controller.RelayTaskFetch)
+		relaySunoRouter.GET("/fetch/:id", middleware.Distribute(), controller.RelayTaskFetch)
 	}
 
 	relayGeminiRouter := router.Group("/v1beta")
@@ -203,23 +203,23 @@ func SetRelayRouter(router *gin.Engine) {
 
 func registerMjRouterGroup(relayMjRouter *gin.RouterGroup) {
 	relayMjRouter.GET("/image/:id", relay.RelayMidjourneyImage)
-	relayMjRouter.Use(middleware.TokenAuth(), middleware.Distribute())
+	relayMjRouter.Use(middleware.TokenAuth())
 	{
-		relayMjRouter.POST("/submit/action", controller.RelayMidjourney)
-		relayMjRouter.POST("/submit/shorten", controller.RelayMidjourney)
-		relayMjRouter.POST("/submit/modal", controller.RelayMidjourney)
-		relayMjRouter.POST("/submit/imagine", controller.RelayMidjourney)
-		relayMjRouter.POST("/submit/change", controller.RelayMidjourney)
-		relayMjRouter.POST("/submit/simple-change", controller.RelayMidjourney)
-		relayMjRouter.POST("/submit/describe", controller.RelayMidjourney)
-		relayMjRouter.POST("/submit/blend", controller.RelayMidjourney)
-		relayMjRouter.POST("/submit/edits", controller.RelayMidjourney)
-		relayMjRouter.POST("/submit/video", controller.RelayMidjourney)
+		relayMjRouter.POST("/submit/action", middleware.ModelRequestRateLimit(), middleware.Distribute(), controller.RelayMidjourney)
+		relayMjRouter.POST("/submit/shorten", middleware.ModelRequestRateLimit(), middleware.Distribute(), controller.RelayMidjourney)
+		relayMjRouter.POST("/submit/modal", middleware.ModelRequestRateLimit(), middleware.Distribute(), controller.RelayMidjourney)
+		relayMjRouter.POST("/submit/imagine", middleware.ModelRequestRateLimit(), middleware.Distribute(), controller.RelayMidjourney)
+		relayMjRouter.POST("/submit/change", middleware.ModelRequestRateLimit(), middleware.Distribute(), controller.RelayMidjourney)
+		relayMjRouter.POST("/submit/simple-change", middleware.ModelRequestRateLimit(), middleware.Distribute(), controller.RelayMidjourney)
+		relayMjRouter.POST("/submit/describe", middleware.ModelRequestRateLimit(), middleware.Distribute(), controller.RelayMidjourney)
+		relayMjRouter.POST("/submit/blend", middleware.ModelRequestRateLimit(), middleware.Distribute(), controller.RelayMidjourney)
+		relayMjRouter.POST("/submit/edits", middleware.ModelRequestRateLimit(), middleware.Distribute(), controller.RelayMidjourney)
+		relayMjRouter.POST("/submit/video", middleware.ModelRequestRateLimit(), middleware.Distribute(), controller.RelayMidjourney)
 		//relayMjRouter.POST("/notify", controller.RelayMidjourney)
-		relayMjRouter.GET("/task/:id/fetch", controller.RelayMidjourney)
-		relayMjRouter.GET("/task/:id/image-seed", controller.RelayMidjourney)
-		relayMjRouter.POST("/task/list-by-condition", controller.RelayMidjourney)
-		relayMjRouter.POST("/insight-face/swap", controller.RelayMidjourney)
-		relayMjRouter.POST("/submit/upload-discord-images", controller.RelayMidjourney)
+		relayMjRouter.GET("/task/:id/fetch", middleware.Distribute(), controller.RelayMidjourney)
+		relayMjRouter.GET("/task/:id/image-seed", middleware.Distribute(), controller.RelayMidjourney)
+		relayMjRouter.POST("/task/list-by-condition", middleware.Distribute(), controller.RelayMidjourney)
+		relayMjRouter.POST("/insight-face/swap", middleware.ModelRequestRateLimit(), middleware.Distribute(), controller.RelayMidjourney)
+		relayMjRouter.POST("/submit/upload-discord-images", middleware.ModelRequestRateLimit(), middleware.Distribute(), controller.RelayMidjourney)
 	}
 }

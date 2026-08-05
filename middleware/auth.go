@@ -118,6 +118,15 @@ func authHelper(c *gin.Context, minRole int) {
 		c.Abort()
 		return
 	}
+	if err := model.ReconcileDueUserSubscriptions(userId); err != nil {
+		common.SysLog(fmt.Sprintf("authHelper ReconcileDueUserSubscriptions error for user %d: %v", userId, err))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": common.TranslateMessage(c, i18n.MsgDatabaseError),
+		})
+		c.Abort()
+		return
+	}
 	authState, err := model.GetUserAuthState(userId)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -237,6 +246,15 @@ func TokenOrUserAuth() func(c *gin.Context) {
 		// Try session auth first (dashboard users)
 		session := sessions.Default(c)
 		if userId, ok := session.Get("id").(int); ok {
+			if err := model.ReconcileDueUserSubscriptions(userId); err != nil {
+				common.SysLog(fmt.Sprintf("TokenOrUserAuth ReconcileDueUserSubscriptions error for user %d: %v", userId, err))
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"success": false,
+					"message": common.TranslateMessage(c, i18n.MsgDatabaseError),
+				})
+				c.Abort()
+				return
+			}
 			authState, err := model.GetUserAuthState(userId)
 			if err != nil {
 				if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -343,6 +361,12 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 			return
 		}
 
+		if err := model.ReconcileDueUserSubscriptions(token.UserId); err != nil {
+			common.SysLog(fmt.Sprintf("TokenAuth ReconcileDueUserSubscriptions error for user %d: %v", token.UserId, err))
+			abortWithOpenAiMessage(c, http.StatusInternalServerError,
+				common.TranslateMessage(c, i18n.MsgDatabaseError))
+			return
+		}
 		userAuthState, err := model.GetUserAuthState(token.UserId)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -468,6 +492,12 @@ func TokenAuth() func(c *gin.Context) {
 			(tokenAuthState.TokenExpiredTime != -1 && tokenAuthState.TokenExpiredTime < common.GetTimestamp()) {
 			abortWithOpenAiMessage(c, http.StatusUnauthorized,
 				common.TranslateMessage(c, i18n.MsgTokenInvalid))
+			return
+		}
+		if err := model.ReconcileDueUserSubscriptions(token.UserId); err != nil {
+			common.SysLog(fmt.Sprintf("TokenAuth ReconcileDueUserSubscriptions error for user %d: %v", token.UserId, err))
+			abortWithOpenAiMessage(c, http.StatusInternalServerError,
+				common.TranslateMessage(c, i18n.MsgDatabaseError))
 			return
 		}
 		userAuthState, err := model.GetUserAuthState(token.UserId)

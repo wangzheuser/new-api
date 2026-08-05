@@ -11,6 +11,35 @@ type InMemoryRateLimiter struct {
 	expirationDuration time.Duration
 }
 
+// pruneExpiredRequests removes timestamps outside the active window.
+func (l *InMemoryRateLimiter) pruneExpiredRequests(key string, now, duration int64) []int64 {
+	queue, ok := l.store[key]
+	if !ok {
+		return nil
+	}
+	requests := *queue
+	firstActive := 0
+	for firstActive < len(requests) && now-requests[firstActive] >= duration {
+		firstActive++
+	}
+	if firstActive > 0 {
+		requests = append([]int64(nil), requests[firstActive:]...)
+		*queue = requests
+	}
+	return requests
+}
+
+// Available reports whether a request can be recorded without consuming capacity.
+func (l *InMemoryRateLimiter) Available(key string, maxRequestNum int, duration int64) bool {
+	if maxRequestNum <= 0 {
+		return true
+	}
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
+	requests := l.pruneExpiredRequests(key, time.Now().Unix(), duration)
+	return len(requests) < maxRequestNum
+}
+
 func (l *InMemoryRateLimiter) Init(expirationDuration time.Duration) {
 	if l.store == nil {
 		l.mutex.Lock()
@@ -43,28 +72,22 @@ func (l *InMemoryRateLimiter) clearExpiredItems() {
 
 // Request parameter duration's unit is seconds
 func (l *InMemoryRateLimiter) Request(key string, maxRequestNum int, duration int64) bool {
+	if maxRequestNum <= 0 {
+		return true
+	}
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
-	// [old <-- new]
-	queue, ok := l.store[key]
 	now := time.Now().Unix()
-	if ok {
-		if len(*queue) < maxRequestNum {
-			*queue = append(*queue, now)
-			return true
-		} else {
-			if now-(*queue)[0] >= duration {
-				*queue = (*queue)[1:]
-				*queue = append(*queue, now)
-				return true
-			} else {
-				return false
-			}
-		}
-	} else {
+	requests := l.pruneExpiredRequests(key, now, duration)
+	if len(requests) >= maxRequestNum {
+		return false
+	}
+	queue, ok := l.store[key]
+	if !ok {
 		s := make([]int64, 0, maxRequestNum)
 		l.store[key] = &s
-		*(l.store[key]) = append(*(l.store[key]), now)
+		queue = &s
 	}
+	*queue = append(*queue, now)
 	return true
 }

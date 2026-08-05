@@ -42,13 +42,13 @@ func GroupInUserUsableGroups(userGroup, groupName string) bool {
 	return ok
 }
 
-// GetUserEffectiveGroups returns the configured groups plus groups granted by active subscriptions.
+// GetUserEffectiveGroups returns configured groups plus active manual and subscription grants.
 func GetUserEffectiveGroups(userId int, userGroup string) (map[string]string, error) {
 	groups := GetUserUsableGroups(userGroup)
 	if userId <= 0 {
 		return groups, nil
 	}
-	entitlementGroups, err := model.GetActiveUserEntitlementGroups(userId)
+	entitlementGroups, err := model.GetActiveUserGrantedGroups(userId)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +56,7 @@ func GetUserEffectiveGroups(userId int, userGroup string) (map[string]string, er
 		group = strings.TrimSpace(group)
 		if group != "" {
 			if _, exists := groups[group]; !exists {
-				groups[group] = "订阅权益分组"
+				groups[group] = "权益分组"
 			}
 		}
 	}
@@ -68,7 +68,16 @@ func GroupInUserEffectiveGroups(userId int, userGroup, groupName string) (bool, 
 	if _, ok := GetUserUsableGroups(userGroup)[groupName]; ok {
 		return true, nil
 	}
-	return model.HasActiveUserSubscriptionForGroup(userId, groupName)
+	groups, err := model.GetActiveUserGrantedGroups(userId)
+	if err != nil {
+		return false, err
+	}
+	for _, group := range groups {
+		if group == groupName {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // GetUserAutoGroup 根据用户分组获取自动分组设置

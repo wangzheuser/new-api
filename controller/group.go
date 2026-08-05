@@ -32,6 +32,10 @@ func GetUserGroups(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if err := model.ReconcileDueUserSubscriptions(userId); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	userGroup, _ = model.GetUserGroup(userId, false)
 	userUsableGroups, err := service.GetUserEffectiveGroups(userId, userGroup)
 	if err != nil {

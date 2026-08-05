@@ -32,6 +32,7 @@ func normalizeSubscriptionPlanGroups(plan *model.SubscriptionPlan) error {
 	plan.EntitlementGroup = strings.TrimSpace(plan.EntitlementGroup)
 	plan.UpgradeGroup = strings.TrimSpace(plan.UpgradeGroup)
 	plan.DowngradeGroup = strings.TrimSpace(plan.DowngradeGroup)
+	plan.GrantGroups = model.NormalizeGroupNames(plan.GrantGroups)
 	groups := ratio_setting.GetGroupRatioCopy()
 	if plan.EntitlementGroup != "" {
 		if _, ok := groups[plan.EntitlementGroup]; !ok {
@@ -49,6 +50,14 @@ func normalizeSubscriptionPlanGroups(plan *model.SubscriptionPlan) error {
 	if plan.DowngradeGroup != "" {
 		if _, ok := groups[plan.DowngradeGroup]; !ok {
 			return fmt.Errorf("降级分组不存在")
+		}
+	}
+	for _, group := range plan.GrantGroups {
+		if _, ok := groups[group]; !ok {
+			return fmt.Errorf("权益分组 %s 不存在", group)
+		}
+		if group == plan.UpgradeGroup {
+			return fmt.Errorf("升级分组 %s 已自动可用，请从额外权益分组中移除", group)
 		}
 	}
 	return nil
@@ -253,6 +262,7 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
+	grantGroupsProvided := req.Plan.GrantGroups != nil
 	if strings.TrimSpace(req.Plan.Title) == "" {
 		common.ApiErrorMsg(c, "套餐标题不能为空")
 		return
@@ -333,6 +343,9 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		if req.Plan.AllowWalletOverflow != nil {
 			updateMap["allow_wallet_overflow"] = *req.Plan.AllowWalletOverflow
 		}
+		if grantGroupsProvided {
+			updateMap["grant_groups"] = req.Plan.GrantGroups
+		}
 		if err := tx.Model(&model.SubscriptionPlan{}).Where("id = ?", id).Updates(updateMap).Error; err != nil {
 			return err
 		}
@@ -394,6 +407,7 @@ func subscriptionAuditSnapshot(sub *model.UserSubscription) map[string]interface
 		"next_reset_time":   sub.NextResetTime,
 		"allocation_count":  sub.AllocationCount,
 		"entitlement_group": sub.EntitlementGroup,
+		"grant_groups":      sub.GrantGroups,
 	}
 }
 

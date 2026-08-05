@@ -16,8 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { Row } from '@tanstack/react-table'
 import { useNavigate } from '@tanstack/react-router'
+import type { Row } from '@tanstack/react-table'
 import {
   Pencil,
   Trash2,
@@ -30,6 +30,7 @@ import {
   Link2,
   CreditCard,
   Key,
+  Gift,
 } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -60,6 +61,7 @@ import {
 import { getUserActionMessage } from '../lib'
 import type { User, ManageUserAction } from '../types'
 import { UserBindingDialog } from './dialogs/user-binding-dialog'
+import { UserGroupGrantsSheet } from './user-group-grants-sheet'
 import { useUsers } from './users-provider'
 
 interface DataTableRowActionsProps {
@@ -75,6 +77,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const [resetTwoFAOpen, setResetTwoFAOpen] = useState(false)
   const [bindingDialogOpen, setBindingDialogOpen] = useState(false)
   const [subscriptionsDialogOpen, setSubscriptionsDialogOpen] = useState(false)
+  const [groupGrantsOpen, setGroupGrantsOpen] = useState(false)
 
   const handleEdit = () => {
     setCurrentRow(user)
@@ -226,6 +229,18 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         </DropdownMenuItem>
 
         <DropdownMenuItem
+          onSelect={(event) => {
+            event.preventDefault()
+            setGroupGrantsOpen(true)
+          }}
+        >
+          {t('Manage Benefit Groups')}
+          <DropdownMenuShortcut>
+            <Gift size={16} />
+          </DropdownMenuShortcut>
+        </DropdownMenuItem>
+
+        <DropdownMenuItem
           onClick={() =>
             navigate({
               to: '/keys',
@@ -315,6 +330,13 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
       <UserSubscriptionsDialog
         open={subscriptionsDialogOpen}
         onOpenChange={setSubscriptionsDialogOpen}
+        user={{ id: user.id, username: user.username }}
+        onSuccess={triggerRefresh}
+      />
+
+      <UserGroupGrantsSheet
+        open={groupGrantsOpen}
+        onOpenChange={setGroupGrantsOpen}
         user={{ id: user.id, username: user.username }}
         onSuccess={triggerRefresh}
       />

@@ -175,25 +175,33 @@ export function useSubscriptionsColumns(): ColumnDef<PlanRecord>[] {
         size: 150,
       },
       {
-        id: 'entitlement_group',
-        header: t('Entitlement Group'),
+        id: 'grant_groups',
+        header: t('Benefit Groups'),
         meta: { mobileHidden: true },
         cell: ({ row }) => {
-          const group = row.original.plan.entitlement_group
-          if (!group) {
+          const plan = row.original.plan
+          const groups = [
+            ...new Set([
+              ...(plan.grant_groups || []),
+              plan.entitlement_group || '',
+            ]),
+          ].filter(Boolean)
+          if (groups.length === 0) {
             return (
               <span className='text-muted-foreground'>
-                {t('No Entitlement Group')}
+                {t('No Benefit Groups')}
               </span>
             )
           }
           return (
             <BadgeCell>
-              <GroupBadge group={group} />
+              {groups.map((group) => (
+                <GroupBadge key={group} group={group} />
+              ))}
             </BadgeCell>
           )
         },
-        size: 130,
+        size: 180,
       },
       {
         id: 'upgrade_group',
