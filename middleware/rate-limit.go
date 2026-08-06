@@ -12,7 +12,7 @@ import (
 
 var timeFormat = "2006-01-02T15:04:05.000Z"
 
-var inMemoryRateLimiter common.InMemoryRateLimiter
+var inMemoryRateLimiter = &common.InMemoryRateLimiter{}
 
 var defNext = func(c *gin.Context) {
 	c.Next()

@@ -31,7 +31,7 @@ func setupModelRateLimitTest(t *testing.T, groupLimits string) *gin.Engine {
 	setting.ModelRequestRateLimitSuccessCount = 100
 	require.NoError(t, setting.UpdateModelRequestRateLimitGroupByJSONString(groupLimits))
 	common.RedisEnabled = false
-	inMemoryRateLimiter = common.InMemoryRateLimiter{}
+	inMemoryRateLimiter = &common.InMemoryRateLimiter{}
 
 	t.Cleanup(func() {
 		setting.ModelRequestRateLimitEnabled = previousEnabled
@@ -40,7 +40,7 @@ func setupModelRateLimitTest(t *testing.T, groupLimits string) *gin.Engine {
 		setting.ModelRequestRateLimitSuccessCount = previousSuccess
 		require.NoError(t, setting.UpdateModelRequestRateLimitGroupByJSONString(previousGroups))
 		common.RedisEnabled = previousRedisEnabled
-		inMemoryRateLimiter = common.InMemoryRateLimiter{}
+		inMemoryRateLimiter = &common.InMemoryRateLimiter{}
 	})
 
 	router := gin.New()
