@@ -3765,6 +3765,10 @@ export function ChannelMutateDrawer({
                                       value={field.value || {}}
                                       onChange={field.onChange}
                                       models={currentModelsArray}
+                                      channelId={channelId ?? undefined}
+                                      passThroughBodyEnabled={
+                                        currentPassThroughBodyEnabled
+                                      }
                                       disabled={isSubmitting}
                                     />
                                   </FormControl>

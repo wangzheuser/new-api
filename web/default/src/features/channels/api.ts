@@ -26,6 +26,8 @@ import type {
   Channel,
   ChannelBalanceResponse,
   ChannelOpsResponse,
+  ChannelPromptTestRequest,
+  ChannelPromptTestResponse,
   ChannelTestResponse,
   CopyChannelParams,
   CopyChannelResponse,
@@ -217,6 +219,21 @@ export async function testChannel(
   const res = await api.get(
     `/api/channel/test/${id}`,
     channelActionConfig({ params })
+  )
+  return res.data
+}
+
+/**
+ * Run a real model request with the current draft system prompt.
+ */
+export async function testChannelPromptEffect(
+  id: number,
+  data: ChannelPromptTestRequest
+): Promise<ChannelPromptTestResponse> {
+  const res = await api.post(
+    `/api/channel/test/${id}`,
+    data,
+    channelActionConfig()
   )
   return res.data
 }

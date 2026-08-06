@@ -25,6 +25,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -36,10 +37,28 @@ import (
 )
 
 type testResult struct {
-	context     *gin.Context
-	localErr    error
-	newAPIError *types.NewAPIError
+	context      *gin.Context
+	localErr     error
+	newAPIError  *types.NewAPIError
+	responseBody []byte
 }
+
+type channelTestOptions struct {
+	model             string
+	endpointType      string
+	isStream          bool
+	userPrompt        string
+	maxOutputTokens   uint
+	applySystemPrompt bool
+}
+
+type channelPromptTestRequest struct {
+	Model        string `json:"model"`
+	SystemPrompt string `json:"system_prompt"`
+	UserPrompt   string `json:"user_prompt"`
+}
+
+const maxChannelPromptTestUserPromptBytes = 16 * 1024
 
 func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointType string) string {
 	normalized := strings.TrimSpace(endpointType)
@@ -72,7 +91,7 @@ func resolveChannelTestUserID(c *gin.Context) (int, error) {
 	return rootUser.Id, nil
 }
 
-func testChannel(ctx context.Context, channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool) testResult {
+func testChannel(ctx context.Context, channel *model.Channel, testUserID int, options channelTestOptions) testResult {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -95,7 +114,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 
-	testModel = strings.TrimSpace(testModel)
+	testModel := strings.TrimSpace(options.model)
 	if testModel == "" {
 		if channel.TestModel != nil && *channel.TestModel != "" {
 			testModel = strings.TrimSpace(*channel.TestModel)
@@ -110,7 +129,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		}
 	}
 
-	endpointType = normalizeChannelTestEndpoint(channel, testModel, endpointType)
+	endpointType := normalizeChannelTestEndpoint(channel, testModel, options.endpointType)
 
 	requestPath := "/v1/chat/completions"
 
@@ -232,7 +251,18 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		}
 	}
 
-	request := buildTestRequest(testModel, endpointType, channel, isStream)
+	request := buildTestRequest(testModel, endpointType, channel, options)
+	if options.applySystemPrompt {
+		switch request.(type) {
+		case *dto.GeneralOpenAIRequest, *dto.OpenAIResponsesRequest:
+		default:
+			return testResult{
+				context:     c,
+				localErr:    errors.New("system prompt effect test only supports text generation models"),
+				newAPIError: types.NewError(errors.New("unsupported model endpoint"), types.ErrorCodeInvalidRequest),
+			}
+		}
+	}
 
 	info, err := relaycommon.GenRelayInfo(c, relayFormat, request, nil)
 
@@ -268,6 +298,15 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	testModel = info.UpstreamModelName
 	// 更新请求中的模型名称
 	request.SetModelName(testModel)
+	if options.applySystemPrompt {
+		if apiErr := relay.ApplySystemPromptForRequest(c, info, request); apiErr != nil {
+			return testResult{
+				context:     c,
+				localErr:    apiErr,
+				newAPIError: apiErr,
+			}
+		}
+	}
 
 	apiType, _ := common.ChannelType2APIType(channel.Type)
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact &&
@@ -466,7 +505,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 			newAPIError: respErr,
 		}
 	}
-	usage, usageErr := coerceTestUsage(usageA, isStream, info.GetEstimatePromptTokens())
+	usage, usageErr := coerceTestUsage(usageA, options.isStream, info.GetEstimatePromptTokens())
 	if usageErr != nil {
 		return testResult{
 			context:     c,
@@ -475,7 +514,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		}
 	}
 	result := w.Result()
-	respBody, err := readTestResponseBody(result.Body, isStream)
+	respBody, err := readTestResponseBody(result.Body, options.isStream)
 	if err != nil {
 		return testResult{
 			context:     c,
@@ -483,7 +522,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 			newAPIError: types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError),
 		}
 	}
-	if bodyErr := validateTestResponseBody(respBody, isStream); bodyErr != nil {
+	if bodyErr := validateTestResponseBody(respBody, options.isStream); bodyErr != nil {
 		return testResult{
 			context:     c,
 			localErr:    bodyErr,
@@ -510,11 +549,12 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		Group:            info.UsingGroup,
 		Other:            other,
 	})
-	common.SysLog(fmt.Sprintf("testing channel #%d, response: \n%s", channel.Id, string(respBody)))
+	common.SysLog(fmt.Sprintf("testing channel #%d completed, response_bytes=%d", channel.Id, len(respBody)))
 	return testResult{
-		context:     c,
-		localErr:    nil,
-		newAPIError: nil,
+		context:      c,
+		localErr:     nil,
+		newAPIError:  nil,
+		responseBody: respBody,
 	}
 }
 
@@ -692,8 +732,14 @@ func detectErrorMessageFromJSONBytes(jsonBytes []byte) string {
 	return message
 }
 
-func buildTestRequest(model string, endpointType string, channel *model.Channel, isStream bool) dto.Request {
-	testResponsesInput := json.RawMessage(`[{"role":"user","content":"hi"}]`)
+func buildTestRequest(model string, endpointType string, channel *model.Channel, options channelTestOptions) dto.Request {
+	userPrompt := options.userPrompt
+	if userPrompt == "" {
+		userPrompt = "hi"
+	}
+	testResponsesInput := json.RawMessage(common.GetJsonString([]map[string]string{{
+		"role": "user", "content": userPrompt,
+	}}))
 
 	// 根据端点类型构建不同的测试请求
 	if endpointType != "" {
@@ -723,9 +769,10 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 		case constant.EndpointTypeOpenAIResponse:
 			// 返回 OpenAIResponsesRequest
 			return &dto.OpenAIResponsesRequest{
-				Model:  model,
-				Input:  json.RawMessage(`[{"role":"user","content":"hi"}]`),
-				Stream: lo.ToPtr(isStream),
+				Model:           model,
+				Input:           testResponsesInput,
+				Stream:          lo.ToPtr(options.isStream),
+				MaxOutputTokens: lo.Ternary(options.maxOutputTokens > 0, lo.ToPtr(options.maxOutputTokens), nil),
 			}
 		case constant.EndpointTypeOpenAIResponseCompact:
 			// 返回 OpenAIResponsesCompactionRequest
@@ -741,16 +788,19 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 			}
 			req := &dto.GeneralOpenAIRequest{
 				Model:  model,
-				Stream: lo.ToPtr(isStream),
+				Stream: lo.ToPtr(options.isStream),
 				Messages: []dto.Message{
 					{
 						Role:    "user",
-						Content: "hi",
+						Content: userPrompt,
 					},
 				},
 				MaxTokens: lo.ToPtr(maxTokens),
 			}
-			if isStream {
+			if options.maxOutputTokens > 0 {
+				req.MaxTokens = lo.ToPtr(options.maxOutputTokens)
+			}
+			if options.isStream {
 				req.StreamOptions = &dto.StreamOptions{IncludeUsage: true}
 			}
 			return req
@@ -789,28 +839,35 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 	// Responses-only models (e.g. codex series)
 	if strings.Contains(strings.ToLower(model), "codex") {
 		return &dto.OpenAIResponsesRequest{
-			Model:  model,
-			Input:  json.RawMessage(`[{"role":"user","content":"hi"}]`),
-			Stream: lo.ToPtr(isStream),
+			Model:           model,
+			Input:           testResponsesInput,
+			Stream:          lo.ToPtr(options.isStream),
+			MaxOutputTokens: lo.Ternary(options.maxOutputTokens > 0, lo.ToPtr(options.maxOutputTokens), nil),
 		}
 	}
 
 	// Chat/Completion 请求 - 返回 GeneralOpenAIRequest
 	testRequest := &dto.GeneralOpenAIRequest{
 		Model:  model,
-		Stream: lo.ToPtr(isStream),
+		Stream: lo.ToPtr(options.isStream),
 		Messages: []dto.Message{
 			{
 				Role:    "user",
-				Content: "hi",
+				Content: userPrompt,
 			},
 		},
 	}
-	if isStream {
+	if options.isStream {
 		testRequest.StreamOptions = &dto.StreamOptions{IncludeUsage: true}
 	}
 
-	if dto.IsOpenAIReasoningOModel(model) {
+	if options.maxOutputTokens > 0 {
+		if dto.IsOpenAIReasoningOModel(model) {
+			testRequest.MaxCompletionTokens = lo.ToPtr(options.maxOutputTokens)
+		} else {
+			testRequest.MaxTokens = lo.ToPtr(options.maxOutputTokens)
+		}
+	} else if dto.IsOpenAIReasoningOModel(model) {
 		testRequest.MaxCompletionTokens = lo.ToPtr(uint(16))
 	} else if strings.Contains(model, "thinking") {
 		if !strings.Contains(model, "claude") {
@@ -857,7 +914,9 @@ func TestChannel(c *gin.Context) {
 	if c.Request != nil {
 		requestCtx = c.Request.Context()
 	}
-	result := testChannel(requestCtx, channel, testUserID, testModel, endpointType, isStream)
+	result := testChannel(requestCtx, channel, testUserID, channelTestOptions{
+		model: testModel, endpointType: endpointType, isStream: isStream,
+	})
 	if result.localErr != nil {
 		resp := gin.H{
 			"success": false,
@@ -888,6 +947,138 @@ func TestChannel(c *gin.Context) {
 		"message": "",
 		"time":    consumedTime,
 	})
+}
+
+// TestChannelPromptEffect 使用当前表单中的系统提示词发起一次非流式真实模型测试。
+func TestChannelPromptEffect(c *gin.Context) {
+	channelID, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	request := channelPromptTestRequest{}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	request.Model = strings.TrimSpace(request.Model)
+	request.UserPrompt = strings.TrimSpace(request.UserPrompt)
+	if request.Model == "" || request.UserPrompt == "" || strings.TrimSpace(request.SystemPrompt) == "" {
+		common.ApiError(c, errors.New("model, system_prompt and user_prompt are required"))
+		return
+	}
+	if len(request.Model) > 255 || len(request.UserPrompt) > maxChannelPromptTestUserPromptBytes || len(request.SystemPrompt) > dto.MaxModelSystemPromptBytes {
+		common.ApiError(c, errors.New("prompt test request exceeds the allowed size"))
+		return
+	}
+
+	channel, err := model.CacheGetChannel(channelID)
+	if err != nil {
+		channel, err = model.GetChannelById(channelID, true)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
+
+	testChannelConfig := *channel
+	settings := testChannelConfig.GetSetting()
+	if settings.PassThroughBodyEnabled || model_setting.GetGlobalSettings().PassThroughRequestEnabled {
+		common.ApiError(c, errors.New("request body passthrough is enabled; system prompts are not injected"))
+		return
+	}
+	if settings.ModelSystemPrompts == nil {
+		settings.ModelSystemPrompts = map[string]string{}
+	}
+	settings.ModelSystemPrompts[request.Model] = request.SystemPrompt
+	if err := settings.ValidateSystemPrompts(); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	testChannelConfig.SetSetting(settings)
+
+	testUserID, err := resolveChannelTestUserID(c)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	tik := time.Now()
+	result := testChannel(c.Request.Context(), &testChannelConfig, testUserID, channelTestOptions{
+		model:             request.Model,
+		userPrompt:        request.UserPrompt,
+		maxOutputTokens:   512,
+		applySystemPrompt: true,
+	})
+	consumedTime := float64(time.Since(tik).Milliseconds()) / 1000.0
+	if result.localErr != nil {
+		response := gin.H{"success": false, "message": result.localErr.Error(), "time": consumedTime}
+		if result.newAPIError != nil {
+			response["error_code"] = result.newAPIError.GetErrorCode()
+		}
+		c.JSON(http.StatusOK, response)
+		return
+	}
+
+	content := extractChannelTestResponseText(result.responseBody)
+	if content == "" {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "model returned no displayable text content",
+			"time":    consumedTime,
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"time":    consumedTime,
+		"data":    gin.H{"content": content},
+	})
+}
+
+// extractChannelTestResponseText 从常见非流式响应格式中提取可展示文本。
+func extractChannelTestResponseText(body []byte) string {
+	result := gjson.ParseBytes(body)
+	for _, path := range []string{"choices.0.text", "output_text"} {
+		if value := strings.TrimSpace(result.Get(path).String()); value != "" {
+			return value
+		}
+	}
+
+	chatContent := result.Get("choices.0.message.content")
+	if chatContent.Type == gjson.String {
+		if content := strings.TrimSpace(chatContent.String()); content != "" {
+			return content
+		}
+	}
+	parts := make([]string, 0)
+	for _, item := range chatContent.Array() {
+		if text := strings.TrimSpace(item.Get("text").String()); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	for _, output := range result.Get("output").Array() {
+		for _, item := range output.Get("content").Array() {
+			if text := strings.TrimSpace(item.Get("text").String()); text != "" {
+				parts = append(parts, text)
+			}
+		}
+	}
+	for _, item := range result.Get("content").Array() {
+		if text := strings.TrimSpace(item.Get("text").String()); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	for _, item := range result.Get("candidates.0.content.parts").Array() {
+		if text := strings.TrimSpace(item.Get("text").String()); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	if len(parts) > 0 {
+		return strings.Join(parts, "\n")
+	}
+	return ""
 }
 
 // channelTestSummary records the outcome of one channel test cycle so the
@@ -924,7 +1115,9 @@ func performChannelTests(ctx context.Context, channels []*model.Channel, testUse
 		}
 		isChannelEnabled := channel.Status == common.ChannelStatusEnabled
 		tik := time.Now()
-		result := testChannel(ctx, channel, testUserID, "", "", shouldUseStreamForAutomaticChannelTest(channel))
+		result := testChannel(ctx, channel, testUserID, channelTestOptions{
+			isStream: shouldUseStreamForAutomaticChannelTest(channel),
+		})
 		tok := time.Now()
 		milliseconds := tok.Sub(tik).Milliseconds()
 		if ctx != nil && ctx.Err() != nil {

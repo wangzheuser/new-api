@@ -16,21 +16,44 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { MessageSquareText, Pencil, Plus, Trash2 } from 'lucide-react'
+import {
+  Check,
+  Copy,
+  FlaskConical,
+  Loader2,
+  MessageSquareText,
+  Pencil,
+  Plus,
+  Trash2,
+  X,
+} from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { Response } from '@/components/ai-elements/response'
 import { MultiSelect } from '@/components/multi-select'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
+
+import { testChannelPromptEffect } from '../api'
+
+const DEFAULT_TEST_USER_PROMPT = '你好'
 
 type ModelSystemPromptEditorProps = {
   value: Record<string, string>
   onChange: (value: Record<string, string>) => void
   models: string[]
+  channelId?: number
+  passThroughBodyEnabled?: boolean
   disabled?: boolean
 }
 
@@ -41,6 +64,13 @@ export function ModelSystemPromptEditor(props: ModelSystemPromptEditorProps) {
   const [selectedModels, setSelectedModels] = useState<string[]>([])
   const [prompt, setPrompt] = useState('')
   const [submitted, setSubmitted] = useState(false)
+  const [testingModel, setTestingModel] = useState<string | null>(null)
+  const [testUserPrompt, setTestUserPrompt] = useState(DEFAULT_TEST_USER_PROMPT)
+  const [testResponse, setTestResponse] = useState('')
+  const [testError, setTestError] = useState('')
+  const [testResponseTime, setTestResponseTime] = useState<number | null>(null)
+  const [isTesting, setIsTesting] = useState(false)
+  const { copiedText, copyToClipboard } = useCopyToClipboard({ notify: false })
 
   const entries = useMemo(
     () =>
@@ -65,6 +95,14 @@ export function ModelSystemPromptEditor(props: ModelSystemPromptEditorProps) {
         .map((model) => ({ label: model, value: model })),
     [configuredModels, props.models]
   )
+  let promptTestTooltip = t('Test system prompt effect')
+  if (!props.channelId) {
+    promptTestTooltip = t('Save the channel before testing')
+  } else if (props.passThroughBodyEnabled) {
+    promptTestTooltip = t(
+      'Request body passthrough is enabled, so system prompts are not injected.'
+    )
+  }
 
   const openCreateDialog = () => {
     setEditingModel(null)
@@ -75,6 +113,7 @@ export function ModelSystemPromptEditor(props: ModelSystemPromptEditorProps) {
   }
 
   const openEditDialog = (model: string, currentPrompt: string) => {
+    setTestingModel(null)
     setEditingModel(model)
     setSelectedModels([model])
     setPrompt(currentPrompt)
@@ -98,6 +137,45 @@ export function ModelSystemPromptEditor(props: ModelSystemPromptEditorProps) {
     const next = { ...props.value }
     delete next[model]
     props.onChange(next)
+    if (testingModel === model) setTestingModel(null)
+  }
+
+  const openPromptTest = (model: string) => {
+    setEditorOpen(false)
+    setTestingModel(model)
+    setTestResponse('')
+    setTestError('')
+    setTestResponseTime(null)
+  }
+
+  const handlePromptTest = async (model: string, systemPrompt: string) => {
+    if (!props.channelId || !testUserPrompt.trim() || isTesting) return
+
+    setIsTesting(true)
+    setTestError('')
+    try {
+      const response = await testChannelPromptEffect(props.channelId, {
+        model,
+        system_prompt: systemPrompt,
+        user_prompt: testUserPrompt.trim(),
+      })
+      const content = response.data?.content?.trim()
+      if (!response.success || !content) {
+        setTestError(response.message || t('Test failed'))
+        setTestResponse('')
+        setTestResponseTime(response.time ?? null)
+        return
+      }
+      setTestResponse(content)
+      setTestResponseTime(response.time ?? null)
+    } catch (error: unknown) {
+      const apiError = error as { response?: { data?: { message?: string } } }
+      setTestError(apiError.response?.data?.message || t('Test failed'))
+      setTestResponse('')
+      setTestResponseTime(null)
+    } finally {
+      setIsTesting(false)
+    }
   }
 
   const handleRemoveMissing = () => {
@@ -170,7 +248,7 @@ export function ModelSystemPromptEditor(props: ModelSystemPromptEditorProps) {
           <div className='hidden grid-cols-[minmax(10rem,0.8fr)_minmax(0,2fr)_auto] gap-3 px-3 text-xs font-medium sm:grid'>
             <span>{t('Model')}</span>
             <span>{t('System Prompt')}</span>
-            <span className='w-20' />
+            <span className='w-28' />
           </div>
           {entries.map(([model, value]) => (
             <div
@@ -189,6 +267,30 @@ export function ModelSystemPromptEditor(props: ModelSystemPromptEditorProps) {
                 {value}
               </p>
               <div className='flex justify-end gap-1'>
+                <Tooltip>
+                  <TooltipTrigger render={<span className='inline-flex' />}>
+                    <Button
+                      type='button'
+                      variant='ghost'
+                      size='icon-sm'
+                      onClick={() => openPromptTest(model)}
+                      disabled={
+                        props.disabled ||
+                        !props.channelId ||
+                        props.passThroughBodyEnabled ||
+                        isTesting
+                      }
+                      aria-label={t('Test system prompt for {{model}}', {
+                        model,
+                      })}
+                    >
+                      <FlaskConical className='h-4 w-4' aria-hidden='true' />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>{promptTestTooltip}</p>
+                  </TooltipContent>
+                </Tooltip>
                 <Button
                   type='button'
                   variant='ghost'
@@ -212,6 +314,140 @@ export function ModelSystemPromptEditor(props: ModelSystemPromptEditorProps) {
                   <Trash2 className='h-4 w-4' aria-hidden='true' />
                 </Button>
               </div>
+
+              {testingModel === model && (
+                <div className='border-border/70 bg-muted/15 space-y-4 rounded-lg border p-4 sm:col-span-3'>
+                  <div className='flex items-start justify-between gap-4'>
+                    <div className='space-y-1'>
+                      <p className='flex items-center gap-2 text-sm font-medium'>
+                        <FlaskConical
+                          className='text-primary h-4 w-4'
+                          aria-hidden='true'
+                        />
+                        {t('Test system prompt effect')}
+                      </p>
+                      <p className='text-muted-foreground text-xs leading-relaxed'>
+                        {t(
+                          'This test uses the current system prompt without saving it. Other channel settings use the latest saved configuration.'
+                        )}
+                      </p>
+                      <p className='text-muted-foreground text-xs leading-relaxed'>
+                        {t(
+                          'Testing makes a real upstream request and may incur provider charges.'
+                        )}
+                      </p>
+                    </div>
+                    <Button
+                      type='button'
+                      variant='ghost'
+                      size='icon-sm'
+                      onClick={() => setTestingModel(null)}
+                      disabled={isTesting}
+                      aria-label={t('Close')}
+                    >
+                      <X className='h-4 w-4' aria-hidden='true' />
+                    </Button>
+                  </div>
+
+                  <div className='space-y-2'>
+                    <Label htmlFor='system-prompt-test-user-prompt'>
+                      {t('User Prompt')}
+                    </Label>
+                    <Textarea
+                      id='system-prompt-test-user-prompt'
+                      value={testUserPrompt}
+                      onChange={(event) =>
+                        setTestUserPrompt(event.target.value)
+                      }
+                      onKeyDown={(event) => {
+                        if (
+                          event.key === 'Enter' &&
+                          (event.metaKey || event.ctrlKey)
+                        ) {
+                          event.preventDefault()
+                          void handlePromptTest(model, value)
+                        }
+                      }}
+                      rows={3}
+                      maxLength={16 * 1024}
+                      disabled={isTesting}
+                      placeholder={t('Enter a user prompt to test')}
+                    />
+                    <p className='text-muted-foreground text-xs'>
+                      {t('Press Ctrl or Command + Enter to send')}
+                    </p>
+                  </div>
+
+                  <div className='flex justify-end'>
+                    <Button
+                      type='button'
+                      onClick={() => void handlePromptTest(model, value)}
+                      disabled={!testUserPrompt.trim() || isTesting}
+                    >
+                      {isTesting ? (
+                        <Loader2
+                          className='mr-2 h-4 w-4 animate-spin'
+                          aria-hidden='true'
+                        />
+                      ) : (
+                        <FlaskConical
+                          className='mr-2 h-4 w-4'
+                          aria-hidden='true'
+                        />
+                      )}
+                      {isTesting ? t('Testing...') : t('Send Test')}
+                    </Button>
+                  </div>
+
+                  <div aria-live='polite'>
+                    {testError && (
+                      <Alert variant='destructive'>
+                        <AlertDescription className='break-words'>
+                          {testError}
+                        </AlertDescription>
+                      </Alert>
+                    )}
+
+                    {testResponse && (
+                      <div className='bg-background space-y-3 rounded-lg border p-4'>
+                        <div className='flex items-center justify-between gap-3'>
+                          <div>
+                            <p className='text-sm font-medium'>
+                              {t('Model Response')}
+                            </p>
+                            {testResponseTime !== null && (
+                              <p className='text-muted-foreground text-xs'>
+                                {t('Response time: {{seconds}} seconds', {
+                                  seconds: testResponseTime.toFixed(2),
+                                })}
+                              </p>
+                            )}
+                          </div>
+                          <Button
+                            type='button'
+                            variant='ghost'
+                            size='icon-sm'
+                            onClick={() => void copyToClipboard(testResponse)}
+                            aria-label={t('Copy')}
+                          >
+                            {copiedText === testResponse ? (
+                              <Check
+                                className='h-4 w-4 text-green-600'
+                                aria-hidden='true'
+                              />
+                            ) : (
+                              <Copy className='h-4 w-4' aria-hidden='true' />
+                            )}
+                          </Button>
+                        </div>
+                        <div className='bg-muted/20 max-h-96 overflow-y-auto rounded-md p-3 text-sm leading-relaxed'>
+                          <Response>{testResponse}</Response>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           ))}
           <Button

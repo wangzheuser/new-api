@@ -78,6 +78,34 @@ func TestResolveSystemPromptUsesImmutableRequestedModel(t *testing.T) {
 	assert.True(t, prepend)
 }
 
+func TestApplySystemPromptForRequestUsesConfiguredModelPrompt(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ratio_setting.InitRatioSettings()
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	request := &dto.GeneralOpenAIRequest{
+		Model:    "gpt-3.5-turbo",
+		Messages: []dto.Message{{Role: "user", Content: "你好"}},
+	}
+	info := &relaycommon.RelayInfo{
+		RequestedModelName: "gpt-3.5-turbo",
+		OriginModelName:    "gpt-3.5-turbo",
+		UsingGroup:         "default",
+		UserGroup:          "default",
+		RelayFormat:        projecttypes.RelayFormatOpenAI,
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: dto.ChannelSettings{
+			ModelSystemPrompts: map[string]string{"gpt-3.5-turbo": "model prompt"},
+		}},
+	}
+
+	apiErr := ApplySystemPromptForRequest(c, info, request)
+
+	require.Nil(t, apiErr)
+	require.Len(t, request.Messages, 2)
+	assert.Equal(t, "system", request.Messages[0].Role)
+	assert.Equal(t, "model prompt", request.Messages[0].StringContent())
+	assert.Equal(t, "你好", request.Messages[1].StringContent())
+}
+
 func TestInjectedSystemPromptUpdatesEstimateAndReserve(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ratio_setting.InitRatioSettings()

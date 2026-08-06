@@ -192,6 +192,22 @@ export interface ChannelTestResponse {
   }
 }
 
+export interface ChannelPromptTestRequest {
+  model: string
+  system_prompt: string
+  user_prompt: string
+}
+
+export interface ChannelPromptTestResponse {
+  success: boolean
+  message?: string
+  error_code?: string
+  time?: number
+  data?: {
+    content?: string
+  }
+}
+
 export interface ChannelBalanceResponse {
   success: boolean
   message?: string

@@ -23,6 +23,45 @@ func resolveSystemPrompt(info *relaycommon.RelayInfo) (string, bool) {
 	return info.ChannelSetting.ResolveSystemPrompt(info.GetRequestedModelName())
 }
 
+// ApplySystemPromptForRequest 将渠道系统提示词应用到指定请求，并同步注入后的 Token 估算。
+func ApplySystemPromptForRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.Request) *types.NewAPIError {
+	if info == nil || request == nil {
+		return nil
+	}
+
+	systemPrompt, prepend := resolveSystemPrompt(info)
+	before := request.GetTokenCountMeta()
+	applied := false
+
+	switch typedRequest := request.(type) {
+	case *dto.GeneralOpenAIRequest:
+		applied = applyOpenAISystemPrompt(c, typedRequest, systemPrompt, prepend)
+	case *dto.OpenAIResponsesRequest:
+		var err error
+		applied, err = applyResponsesSystemPrompt(c, typedRequest, systemPrompt, prepend)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+	case *dto.OpenAIResponsesCompactionRequest:
+		responsesRequest := &dto.OpenAIResponsesRequest{Instructions: typedRequest.Instructions}
+		var err error
+		applied, err = applyResponsesSystemPrompt(c, responsesRequest, systemPrompt, prepend)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+		typedRequest.Instructions = responsesRequest.Instructions
+	case *dto.ClaudeRequest:
+		applied = applyClaudeSystemPrompt(c, typedRequest, systemPrompt, prepend)
+	case *dto.GeminiChatRequest:
+		applied = applyGeminiSystemPrompt(c, typedRequest, systemPrompt, prepend)
+	}
+
+	if !applied {
+		return nil
+	}
+	return accountInjectedSystemPrompt(c, info, before, request.GetTokenCountMeta())
+}
+
 // accountInjectedSystemPrompt 将实际注入的文本增量同步到本地估算与预扣费。
 func accountInjectedSystemPrompt(c *gin.Context, info *relaycommon.RelayInfo, before, after *types.TokenCountMeta) *types.NewAPIError {
 	if info == nil || before == nil || after == nil {

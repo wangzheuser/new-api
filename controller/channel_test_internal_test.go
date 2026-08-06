@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
@@ -13,8 +14,61 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBuildTestRequestUsesCustomUserPromptAndOutputLimit(t *testing.T) {
+	options := channelTestOptions{
+		userPrompt:      "你好 \"new-api\"",
+		maxOutputTokens: 512,
+	}
+
+	chatRequest, ok := buildTestRequest("gpt-4o-mini", "", nil, options).(*dto.GeneralOpenAIRequest)
+	require.True(t, ok)
+	require.Len(t, chatRequest.Messages, 1)
+	assert.Equal(t, options.userPrompt, chatRequest.Messages[0].StringContent())
+	assert.Equal(t, uint(512), *chatRequest.MaxTokens)
+
+	responsesRequest, ok := buildTestRequest("codex-mini", "", nil, options).(*dto.OpenAIResponsesRequest)
+	require.True(t, ok)
+	var input []map[string]string
+	require.NoError(t, common.Unmarshal(responsesRequest.Input, &input))
+	require.Len(t, input, 1)
+	assert.Equal(t, options.userPrompt, input[0]["content"])
+	assert.Equal(t, uint(512), *responsesRequest.MaxOutputTokens)
+
+	explicitResponsesRequest, ok := buildTestRequest(
+		"gpt-4o-mini",
+		string(constant.EndpointTypeOpenAIResponse),
+		nil,
+		options,
+	).(*dto.OpenAIResponsesRequest)
+	require.True(t, ok)
+	require.NoError(t, common.Unmarshal(explicitResponsesRequest.Input, &input))
+	assert.Equal(t, options.userPrompt, input[0]["content"])
+}
+
+func TestExtractChannelTestResponseText(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "openai chat", body: `{"choices":[{"message":{"content":"hello"}}]}`, want: "hello"},
+		{name: "openai content parts", body: `{"choices":[{"message":{"content":[{"type":"text","text":"hello"},{"type":"text","text":"world"}]}}]}`, want: "hello\nworld"},
+		{name: "responses", body: `{"output":[{"content":[{"type":"output_text","text":"hello"},{"type":"output_text","text":"world"}]}]}`, want: "hello\nworld"},
+		{name: "claude", body: `{"content":[{"type":"text","text":"hello"}]}`, want: "hello"},
+		{name: "gemini", body: `{"candidates":[{"content":{"parts":[{"text":"hello"}]}}]}`, want: "hello"},
+		{name: "empty", body: `{}`, want: ""},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, extractChannelTestResponseText([]byte(test.body)))
+		})
+	}
+}
 
 func TestSettleTestQuotaUsesTieredBilling(t *testing.T) {
 	info := &relaycommon.RelayInfo{
