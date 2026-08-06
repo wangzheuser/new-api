@@ -36,6 +36,10 @@ import {
 // Form Validation Schema
 // ============================================================================
 
+const MAX_MODEL_SYSTEM_PROMPT_ENTRIES = 256
+const MAX_MODEL_SYSTEM_PROMPT_BYTES = 64 * 1024
+const MAX_CHANNEL_SETTING_BYTES = 64 * 1024 - 1
+
 function parseOptionalJson(value: string | undefined): unknown {
   if (!value?.trim()) return undefined
   return JSON.parse(value)
@@ -191,6 +195,7 @@ export const channelFormSchema = z
     pass_through_body_enabled: z.boolean().optional(),
     system_prompt: z.string().optional(),
     system_prompt_override: z.boolean().optional(),
+    model_system_prompts: z.record(z.string(), z.string()).optional(),
     // Type-specific settings (stored in settings JSON)
     is_enterprise_account: z.boolean().optional(), // OpenRouter specific
     vertex_key_type: z.enum(['json', 'api_key']).optional(), // Vertex AI specific
@@ -212,6 +217,54 @@ export const channelFormSchema = z
     upstream_model_update_ignored_models: z.string().optional(),
   })
   .superRefine((data, ctx) => {
+    const modelPrompts = Object.entries(data.model_system_prompts || {})
+    if (modelPrompts.length > MAX_MODEL_SYSTEM_PROMPT_ENTRIES) {
+      addRequiredIssue(
+        ctx,
+        'model_system_prompts',
+        'Model system prompt entries cannot exceed 256'
+      )
+    }
+    for (const [model, prompt] of modelPrompts) {
+      if (!model.trim() || model !== model.trim() || model.length > 255) {
+        addRequiredIssue(
+          ctx,
+          'model_system_prompts',
+          'Model system prompt contains an invalid model name'
+        )
+        break
+      }
+      if (!prompt.trim()) {
+        addRequiredIssue(
+          ctx,
+          'model_system_prompts',
+          'System prompt is required'
+        )
+        break
+      }
+      if (
+        new TextEncoder().encode(prompt).length > MAX_MODEL_SYSTEM_PROMPT_BYTES
+      ) {
+        addRequiredIssue(
+          ctx,
+          'model_system_prompts',
+          'Model system prompt cannot exceed 64 KiB'
+        )
+        break
+      }
+    }
+
+    if (
+      new TextEncoder().encode(buildSettingJSON(data)).length >
+      MAX_CHANNEL_SETTING_BYTES
+    ) {
+      addRequiredIssue(
+        ctx,
+        modelPrompts.length > 0 ? 'model_system_prompts' : 'system_prompt',
+        'Channel settings cannot exceed 64 KiB'
+      )
+    }
+
     if ([3, 8, 36, 45].includes(data.type) && !data.base_url?.trim()) {
       addRequiredIssue(
         ctx,
@@ -332,6 +385,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   pass_through_body_enabled: false,
   system_prompt: '',
   system_prompt_override: false,
+  model_system_prompts: {},
   // Type-specific settings
   is_enterprise_account: false,
   vertex_key_type: 'json',
@@ -371,6 +425,7 @@ export function transformChannelToFormDefaults(
     pass_through_body_enabled: false,
     system_prompt: '',
     system_prompt_override: false,
+    model_system_prompts: {} as Record<string, string>,
   }
 
   if (channel.setting) {
@@ -383,6 +438,12 @@ export function transformChannelToFormDefaults(
         pass_through_body_enabled: parsed.pass_through_body_enabled || false,
         system_prompt: parsed.system_prompt || '',
         system_prompt_override: parsed.system_prompt_override || false,
+        model_system_prompts:
+          parsed.model_system_prompts &&
+          typeof parsed.model_system_prompts === 'object' &&
+          !Array.isArray(parsed.model_system_prompts)
+            ? parsed.model_system_prompts
+            : {},
       }
     } catch (error) {
       // eslint-disable-next-line no-console
@@ -496,13 +557,16 @@ export function transformChannelToFormDefaults(
  * Build the setting JSON string from form extra settings
  */
 function buildSettingJSON(formData: ChannelFormValues): string {
-  const settingObj = {
+  const settingObj: Record<string, unknown> = {
     force_format: formData.force_format || false,
     thinking_to_content: formData.thinking_to_content || false,
     proxy: formData.proxy || '',
     pass_through_body_enabled: formData.pass_through_body_enabled || false,
     system_prompt: formData.system_prompt || '',
     system_prompt_override: formData.system_prompt_override || false,
+  }
+  if (Object.keys(formData.model_system_prompts || {}).length > 0) {
+    settingObj.model_system_prompts = formData.model_system_prompts
   }
   return JSON.stringify(settingObj)
 }
@@ -571,13 +635,18 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
       formData.allow_include_obfuscation === true
     settingsObj.allow_inference_geo = formData.allow_inference_geo === true
   } else {
-    if ('disable_store' in settingsObj) delete settingsObj.disable_store
-    if ('allow_safety_identifier' in settingsObj)
+    if ('disable_store' in settingsObj) {
+      delete settingsObj.disable_store
+    }
+    if ('allow_safety_identifier' in settingsObj) {
       delete settingsObj.allow_safety_identifier
-    if ('allow_include_obfuscation' in settingsObj)
+    }
+    if ('allow_include_obfuscation' in settingsObj) {
       delete settingsObj.allow_include_obfuscation
-    if (formData.type !== 14 && 'allow_inference_geo' in settingsObj)
+    }
+    if (formData.type !== 14 && 'allow_inference_geo' in settingsObj) {
       delete settingsObj.allow_inference_geo
+    }
   }
 
   // Anthropic (type 14): claude_beta_query, allow_inference_geo, allow_speed
@@ -586,8 +655,12 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     settingsObj.allow_speed = formData.allow_speed === true
     settingsObj.claude_beta_query = formData.claude_beta_query === true
   } else {
-    if ('allow_speed' in settingsObj) delete settingsObj.allow_speed
-    if ('claude_beta_query' in settingsObj) delete settingsObj.claude_beta_query
+    if ('allow_speed' in settingsObj) {
+      delete settingsObj.allow_speed
+    }
+    if ('claude_beta_query' in settingsObj) {
+      delete settingsObj.claude_beta_query
+    }
   }
 
   settingsObj.disable_task_polling_sleep =
@@ -600,14 +673,14 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     settingsObj.upstream_model_update_auto_sync_enabled =
       settingsObj.upstream_model_update_check_enabled === true &&
       formData.upstream_model_update_auto_sync_enabled === true
-    settingsObj.upstream_model_update_ignored_models = Array.from(
-      new Set(
+    settingsObj.upstream_model_update_ignored_models = [
+      ...new Set(
         String(formData.upstream_model_update_ignored_models || '')
           .split(',')
           .map((model) => model.trim())
           .filter(Boolean)
-      )
-    )
+      ),
+    ]
     if (
       !Array.isArray(settingsObj.upstream_model_update_last_detected_models) ||
       settingsObj.upstream_model_update_check_enabled !== true

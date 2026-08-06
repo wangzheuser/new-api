@@ -188,7 +188,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	retryParam := &service.RetryParam{
 		Ctx:         c,
 		TokenGroup:  relayRetryGroup(relayInfo),
-		ModelName:   relayInfo.OriginModelName,
+		ModelName:   relayInfo.GetRoutingModelName(),
 		RequestPath: c.Request.URL.Path,
 		Retry:       common.GetPointer(0),
 	}
@@ -370,7 +370,7 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		return nil, types.NewError(fmt.Errorf("分组 %s 下模型 %s 的可用渠道不存在（retry）", selectGroup, info.OriginModelName), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 
-	newAPIError := middleware.SetupContextForSelectedChannel(c, channel, info.OriginModelName)
+	newAPIError := middleware.SetupContextForSelectedChannel(c, channel, info.GetRoutingModelName())
 	if newAPIError != nil {
 		return nil, newAPIError
 	}
@@ -632,7 +632,7 @@ func RelayTask(c *gin.Context) {
 	retryParam := &service.RetryParam{
 		Ctx:         c,
 		TokenGroup:  relayRetryGroup(relayInfo),
-		ModelName:   relayInfo.OriginModelName,
+		ModelName:   relayInfo.GetRoutingModelName(),
 		RequestPath: c.Request.URL.Path,
 		Retry:       common.GetPointer(0),
 	}
@@ -643,7 +643,7 @@ func RelayTask(c *gin.Context) {
 		if lockedCh, ok := relayInfo.LockedChannel.(*model.Channel); ok && lockedCh != nil {
 			channel = lockedCh
 			if retryParam.GetRetry() > 0 {
-				if setupErr := middleware.SetupContextForSelectedChannel(c, channel, relayInfo.OriginModelName); setupErr != nil {
+				if setupErr := middleware.SetupContextForSelectedChannel(c, channel, relayInfo.GetRoutingModelName()); setupErr != nil {
 					taskErr = service.TaskErrorWrapperLocal(setupErr.Err, "setup_locked_channel_failed", http.StatusInternalServerError)
 					break
 				}

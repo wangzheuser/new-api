@@ -81,13 +81,25 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	}
 	adaptor.Init(info)
 	var requestBody io.Reader
-	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
+	passThroughRequest := model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled
+	if passThroughRequest {
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
 		}
 		requestBody = common.ReaderOnly(storage)
 	} else {
+		systemPrompt, prepend := resolveSystemPrompt(info)
+		before := request.GetTokenCountMeta()
+		applied, err := applyResponsesSystemPrompt(c, request, systemPrompt, prepend)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+		if applied {
+			if accountingErr := accountInjectedSystemPrompt(c, info, before, request.GetTokenCountMeta()); accountingErr != nil {
+				return accountingErr
+			}
+		}
 		convertedRequest, err := adaptor.ConvertOpenAIResponsesRequest(c, info, *request)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())

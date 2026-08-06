@@ -1,13 +1,68 @@
 package dto
 
 import (
+	"fmt"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestChannelSettingsResolveSystemPrompt(t *testing.T) {
+	settings := ChannelSettings{
+		SystemPrompt:         "channel default",
+		SystemPromptOverride: false,
+		ModelSystemPrompts: map[string]string{
+			"model-a": "model prompt",
+		},
+	}
+
+	prompt, prepend := settings.ResolveSystemPrompt("model-a")
+	assert.Equal(t, "model prompt", prompt)
+	assert.True(t, prepend)
+
+	prompt, prepend = settings.ResolveSystemPrompt("model-b")
+	assert.Equal(t, "channel default", prompt)
+	assert.False(t, prepend)
+}
+
+func TestChannelSettingsValidateSystemPrompts(t *testing.T) {
+	require.NoError(t, (ChannelSettings{ModelSystemPrompts: map[string]string{
+		"model-a": "prompt",
+	}}).ValidateSystemPrompts())
+
+	tests := []struct {
+		name   string
+		model  string
+		prompt string
+	}{
+		{name: "empty model", model: "", prompt: "prompt"},
+		{name: "surrounding whitespace", model: " model-a", prompt: "prompt"},
+		{name: "model too long", model: strings.Repeat("a", 256), prompt: "prompt"},
+		{name: "empty prompt", model: "model-a", prompt: "  "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := (ChannelSettings{ModelSystemPrompts: map[string]string{
+				tt.model: tt.prompt,
+			}}).ValidateSystemPrompts()
+			require.Error(t, err)
+		})
+	}
+
+	tooMany := make(map[string]string, MaxModelSystemPromptEntries+1)
+	for i := 0; i <= MaxModelSystemPromptEntries; i++ {
+		tooMany[fmt.Sprintf("model-%d", i)] = "prompt"
+	}
+	require.Error(t, (ChannelSettings{ModelSystemPrompts: tooMany}).ValidateSystemPrompts())
+	require.Error(t, (ChannelSettings{ModelSystemPrompts: map[string]string{
+		"model-a": strings.Repeat("a", MaxModelSystemPromptBytes+1),
+	}}).ValidateSystemPrompts())
+}
 
 func TestAdvancedCustomValidateResponsesToChatConverterPath(t *testing.T) {
 	valid := &AdvancedCustomConfig{

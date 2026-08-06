@@ -940,10 +940,16 @@ func SearchTags(keyword string, group string, model string, idSort bool) ([]*str
 func (channel *Channel) ValidateSettings() error {
 	channelParams := &dto.ChannelSettings{}
 	if channel.Setting != nil && *channel.Setting != "" {
+		if len(*channel.Setting) > dto.MaxChannelSettingBytes {
+			return fmt.Errorf("channel settings cannot exceed 64 KiB")
+		}
 		err := common.Unmarshal([]byte(*channel.Setting), channelParams)
 		if err != nil {
 			return err
 		}
+	}
+	if err := channelParams.ValidateSystemPrompts(); err != nil {
+		return err
 	}
 	channelOtherSettings := &dto.ChannelOtherSettings{}
 	if channel.OtherSettings != "" {

@@ -10,13 +10,55 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 )
 
+const (
+	// MaxChannelSettingBytes 保持 channels.setting 与 MySQL TEXT 上限兼容。
+	MaxChannelSettingBytes      = 64*1024 - 1
+	MaxModelSystemPromptEntries = 256
+	MaxModelSystemPromptBytes   = 64 * 1024
+)
+
 type ChannelSettings struct {
-	ForceFormat            bool   `json:"force_format,omitempty"`
-	ThinkingToContent      bool   `json:"thinking_to_content,omitempty"`
-	Proxy                  string `json:"proxy"`
-	PassThroughBodyEnabled bool   `json:"pass_through_body_enabled,omitempty"`
-	SystemPrompt           string `json:"system_prompt,omitempty"`
-	SystemPromptOverride   bool   `json:"system_prompt_override,omitempty"`
+	ForceFormat            bool              `json:"force_format,omitempty"`
+	ThinkingToContent      bool              `json:"thinking_to_content,omitempty"`
+	Proxy                  string            `json:"proxy"`
+	PassThroughBodyEnabled bool              `json:"pass_through_body_enabled,omitempty"`
+	SystemPrompt           string            `json:"system_prompt,omitempty"`
+	SystemPromptOverride   bool              `json:"system_prompt_override,omitempty"`
+	ModelSystemPrompts     map[string]string `json:"model_system_prompts,omitempty"`
+}
+
+// ResolveSystemPrompt 返回指定原始模型应使用的渠道系统提示词，以及是否需要前置拼接客户端提示词。
+func (s ChannelSettings) ResolveSystemPrompt(model string) (string, bool) {
+	if prompt, ok := s.ModelSystemPrompts[model]; ok && strings.TrimSpace(prompt) != "" {
+		return prompt, true
+	}
+	return s.SystemPrompt, s.SystemPromptOverride
+}
+
+// ValidateSystemPrompts 校验模型专属系统提示词配置。
+func (s ChannelSettings) ValidateSystemPrompts() error {
+	if len(s.ModelSystemPrompts) > MaxModelSystemPromptEntries {
+		return fmt.Errorf("model system prompt entries cannot exceed %d", MaxModelSystemPromptEntries)
+	}
+	for model, prompt := range s.ModelSystemPrompts {
+		trimmedModel := strings.TrimSpace(model)
+		if trimmedModel == "" {
+			return fmt.Errorf("model system prompt model cannot be empty")
+		}
+		if trimmedModel != model {
+			return fmt.Errorf("model system prompt model cannot contain surrounding whitespace: %s", model)
+		}
+		if len(model) > 255 {
+			return fmt.Errorf("model system prompt model is too long: %s", model)
+		}
+		if strings.TrimSpace(prompt) == "" {
+			return fmt.Errorf("model system prompt cannot be empty: %s", model)
+		}
+		if len(prompt) > MaxModelSystemPromptBytes {
+			return fmt.Errorf("model system prompt is too long: %s", model)
+		}
+	}
+	return nil
 }
 
 type VertexKeyType string

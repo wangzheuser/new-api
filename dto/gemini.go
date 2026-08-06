@@ -74,8 +74,13 @@ func (r *GeminiChatRequest) GetTokenCountMeta() *types.TokenCountMeta {
 		maxTokens = int(*r.GenerationConfig.MaxOutputTokens)
 	}
 
+	contents := r.Contents
+	if r.SystemInstructions != nil {
+		contents = append([]GeminiChatContent{*r.SystemInstructions}, contents...)
+	}
+
 	var inputTexts []string
-	for _, content := range r.Contents {
+	for _, content := range contents {
 		for _, part := range content.Parts {
 			if part.Text != "" {
 				inputTexts = append(inputTexts, part.Text)

@@ -2,19 +2,59 @@ package openai
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
+
+// applyRealtimeSystemPrompt 将渠道提示词应用到 Realtime session.update。
+func applyRealtimeSystemPrompt(c *gin.Context, info *relaycommon.RelayInfo, event *dto.RealtimeEvent) bool {
+	if info == nil || event == nil || event.Type != dto.RealtimeEventTypeSessionUpdate || event.Session == nil {
+		return false
+	}
+	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
+		return false
+	}
+
+	modelName := info.GetRequestedModelName()
+	prompt, prepend := info.ChannelSetting.ResolveSystemPrompt(modelName)
+	if prompt == "" {
+		return false
+	}
+	existing := event.Session.Instructions
+	if strings.TrimSpace(existing) != "" {
+		if !prepend {
+			return false
+		}
+		common.SetContextKey(c, constant.ContextKeySystemPromptOverride, true)
+		if existing != prompt && !strings.HasPrefix(existing, prompt+"\n") {
+			event.Session.Instructions = prompt + "\n" + existing
+		}
+	} else {
+		event.Session.Instructions = prompt
+	}
+
+	source := "channel_default"
+	if configured, ok := info.ChannelSetting.ModelSystemPrompts[modelName]; ok && strings.TrimSpace(configured) != "" {
+		source = "model"
+	}
+	common.SetContextKey(c, constant.ContextKeySystemPromptApplied, true)
+	common.SetContextKey(c, constant.ContextKeySystemPromptSource, source)
+	common.SetContextKey(c, constant.ContextKeySystemPromptModel, modelName)
+	return event.Session.Instructions != existing
+}
 
 func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.RealtimeUsage) {
 	if info == nil || info.ClientWs == nil || info.TargetWs == nil {
@@ -67,6 +107,13 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 						if realtimeEvent.Session.Tools != nil {
 							info.RealtimeTools = realtimeEvent.Session.Tools
 						}
+					}
+				}
+				if applyRealtimeSystemPrompt(c, info, realtimeEvent) {
+					message, err = common.Marshal(realtimeEvent)
+					if err != nil {
+						errChan <- fmt.Errorf("error marshalling session update: %v", err)
+						return
 					}
 				}
 

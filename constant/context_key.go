@@ -55,6 +55,9 @@ const (
 	ContextKeyLocalCountTokens ContextKey = "local_count_tokens"
 
 	ContextKeySystemPromptOverride ContextKey = "system_prompt_override"
+	ContextKeySystemPromptApplied  ContextKey = "system_prompt_applied"
+	ContextKeySystemPromptSource   ContextKey = "system_prompt_source"
+	ContextKeySystemPromptModel    ContextKey = "system_prompt_model"
 
 	// ContextKeyFileSourcesToCleanup stores file sources that need cleanup when request ends
 	ContextKeyFileSourcesToCleanup ContextKey = "file_sources_to_cleanup"

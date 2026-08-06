@@ -28,6 +28,7 @@ import {
   HelpCircle,
   KeyRound,
   Loader2,
+  MessageSquareText,
   Server,
   Sparkles,
   Trash2,
@@ -181,6 +182,7 @@ import {
 import { ParamOverrideEditorDialog } from '../dialogs/param-override-editor-dialog'
 import { StatusCodeRiskDialog } from '../dialogs/status-code-risk-dialog'
 import { ModelMappingEditor } from '../model-mapping-editor'
+import { ModelSystemPromptEditor } from '../model-system-prompt-editor'
 import {
   ChannelAdvancedSection,
   ChannelApiAccessSection,
@@ -188,6 +190,7 @@ import {
   ChannelBasicSection,
   ChannelEditorLoadingState,
   ChannelModelsSection,
+  ChannelSystemPromptSection,
 } from './sections'
 
 type ChannelMutateDrawerProps = {
@@ -243,12 +246,14 @@ const CHANNEL_EDITOR_SECTION_IDS = {
   identity: 'channel-section-identity',
   credentials: 'channel-section-credentials',
   models: 'channel-section-models',
+  systemPrompts: 'channel-section-system-prompts',
   advanced: 'channel-section-advanced',
 } as const
 const CHANNEL_EDITOR_MAIN_SECTION_IDS = [
   CHANNEL_EDITOR_SECTION_IDS.identity,
   CHANNEL_EDITOR_SECTION_IDS.credentials,
   CHANNEL_EDITOR_SECTION_IDS.models,
+  CHANNEL_EDITOR_SECTION_IDS.systemPrompts,
   CHANNEL_EDITOR_SECTION_IDS.advanced,
 ]
 const ADVANCED_SETTINGS_SECTION_IDS = {
@@ -287,6 +292,7 @@ const SENSITIVE_FORM_FIELDS = [
   'pass_through_body_enabled',
   'system_prompt',
   'system_prompt_override',
+  'model_system_prompts',
   'allow_service_tier',
   'conversation_log_enabled',
   'disable_store',
@@ -335,11 +341,9 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.priority ||
     values.weight ||
     values.proxy?.trim() ||
-    values.system_prompt?.trim() ||
     values.force_format ||
     values.thinking_to_content ||
     values.pass_through_body_enabled ||
-    values.system_prompt_override ||
     values.claude_beta_query ||
     values.upstream_model_update_check_enabled ||
     values.upstream_model_update_auto_sync_enabled ||
@@ -748,7 +752,7 @@ export function ChannelMutateDrawer({
   )
   const currentProxy = form.watch('proxy')
   const currentSystemPrompt = form.watch('system_prompt')
-  const currentSystemPromptOverride = form.watch('system_prompt_override')
+  const currentModelSystemPrompts = form.watch('model_system_prompts') || {}
   const currentAllowServiceTier = form.watch('allow_service_tier')
   const currentConversationLogEnabled = form.watch('conversation_log_enabled')
   const currentDisableStore = form.watch('disable_store')
@@ -961,6 +965,11 @@ export function ChannelMutateDrawer({
   const modelsHaveErrors = Boolean(
     formErrors.models || formErrors.group || formErrors.model_mapping
   )
+  const systemPromptsHaveErrors = Boolean(
+    formErrors.system_prompt ||
+    formErrors.system_prompt_override ||
+    formErrors.model_system_prompts
+  )
   const advancedHaveErrors =
     hasAdvancedSettingsErrors(formErrors) || Boolean(formErrors.advanced_custom)
   const providerRequiresBaseUrl = [3, 8, 36, 45].includes(currentType)
@@ -993,6 +1002,30 @@ export function ChannelMutateDrawer({
     credentialsComplete
   )
   const modelsStatus = getCompletionStatus(modelsHaveErrors, modelsComplete)
+  const modelSystemPromptCount = Object.keys(currentModelSystemPrompts).length
+  const systemPromptsConfigured = Boolean(
+    currentSystemPrompt?.trim() || modelSystemPromptCount > 0
+  )
+  let systemPromptsStatus: ChannelEditorSectionStatus = 'idle'
+  if (systemPromptsHaveErrors) {
+    systemPromptsStatus = 'error'
+  } else if (systemPromptsConfigured) {
+    systemPromptsStatus = 'configured'
+  }
+  let systemPromptsSummary = t('Optional')
+  if (systemPromptsHaveErrors) {
+    systemPromptsSummary = t('Error')
+  } else if (currentSystemPrompt?.trim() && modelSystemPromptCount > 0) {
+    systemPromptsSummary = t('Default + {{count}} models', {
+      count: modelSystemPromptCount,
+    })
+  } else if (currentSystemPrompt?.trim()) {
+    systemPromptsSummary = t('Channel default configured')
+  } else if (modelSystemPromptCount > 0) {
+    systemPromptsSummary = t('{{count}} models configured', {
+      count: modelSystemPromptCount,
+    })
+  }
   const advancedStatus: ChannelEditorSectionStatus = advancedHaveErrors
     ? 'error'
     : 'idle'
@@ -1016,9 +1049,7 @@ export function ChannelMutateDrawer({
     currentThinkingToContent ||
     currentPassThroughBodyEnabled ||
     currentDisableTaskPollingSleep ||
-    currentProxy?.trim() ||
-    currentSystemPrompt?.trim() ||
-    currentSystemPromptOverride
+    currentProxy?.trim()
   )
   const conversationCaptureConfigured = Boolean(
     isRoot && currentConversationLogEnabled
@@ -1121,6 +1152,15 @@ export function ChannelMutateDrawer({
       statusLabel: getSectionStatusLabel(modelsStatus, t),
       status: modelsStatus,
       icon: <Boxes className='h-4 w-4' aria-hidden='true' />,
+    },
+    {
+      id: CHANNEL_EDITOR_SECTION_IDS.systemPrompts,
+      title: t('System Prompts'),
+      description: systemPromptsSummary,
+      statusLabel: systemPromptsSummary,
+      status: systemPromptsStatus,
+      icon: <MessageSquareText className='h-4 w-4' aria-hidden='true' />,
+      configured: systemPromptsConfigured,
     },
     {
       id: CHANNEL_EDITOR_SECTION_IDS.advanced,
@@ -3603,6 +3643,150 @@ export function ChannelMutateDrawer({
                       </ChannelModelsSection>
                     </div>
 
+                    {/* ── System Prompts ── */}
+                    <div
+                      id={CHANNEL_EDITOR_SECTION_IDS.systemPrompts}
+                      className='scroll-mt-4'
+                    >
+                      <ChannelSystemPromptSection>
+                        {sensitiveLocked && (
+                          <p className='text-muted-foreground text-xs'>
+                            {t('No permission to perform this action')}
+                          </p>
+                        )}
+                        <fieldset
+                          disabled={sensitiveLocked}
+                          className='space-y-5 disabled:opacity-60'
+                        >
+                          <Alert>
+                            <AlertDescription>
+                              {t(
+                                'Applies to Chat Completions, Responses, Claude Messages, Gemini GenerateContent, and Realtime session updates. Global or channel request body passthrough disables injection.'
+                              )}
+                            </AlertDescription>
+                          </Alert>
+                          {currentPassThroughBodyEnabled && (
+                            <Alert className='border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-50'>
+                              <AlertDescription>
+                                {t(
+                                  'Request body passthrough is enabled. The gateway does not rewrite the request body, so system prompt injection will not take effect.'
+                                )}
+                              </AlertDescription>
+                            </Alert>
+                          )}
+
+                          <div className='border-border/60 rounded-lg border p-4'>
+                            <div className='mb-4 space-y-1'>
+                              <p className='text-sm font-medium'>
+                                {t('Channel Default')}
+                              </p>
+                              <p className='text-muted-foreground text-xs leading-relaxed'>
+                                {t(
+                                  'Used when the requested model has no model-specific system prompt.'
+                                )}
+                              </p>
+                            </div>
+                            <div className='space-y-4'>
+                              <FormField
+                                control={form.control}
+                                name='system_prompt'
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>{t('System Prompt')}</FormLabel>
+                                    <FormControl>
+                                      <Textarea
+                                        placeholder={t(
+                                          'Enter the default system prompt for this channel'
+                                        )}
+                                        rows={5}
+                                        className='font-mono text-sm leading-relaxed'
+                                        {...field}
+                                      />
+                                    </FormControl>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+
+                              <FormField
+                                control={form.control}
+                                name='system_prompt_override'
+                                render={({ field }) => (
+                                  <FormItem className='bg-muted/20 flex items-center justify-between gap-4 rounded-lg border px-4 py-3'>
+                                    <div className='space-y-0.5'>
+                                      <FormLabel>
+                                        {t(
+                                          'Prepend when the client already provides a system prompt'
+                                        )}
+                                      </FormLabel>
+                                      <FormDescription>
+                                        {t(
+                                          'When disabled, the client system prompt takes priority over the channel default.'
+                                        )}
+                                      </FormDescription>
+                                    </div>
+                                    <FormControl>
+                                      <Switch
+                                        checked={field.value}
+                                        onCheckedChange={field.onChange}
+                                      />
+                                    </FormControl>
+                                  </FormItem>
+                                )}
+                              />
+                            </div>
+                          </div>
+
+                          <div className='border-border/60 rounded-lg border p-4'>
+                            <div className='mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between'>
+                              <div className='space-y-1'>
+                                <p className='text-sm font-medium'>
+                                  {t('Model-Specific System Prompts')}
+                                </p>
+                                <p className='text-muted-foreground text-xs leading-relaxed'>
+                                  {t(
+                                    'Matched by the client-requested model name before model mapping. A matching prompt replaces the channel default and is always prepended to the client system prompt.'
+                                  )}
+                                </p>
+                              </div>
+                              <Badge variant='outline' className='w-fit'>
+                                {t('{{count}} configured', {
+                                  count: modelSystemPromptCount,
+                                })}
+                              </Badge>
+                            </div>
+                            <FormField
+                              control={form.control}
+                              name='model_system_prompts'
+                              render={({ field }) => (
+                                <FormItem>
+                                  <FormControl>
+                                    <ModelSystemPromptEditor
+                                      value={field.value || {}}
+                                      onChange={field.onChange}
+                                      models={currentModelsArray}
+                                      disabled={isSubmitting}
+                                    />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                          </div>
+
+                          {hasConfiguredOverrideValue(currentParamOverride) && (
+                            <Alert>
+                              <AlertDescription>
+                                {t(
+                                  'Parameter override is also configured. It runs after system prompt injection and may change the final request.'
+                                )}
+                              </AlertDescription>
+                            </Alert>
+                          )}
+                        </fieldset>
+                      </ChannelSystemPromptSection>
+                    </div>
+
                     <div
                       id={CHANNEL_EDITOR_SECTION_IDS.advanced}
                       className='scroll-mt-4'
@@ -4199,56 +4383,6 @@ export function ChannelMutateDrawer({
                                     )}
                                   </FormDescription>
                                   <FormMessage />
-                                </FormItem>
-                              )}
-                            />
-
-                            <FormField
-                              control={form.control}
-                              name='system_prompt'
-                              render={({ field }) => (
-                                <FormItem>
-                                  <FormLabel>{t('System Prompt')}</FormLabel>
-                                  <FormControl>
-                                    <Textarea
-                                      placeholder={t(
-                                        'Enter system prompt (user prompt takes priority)'
-                                      )}
-                                      rows={3}
-                                      {...field}
-                                    />
-                                  </FormControl>
-                                  <FormDescription>
-                                    {t(
-                                      'Default system prompt for this channel'
-                                    )}
-                                  </FormDescription>
-                                  <FormMessage />
-                                </FormItem>
-                              )}
-                            />
-
-                            <FormField
-                              control={form.control}
-                              name='system_prompt_override'
-                              render={({ field }) => (
-                                <FormItem className='flex items-center justify-between'>
-                                  <div className='space-y-0.5'>
-                                    <FormLabel>
-                                      {t('System Prompt Concatenation')}
-                                    </FormLabel>
-                                    <FormDescription>
-                                      {t(
-                                        'Concatenate channel system prompt with user&apos;s prompt'
-                                      )}
-                                    </FormDescription>
-                                  </div>
-                                  <FormControl>
-                                    <Switch
-                                      checked={field.value}
-                                      onCheckedChange={field.onChange}
-                                    />
-                                  </FormControl>
                                 </FormItem>
                               )}
                             />

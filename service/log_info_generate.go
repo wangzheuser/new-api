@@ -94,6 +94,14 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 
 	adminInfo := make(map[string]interface{})
 	adminInfo["use_channel"] = ctx.GetStringSlice("use_channel")
+	if common.GetContextKeyBool(ctx, constant.ContextKeySystemPromptApplied) {
+		adminInfo["system_prompt"] = map[string]interface{}{
+			"applied":       true,
+			"source":        common.GetContextKeyString(ctx, constant.ContextKeySystemPromptSource),
+			"matched_model": common.GetContextKeyString(ctx, constant.ContextKeySystemPromptModel),
+			"prepended":     isSystemPromptOverwritten,
+		}
+	}
 	isMultiKey := common.GetContextKeyBool(ctx, constant.ContextKeyChannelIsMultiKey)
 	if isMultiKey {
 		adminInfo["is_multi_key"] = true

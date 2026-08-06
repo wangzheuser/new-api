@@ -82,7 +82,8 @@ type ChannelMeta struct {
 
 type TokenCountMeta struct {
 	//promptTokens int
-	estimatePromptTokens int
+	baseEstimatePromptTokens int
+	estimatePromptTokens     int
 }
 
 type RelayInfo struct {
@@ -102,6 +103,8 @@ type RelayInfo struct {
 	IsPlayground           bool
 	UsePrice               bool
 	RelayMode              int
+	RequestedModelName     string // 客户端请求体中的模型，初始化后不再修改
+	RoutingModelName       string // 用于渠道选择与计费的内部模型，初始化后不再修改
 	OriginModelName        string
 	RequestURLPath         string
 	RequestHeaders         map[string]string
@@ -245,8 +248,10 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 
 	// reset some fields based on channel meta
 	// 重置某些字段，例如模型名称等
+	info.OriginModelName = info.GetRoutingModelName()
+	info.ResetEstimatePromptTokens()
 	if info.Request != nil {
-		info.Request.SetModelName(info.OriginModelName)
+		info.Request.SetModelName(info.GetRequestedModelName())
 	}
 }
 
@@ -263,6 +268,8 @@ func (info *RelayInfo) ToString() string {
 	fmt.Fprintf(b, "IsStream: %t, ", info.IsStream)
 	fmt.Fprintf(b, "IsPlayground: %t, ", info.IsPlayground)
 	fmt.Fprintf(b, "RequestURLPath: %q, ", info.RequestURLPath)
+	fmt.Fprintf(b, "RequestedModelName: %q, ", info.RequestedModelName)
+	fmt.Fprintf(b, "RoutingModelName: %q, ", info.RoutingModelName)
 	fmt.Fprintf(b, "OriginModelName: %q, ", info.OriginModelName)
 	fmt.Fprintf(b, "EstimatePromptTokens: %d, ", info.estimatePromptTokens)
 	fmt.Fprintf(b, "ShouldIncludeUsage: %t, ", info.ShouldIncludeUsage)
@@ -480,7 +487,9 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		UserQuota:  common.GetContextKeyInt(c, constant.ContextKeyUserQuota),
 		UserEmail:  common.GetContextKeyString(c, constant.ContextKeyUserEmail),
 
-		OriginModelName: common.GetContextKeyString(c, constant.ContextKeyOriginalModel),
+		RequestedModelName: common.GetContextKeyString(c, constant.ContextKeyOriginalModel),
+		RoutingModelName:   common.GetContextKeyString(c, constant.ContextKeyOriginalModel),
+		OriginModelName:    common.GetContextKeyString(c, constant.ContextKeyOriginalModel),
 
 		TokenId:        common.GetContextKeyInt(c, constant.ContextKeyTokenId),
 		TokenKey:       common.GetContextKeyString(c, constant.ContextKeyTokenKey),
@@ -646,6 +655,7 @@ func (info *RelayInfo) GetFinalRequestRelayFormat() types.RelayFormat {
 
 func GenRelayInfoResponsesCompaction(c *gin.Context, request *dto.OpenAIResponsesCompactionRequest) *RelayInfo {
 	info := genBaseRelayInfo(c, request)
+	info.RequestedModelName = request.Model
 	if info.RelayMode == relayconstant.RelayModeUnknown {
 		info.RelayMode = relayconstant.RelayModeResponsesCompact
 	}
@@ -657,12 +667,53 @@ func GenRelayInfoResponsesCompaction(c *gin.Context, request *dto.OpenAIResponse
 //	info.promptTokens = promptTokens
 //}
 
+// SetEstimatePromptTokens 保存客户端原始请求的 token 估算基线。
 func (info *RelayInfo) SetEstimatePromptTokens(promptTokens int) {
+	info.baseEstimatePromptTokens = promptTokens
 	info.estimatePromptTokens = promptTokens
 }
 
+// SetInjectedPromptTokenDelta 使用初始估算加上当前渠道实际注入的 token 增量，避免重试时重复累加。
+func (info *RelayInfo) SetInjectedPromptTokenDelta(delta int) {
+	info.estimatePromptTokens = info.baseEstimatePromptTokens + delta
+}
+
+// ResetEstimatePromptTokens 在切换渠道时恢复客户端原始请求的 token 估算。
+func (info *RelayInfo) ResetEstimatePromptTokens() {
+	info.estimatePromptTokens = info.baseEstimatePromptTokens
+}
+
+// GetEstimatePromptTokens 返回当前渠道实际请求使用的 token 估算。
 func (info *RelayInfo) GetEstimatePromptTokens() int {
 	return info.estimatePromptTokens
+}
+
+// GetRequestedModelName 返回初始化后保持不变的客户端请求模型。
+func (info *RelayInfo) GetRequestedModelName() string {
+	if info == nil {
+		return ""
+	}
+	if info.RequestedModelName != "" {
+		return info.RequestedModelName
+	}
+	if info.RoutingModelName != "" {
+		return info.RoutingModelName
+	}
+	return info.OriginModelName
+}
+
+// GetRoutingModelName 返回初始化后保持不变的渠道选择与计费模型。
+func (info *RelayInfo) GetRoutingModelName() string {
+	if info == nil {
+		return ""
+	}
+	if info.RoutingModelName != "" {
+		return info.RoutingModelName
+	}
+	if info.OriginModelName != "" {
+		return info.OriginModelName
+	}
+	return info.RequestedModelName
 }
 
 func (info *RelayInfo) SetFirstResponseTime() {

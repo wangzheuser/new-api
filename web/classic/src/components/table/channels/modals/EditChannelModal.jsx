@@ -46,6 +46,8 @@ import {
   Col,
   Highlight,
   Input,
+  TextArea,
+  Select,
   Tooltip,
   Collapse,
   Dropdown,
@@ -194,6 +196,7 @@ const EditChannelModal = (props) => {
     pass_through_body_enabled: false,
     system_prompt: '',
     system_prompt_override: false,
+    model_system_prompts: {},
     settings: '',
     // 仅 Vertex: 密钥格式（存入 settings.vertex_key_type）
     vertex_key_type: 'json',
@@ -250,6 +253,13 @@ const EditChannelModal = (props) => {
   const [keyMode, setKeyMode] = useState('append'); // 密钥模式：replace（覆盖）或 append（追加）
   const [isEnterpriseAccount, setIsEnterpriseAccount] = useState(false); // 是否为企业账户
   const [doubaoApiEditUnlocked, setDoubaoApiEditUnlocked] = useState(false); // 豆包渠道自定义 API 地址隐藏入口
+  const publishedModelOptions = useMemo(
+    () =>
+      Array.from(new Set((inputs.models || []).map(String).filter(Boolean))).map(
+        (model) => ({ label: model, value: model }),
+      ),
+    [inputs.models],
+  );
   const redirectModelList = useMemo(() => {
     const mapping = inputs.model_mapping;
     if (typeof mapping !== 'string') return [];
@@ -515,6 +525,8 @@ const EditChannelModal = (props) => {
     proxy: '',
     pass_through_body_enabled: false,
     system_prompt: '',
+    system_prompt_override: false,
+    model_system_prompts: {},
   });
   const showApiConfigCard = true; // 控制是否显示 API 配置卡片
   const getInitValues = () => ({ ...originInputs });
@@ -868,6 +880,12 @@ const EditChannelModal = (props) => {
           data.system_prompt = parsedSettings.system_prompt || '';
           data.system_prompt_override =
             parsedSettings.system_prompt_override || false;
+          data.model_system_prompts =
+            parsedSettings.model_system_prompts &&
+            typeof parsedSettings.model_system_prompts === 'object' &&
+            !Array.isArray(parsedSettings.model_system_prompts)
+              ? parsedSettings.model_system_prompts
+              : {};
         } catch (error) {
           console.error('解析渠道设置失败:', error);
           data.force_format = false;
@@ -876,6 +894,7 @@ const EditChannelModal = (props) => {
           data.pass_through_body_enabled = false;
           data.system_prompt = '';
           data.system_prompt_override = false;
+          data.model_system_prompts = {};
         }
       } else {
         data.force_format = false;
@@ -884,6 +903,7 @@ const EditChannelModal = (props) => {
         data.pass_through_body_enabled = false;
         data.system_prompt = '';
         data.system_prompt_override = false;
+        data.model_system_prompts = {};
       }
 
       if (data.settings) {
@@ -993,6 +1013,7 @@ const EditChannelModal = (props) => {
         pass_through_body_enabled: data.pass_through_body_enabled,
         system_prompt: data.system_prompt,
         system_prompt_override: data.system_prompt_override || false,
+        model_system_prompts: data.model_system_prompts || {},
       });
       initialModelsRef.current = (data.models || [])
         .map((model) => (model || '').trim())
@@ -1031,6 +1052,7 @@ const EditChannelModal = (props) => {
         (data.weight && data.weight !== 0) ||
         (data.proxy && data.proxy.trim()) ||
         (data.system_prompt && data.system_prompt.trim()) ||
+        Object.keys(data.model_system_prompts || {}).length > 0 ||
         data.thinking_to_content ||
         data.pass_through_body_enabled ||
         data.force_format ||
@@ -1377,6 +1399,7 @@ const EditChannelModal = (props) => {
       pass_through_body_enabled: false,
       system_prompt: '',
       system_prompt_override: false,
+      model_system_prompts: {},
     });
     // 重置密钥模式状态
     setKeyMode('append');
@@ -1652,6 +1675,27 @@ const EditChannelModal = (props) => {
       showInfo(t('请至少选择一个模型！'));
       return;
     }
+    const modelSystemPrompts = localInputs.model_system_prompts || {};
+    if (Object.keys(modelSystemPrompts).length > 256) {
+      showInfo(t('模型专属系统提示词最多配置 256 项'));
+      return;
+    }
+    for (const [model, prompt] of Object.entries(modelSystemPrompts)) {
+      if (!model.trim() || model !== model.trim() || model.length > 255) {
+        showInfo(
+          t('模型专属系统提示词包含无效的模型名称：{{model}}', { model }),
+        );
+        return;
+      }
+      if (!String(prompt).trim()) {
+        showInfo(t('请填写模型 {{model}} 的系统提示词', { model }));
+        return;
+      }
+      if (new TextEncoder().encode(String(prompt)).length > 64 * 1024) {
+        showInfo(t('模型 {{model}} 的系统提示词不能超过 64 KiB', { model }));
+        return;
+      }
+    }
     if (
       localInputs.type === 45 &&
       (!localInputs.base_url || localInputs.base_url.trim() === '')
@@ -1747,8 +1791,13 @@ const EditChannelModal = (props) => {
       pass_through_body_enabled: localInputs.pass_through_body_enabled || false,
       system_prompt: localInputs.system_prompt || '',
       system_prompt_override: localInputs.system_prompt_override || false,
+      model_system_prompts: localInputs.model_system_prompts || {},
     };
     localInputs.setting = JSON.stringify(channelExtraSettings);
+    if (new TextEncoder().encode(localInputs.setting).length > 64 * 1024 - 1) {
+      showInfo(t('渠道设置不能超过 64 KiB'));
+      return;
+    }
 
     // 处理 settings 字段（包括企业账户设置和字段透传控制）
     let settings = {};
@@ -1832,6 +1881,7 @@ const EditChannelModal = (props) => {
     delete localInputs.pass_through_body_enabled;
     delete localInputs.system_prompt;
     delete localInputs.system_prompt_override;
+    delete localInputs.model_system_prompts;
     delete localInputs.is_enterprise_account;
     // 顶层的 vertex_key_type 不应发送给后端
     delete localInputs.vertex_key_type;
@@ -2527,6 +2577,60 @@ const EditChannelModal = (props) => {
 
                   <Form.TextArea field='system_prompt' label={t('系统提示词')} placeholder={t('输入系统提示词，用户的系统提示词将优先于此设置')} onChange={(value) => handleChannelSettingsChange('system_prompt', value)} autosize showClear extraText={t('用户优先：如果用户在请求中指定了系统提示词，将优先使用用户的设置')} />
                   <Form.Switch field='system_prompt_override' label={t('系统提示词拼接')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelSettingsChange('system_prompt_override', value)} extraText={t('如果用户请求中包含系统提示词，则使用此设置拼接到用户的系统提示词前面')} />
+
+                  <div className='mt-4 mb-2 text-sm font-medium text-gray-700'>
+                    {t('模型专属系统提示词')}
+                  </div>
+                  <Text className='text-xs text-gray-500 mb-2 block'>
+                    {t(
+                      '适用于 Chat Completions、Responses、Claude Messages、Gemini GenerateContent 和 Realtime 会话更新；按模型映射前的请求模型名匹配。全局或渠道请求体透传会停用注入。',
+                    )}
+                  </Text>
+                  <Select
+                    multiple
+                    filter
+                    style={{ width: '100%', marginBottom: 12 }}
+                    placeholder={t('选择需要配置系统提示词的模型')}
+                    optionList={publishedModelOptions}
+                    value={Object.keys(inputs.model_system_prompts || {})}
+                    onChange={(models) => {
+                      const current = inputs.model_system_prompts || {};
+                      const next = {};
+                      (models || []).forEach((model) => {
+                        next[model] = current[model] || '';
+                      });
+                      handleChannelSettingsChange(
+                        'model_system_prompts',
+                        next,
+                      );
+                    }}
+                  />
+                  {Object.entries(inputs.model_system_prompts || {}).map(
+                    ([model, prompt]) => (
+                      <div
+                        key={model}
+                        className='mb-3 rounded border border-gray-200 p-3'
+                      >
+                        <Tag className='mb-2'>{model}</Tag>
+                        <TextArea
+                          value={prompt}
+                          autosize={{ minRows: 3, maxRows: 10 }}
+                          placeholder={t(
+                            '输入要为该模型前置拼接的系统提示词',
+                          )}
+                          onChange={(value) =>
+                            handleChannelSettingsChange(
+                              'model_system_prompts',
+                              {
+                                ...(inputs.model_system_prompts || {}),
+                                [model]: value,
+                              },
+                            )
+                          }
+                        />
+                      </div>
+                    ),
+                  )}
                 </div>
               </div>
             );
