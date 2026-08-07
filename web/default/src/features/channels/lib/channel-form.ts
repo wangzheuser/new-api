@@ -23,7 +23,7 @@ import {
   ERROR_MESSAGES,
   MODEL_FETCHABLE_TYPES,
 } from '../constants'
-import type { Channel, ModelContextFallback } from '../types'
+import type { Channel } from '../types'
 import {
   CHANNEL_TYPE_ADVANCED_CUSTOM,
   advancedCustomConfigUsesRelativeUpstreamPath,
@@ -31,6 +31,7 @@ import {
   stringifyAdvancedCustomConfig,
   validateAdvancedCustomConfig,
 } from './advanced-custom'
+import { parseContextFallbackValue } from './model-context-fallback'
 
 // ============================================================================
 // Form Validation Schema
@@ -92,73 +93,7 @@ function isOptionalStatusCodeMapping(value: string | undefined): boolean {
 }
 
 function getContextFallbacksError(value: string | undefined): string | null {
-  if (!value?.trim()) return null
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(value)
-  } catch {
-    return ERROR_MESSAGES.INVALID_JSON
-  }
-  if (!isJsonObjectValue(parsed)) {
-    return 'Context fallback rules must be a JSON object'
-  }
-  const entries = Object.entries(parsed)
-  if (entries.length > 256) {
-    return 'Context fallback rules cannot exceed 256 entries'
-  }
-  for (const [sourceModel, rawRule] of entries) {
-    if (
-      !sourceModel.trim() ||
-      sourceModel !== sourceModel.trim() ||
-      sourceModel.length > 255 ||
-      !isJsonObjectValue(rawRule)
-    ) {
-      return 'Context fallback rule contains an invalid source model'
-    }
-    const rule = rawRule as Partial<ModelContextFallback>
-    if (
-      !Number.isSafeInteger(rule.source_context_window_tokens) ||
-      Number(rule.source_context_window_tokens) <= 0
-    ) {
-      return `Source context window must be a positive integer: ${sourceModel}`
-    }
-    if (
-      rule.threshold_percent != null &&
-      (!Number.isInteger(rule.threshold_percent) ||
-        rule.threshold_percent < 1 ||
-        rule.threshold_percent > 100)
-    ) {
-      return `Threshold percent must be between 1 and 100: ${sourceModel}`
-    }
-    if (
-      typeof rule.fallback_model !== 'string' ||
-      !rule.fallback_model.trim() ||
-      rule.fallback_model !== rule.fallback_model.trim() ||
-      rule.fallback_model.length > 255 ||
-      rule.fallback_model === sourceModel
-    ) {
-      return `Fallback model is invalid: ${sourceModel}`
-    }
-    if (
-      !Number.isSafeInteger(rule.fallback_context_window_tokens) ||
-      Number(rule.fallback_context_window_tokens) <= 0
-    ) {
-      return `Fallback context window must be a positive integer: ${sourceModel}`
-    }
-    if (!['same_channel', 'cross_channel'].includes(rule.route_mode ?? '')) {
-      return `Route mode must be same_channel or cross_channel: ${sourceModel}`
-    }
-    const targetIds = rule.target_channel_ids ?? []
-    if (
-      !Array.isArray(targetIds) ||
-      targetIds.some((id) => !Number.isSafeInteger(id) || id <= 0) ||
-      new Set(targetIds).size !== targetIds.length ||
-      (rule.route_mode === 'same_channel' && targetIds.length > 0)
-    ) {
-      return `Target channel IDs are invalid: ${sourceModel}`
-    }
-  }
-  return null
+  return parseContextFallbackValue(value || '').error?.message ?? null
 }
 
 function isCodexCredential(value: string | undefined): boolean {

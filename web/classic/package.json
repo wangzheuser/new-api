@@ -46,7 +46,7 @@
   "scripts": {
     "dev": "rsbuild dev",
     "build": "rsbuild build && node ../default/scripts/verify-build-recovery.mjs",
-    "test": "node --test src/utils/chunk-load-error.test.js",
+    "test": "node --test src/utils/chunk-load-error.test.js src/components/table/channels/modals/modelContextFallback.test.js",
     "assets:merge-previous": "node ../default/scripts/merge-previous-assets.mjs",
     "assets:verify-recovery": "node ../default/scripts/verify-build-recovery.mjs",
     "lint": "prettier . --check",

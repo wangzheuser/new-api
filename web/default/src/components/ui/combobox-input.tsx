@@ -39,6 +39,9 @@ interface ComboboxInputProps {
   id?: string
   allowCustomValue?: boolean
   openOnFocus?: boolean
+  disabled?: boolean
+  'aria-invalid'?: boolean
+  'aria-describedby'?: string
 }
 
 export function ComboboxInput({
@@ -51,6 +54,9 @@ export function ComboboxInput({
   id,
   allowCustomValue = false,
   openOnFocus = true,
+  disabled = false,
+  'aria-invalid': ariaInvalid,
+  'aria-describedby': ariaDescribedBy,
 }: ComboboxInputProps) {
   const { t } = useTranslation()
   const [open, setOpen] = React.useState(false)
@@ -155,6 +161,7 @@ export function ComboboxInput({
   }, [highlightedIndex])
 
   const showDropdown =
+    !disabled &&
     open &&
     (filteredOptions.length > 0 || (allowCustomValue && searchValue.trim()))
 
@@ -168,7 +175,10 @@ export function ComboboxInput({
         aria-expanded={open}
         aria-haspopup='listbox'
         aria-autocomplete='list'
+        aria-invalid={ariaInvalid}
+        aria-describedby={ariaDescribedBy}
         autoComplete='off'
+        disabled={disabled}
         placeholder={placeholder}
         value={displayValue}
         onChange={(e) => {

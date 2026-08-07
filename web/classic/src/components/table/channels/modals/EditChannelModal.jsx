@@ -63,6 +63,8 @@ import ModelSelectModal from './ModelSelectModal';
 import SingleModelSelectModal from './SingleModelSelectModal';
 import OllamaModelModal from './OllamaModelModal';
 import ParamOverrideEditorModal from './ParamOverrideEditorModal';
+import ModelContextFallbackEditor from './ModelContextFallbackEditor';
+import { validateModelContextFallbacks } from './modelContextFallback';
 import JSONEditor from '../../../common/ui/JSONEditor';
 import SecureVerificationModal from '../../../common/modals/SecureVerificationModal';
 import StatusCodeRiskGuardModal from './StatusCodeRiskGuardModal';
@@ -97,17 +99,6 @@ const STATUS_CODE_MAPPING_EXAMPLE = {
   400: '500',
 };
 
-const MODEL_CONTEXT_FALLBACK_EXAMPLE = {
-  MODEL_A: {
-    source_context_window_tokens: 262144,
-    threshold_percent: 90,
-    fallback_model: 'MODEL_B',
-    fallback_context_window_tokens: 1048576,
-    route_mode: 'cross_channel',
-    target_channel_ids: [],
-  },
-};
-
 const REGION_EXAMPLE = {
   default: 'global',
   'gemini-1.5-pro-002': 'europe-west2',
@@ -140,39 +131,6 @@ const PARAM_OVERRIDE_OPERATIONS_TEMPLATE = {
 };
 
 const DEPRECATED_DOUBAO_CODING_PLAN_BASE_URL = 'doubao-coding-plan';
-
-function validateModelContextFallbacks(rules) {
-  if (!rules || typeof rules !== 'object' || Array.isArray(rules)) {
-    return '上下文兜底规则必须是 JSON 对象';
-  }
-  const entries = Object.entries(rules);
-  if (entries.length > 256) return '上下文兜底规则最多配置 256 项';
-  for (const [sourceModel, rule] of entries) {
-    if (!sourceModel.trim() || sourceModel !== sourceModel.trim() || sourceModel.length > 255 || !rule || typeof rule !== 'object' || Array.isArray(rule)) {
-      return `源模型配置无效：${sourceModel}`;
-    }
-    if (!Number.isSafeInteger(rule.source_context_window_tokens) || rule.source_context_window_tokens <= 0) {
-      return `源模型上下文窗口必须是正整数：${sourceModel}`;
-    }
-    if (rule.threshold_percent !== undefined && (!Number.isInteger(rule.threshold_percent) || rule.threshold_percent < 1 || rule.threshold_percent > 100)) {
-      return `触发阈值必须在 1 到 100 之间：${sourceModel}`;
-    }
-    if (typeof rule.fallback_model !== 'string' || !rule.fallback_model.trim() || rule.fallback_model !== rule.fallback_model.trim() || rule.fallback_model.length > 255 || rule.fallback_model === sourceModel) {
-      return `兜底模型配置无效：${sourceModel}`;
-    }
-    if (!Number.isSafeInteger(rule.fallback_context_window_tokens) || rule.fallback_context_window_tokens <= 0) {
-      return `兜底模型上下文窗口必须是正整数：${sourceModel}`;
-    }
-    if (!['same_channel', 'cross_channel'].includes(rule.route_mode)) {
-      return `路由模式必须是 same_channel 或 cross_channel：${sourceModel}`;
-    }
-    const targetIds = rule.target_channel_ids || [];
-    if (!Array.isArray(targetIds) || targetIds.some((id) => !Number.isSafeInteger(id) || id <= 0) || new Set(targetIds).size !== targetIds.length || (rule.route_mode === 'same_channel' && targetIds.length > 0)) {
-      return `目标渠道 ID 配置无效：${sourceModel}`;
-    }
-  }
-  return '';
-}
 
 // 支持并且已适配通过接口获取模型列表的渠道类型
 const MODEL_FETCHABLE_TYPES = new Set([
@@ -210,6 +168,9 @@ const EditChannelModal = (props) => {
   const channelId = props.editingChannel.id;
   const isEdit = channelId !== undefined;
   const [loading, setLoading] = useState(isEdit);
+  const [submitting, setSubmitting] = useState(false);
+  const [contextFallbackEditorError, setContextFallbackEditorError] =
+    useState('');
   const isMobile = useIsMobile();
   const handleCancel = () => {
     props.handleClose();
@@ -1635,6 +1596,12 @@ const EditChannelModal = (props) => {
     let localInputs = { ...formValues };
     localInputs.param_override = inputs.param_override;
 
+    if (contextFallbackEditorError) {
+      showInfo(t(contextFallbackEditorError));
+      setAdvancedSettingsOpen(true);
+      return;
+    }
+
     if (localInputs.type === 57) {
       if (batch) {
         showInfo(t('Codex 渠道不支持批量创建'));
@@ -1990,7 +1957,6 @@ const EditChannelModal = (props) => {
     delete localInputs.upstream_model_update_last_detected_models;
     delete localInputs.upstream_model_update_ignored_models;
 
-    let res;
     localInputs.auto_ban = localInputs.auto_ban ? 1 : 0;
     localInputs.models = localInputs.models.join(',');
     localInputs.group = (localInputs.groups || []).join(',');
@@ -2000,31 +1966,40 @@ const EditChannelModal = (props) => {
       mode = multiToSingle ? 'multi_to_single' : 'batch';
     }
 
-    if (isEdit) {
-      res = await API.put(`/api/channel/`, {
-        ...localInputs,
-        id: parseInt(channelId),
-        key_mode: isMultiKeyChannel ? keyMode : undefined, // 只在多key模式下传递
-      });
-    } else {
-      res = await API.post(`/api/channel/`, {
-        mode: mode,
-        multi_key_mode: mode === 'multi_to_single' ? multiKeyMode : undefined,
-        channel: localInputs,
-      });
-    }
-    const { success, message } = res.data;
-    if (success) {
+    setSubmitting(true);
+    try {
+      let res;
       if (isEdit) {
-        showSuccess(t('渠道更新成功！'));
+        res = await API.put(`/api/channel/`, {
+          ...localInputs,
+          id: parseInt(channelId),
+          key_mode: isMultiKeyChannel ? keyMode : undefined, // 只在多key模式下传递
+        });
       } else {
-        showSuccess(t('渠道创建成功！'));
-        setInputs(originInputs);
+        res = await API.post(`/api/channel/`, {
+          mode: mode,
+          multi_key_mode:
+            mode === 'multi_to_single' ? multiKeyMode : undefined,
+          channel: localInputs,
+        });
       }
-      props.refresh();
-      props.handleClose();
-    } else {
-      showError(message);
+      const { success, message } = res.data;
+      if (success) {
+        if (isEdit) {
+          showSuccess(t('渠道更新成功！'));
+        } else {
+          showSuccess(t('渠道创建成功！'));
+          setInputs(originInputs);
+        }
+        props.refresh();
+        props.handleClose();
+      } else {
+        showError(message);
+      }
+    } catch (error) {
+      showError(error.message);
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -2320,6 +2295,8 @@ const EditChannelModal = (props) => {
           <div className='flex justify-end items-center gap-2'>
             <Button
               theme='solid'
+              loading={submitting}
+              disabled={loading || submitting}
               onClick={() => formApiRef.current?.submitForm()}
               icon={<IconSave />}
             >
@@ -2328,6 +2305,7 @@ const EditChannelModal = (props) => {
             <Button
               theme='light'
               type='primary'
+              disabled={submitting}
               onClick={handleCancel}
               icon={<IconClose />}
             >
@@ -2667,18 +2645,21 @@ const EditChannelModal = (props) => {
                   <div className='mt-4 mb-2 text-sm font-medium text-gray-700'>
                     {t('模型上下文兜底')}
                   </div>
-                  <JSONEditor
-                    key={`model_context_fallbacks-${isEdit ? channelId : 'new'}`}
-                    field='model_context_fallbacks'
-                    label={t('上下文兜底规则')}
-                    placeholder={JSON.stringify(MODEL_CONTEXT_FALLBACK_EXAMPLE, null, 2)}
+                  <Text className='text-xs text-gray-500 mb-2 block'>
+                    {t('当输入 Token 与预留输出 Token 之和超过源模型阈值时，单次切换到兜底模型；阈值默认 90%。')}
+                  </Text>
+                  <ModelContextFallbackEditor
+                    key={`model-context-fallback-${isEdit ? channelId : 'new'}`}
                     value={inputs.model_context_fallbacks || ''}
                     onChange={handleModelContextFallbacksChange}
-                    template={MODEL_CONTEXT_FALLBACK_EXAMPLE}
-                    templateLabel={t('填入模板')}
-                    editorType='object'
-                    formApi={formApiRef.current}
-                    extraText={t('当输入 Token 与预留输出 Token 之和超过源模型阈值时，单次切换到兜底模型；阈值默认 90%。target_channel_ids 留空时在相同分组内自动选择渠道。')}
+                    sourceModels={(inputs.models || []).map(String)}
+                    fallbackModels={fullModels}
+                    currentChannelId={isEdit ? Number(channelId) : undefined}
+                    currentGroups={inputs.groups || []}
+                    disabled={loading || submitting}
+                    onValidityChange={(error) =>
+                      setContextFallbackEditorError(error || '')
+                    }
                   />
 
                   <Form.TextArea field='system_prompt' label={t('系统提示词')} placeholder={t('输入系统提示词，用户的系统提示词将优先于此设置')} onChange={(value) => handleChannelSettingsChange('system_prompt', value)} autosize showClear extraText={t('用户优先：如果用户在请求中指定了系统提示词，将优先使用用户的设置')} />

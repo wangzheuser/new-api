@@ -10,6 +10,7 @@
     "assets:verify-recovery": "node scripts/verify-build-recovery.mjs",
     "build:check": "tsgo -b && bun run build",
     "typecheck": "tsgo -b",
+    "test": "bun test src/features/channels/lib/model-context-fallback.test.ts",
     "lint": "oxlint -c .oxlintrc.json .",
     "lint:fix": "oxlint -c .oxlintrc.json . --fix",
     "preview": "rsbuild preview",

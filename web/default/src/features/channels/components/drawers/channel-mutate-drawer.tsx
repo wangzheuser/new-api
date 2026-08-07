@@ -181,6 +181,7 @@ import {
 } from '../dialogs/missing-models-confirmation-dialog'
 import { ParamOverrideEditorDialog } from '../dialogs/param-override-editor-dialog'
 import { StatusCodeRiskDialog } from '../dialogs/status-code-risk-dialog'
+import { ModelContextFallbackEditor } from '../model-context-fallback-editor'
 import { ModelMappingEditor } from '../model-mapping-editor'
 import { ModelSystemPromptEditor } from '../model-system-prompt-editor'
 import {
@@ -654,6 +655,9 @@ export function ChannelMutateDrawer({
     useState(false)
   const [clipboardConnectionInfo, setClipboardConnectionInfo] =
     useState<ChannelConnectionInfo | null>(null)
+  const [contextFallbackEditorError, setContextFallbackEditorError] = useState<
+    string | null
+  >(null)
 
   const isEditing = Boolean(currentRow)
   const channelId = currentRow?.id ?? null
@@ -715,6 +719,25 @@ export function ChannelMutateDrawer({
     resolver: zodResolver(channelFormSchema),
     defaultValues: CHANNEL_FORM_DEFAULT_VALUES,
   })
+
+  const handleContextFallbackValidityChange = useCallback(
+    (error: string | null) => {
+      setContextFallbackEditorError(error)
+      if (error) {
+        form.setError('model_context_fallbacks', {
+          type: 'manual',
+          message: error,
+        })
+        return
+      }
+      if (
+        form.getFieldState('model_context_fallbacks').error?.type === 'manual'
+      ) {
+        form.clearErrors('model_context_fallbacks')
+      }
+    },
+    [form]
+  )
 
   // Watch form values for conditional rendering
   const multiKeyMode = form.watch('multi_key_mode')
@@ -1659,6 +1682,15 @@ export function ChannelMutateDrawer({
   // Submit handler
   const onSubmit = useCallback(
     async (data: ChannelFormValues) => {
+      if (contextFallbackEditorError) {
+        form.setError('model_context_fallbacks', {
+          type: 'manual',
+          message: contextFallbackEditorError,
+        })
+        setAdvancedSettingsOpen(true)
+        return
+      }
+
       // Validate key is required when creating
       if (!isEditing && !data.key?.trim()) {
         form.setError('key', {
@@ -1764,6 +1796,7 @@ export function ChannelMutateDrawer({
       confirmMissingModelMappings,
       confirmStatusCodeRisk,
       channelMutation,
+      contextFallbackEditorError,
       t,
     ]
   )
@@ -1887,6 +1920,7 @@ export function ChannelMutateDrawer({
         setExpandedEditorNavItemId(undefined)
         setAdvancedSettingsOpen(false)
         setClipboardConnectionInfo(null)
+        setContextFallbackEditorError(null)
       }
     },
     [onOpenChange, form]
@@ -3910,28 +3944,18 @@ export function ChannelMutateDrawer({
                                     </FormDescription>
                                   </div>
                                   <FormControl>
-                                    <JsonEditor
+                                    <ModelContextFallbackEditor
+                                      key={`model-context-fallback-${channelId ?? 'new'}`}
                                       value={field.value || ''}
                                       onChange={field.onChange}
+                                      sourceModels={currentModelsArray}
+                                      fallbackModels={allModelsList}
+                                      currentChannelId={channelId ?? undefined}
+                                      currentGroups={currentGroups || []}
                                       disabled={sensitiveLocked || isSubmitting}
-                                      keyPlaceholder='MODEL_A'
-                                      valuePlaceholder={t('Fallback rule JSON')}
-                                      keyLabel={t('Source Model')}
-                                      valueLabel={t('Fallback Rule')}
-                                      emptyMessage={t(
-                                        'No model context fallback rules configured.'
-                                      )}
-                                      template={{
-                                        MODEL_A: {
-                                          source_context_window_tokens: 262144,
-                                          threshold_percent: 90,
-                                          fallback_model: 'MODEL_B',
-                                          fallback_context_window_tokens: 1048576,
-                                          route_mode: 'cross_channel',
-                                          target_channel_ids: [],
-                                        },
-                                      }}
-                                      valueType='any'
+                                      onValidityChange={
+                                        handleContextFallbackValidityChange
+                                      }
                                     />
                                   </FormControl>
                                   <FormMessage />
