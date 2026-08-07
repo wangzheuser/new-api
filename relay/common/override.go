@@ -839,6 +839,31 @@ func applyOperations(jsonData []byte, operations []ParamOperation, conditionCont
 		if !ok {
 			continue // 条件不满足，跳过当前操作
 		}
+
+		var compiledRegex *regexp.Regexp
+		switch op.Mode {
+		case "trim_prefix", "trim_suffix":
+			if op.Value == nil {
+				return nil, fmt.Errorf("operation %s failed: trim value is required", op.Mode)
+			}
+		case "ensure_prefix", "ensure_suffix":
+			if op.Value == nil || fmt.Sprintf("%v", op.Value) == "" {
+				return nil, fmt.Errorf("operation %s failed: ensure value is required", op.Mode)
+			}
+		case "replace":
+			if op.From == "" {
+				return nil, fmt.Errorf("operation %s failed: replace from is required", op.Mode)
+			}
+		case "regex_replace":
+			if op.From == "" {
+				return nil, fmt.Errorf("operation %s failed: regex pattern is required", op.Mode)
+			}
+			compiledRegex, err = regexp.Compile(op.From)
+			if err != nil {
+				return nil, fmt.Errorf("operation %s failed: %w", op.Mode, err)
+			}
+		}
+
 		// 处理路径中的负数索引
 		opPath := processNegativeIndex(result, op.Path)
 		var opPaths []string
@@ -850,6 +875,15 @@ func applyOperations(jsonData []byte, operations []ParamOperation, conditionCont
 			if len(opPaths) == 0 {
 				continue
 			}
+		}
+
+		// 读取现值的转换操作只处理实际存在的非空节点。
+		switch op.Mode {
+		case "prepend", "append", "trim_prefix", "trim_suffix", "ensure_prefix", "ensure_suffix", "trim_space", "to_lower", "to_upper", "replace", "regex_replace":
+			opPaths = lo.Filter(opPaths, func(path string, _ int) bool {
+				current := gjson.GetBytes(result, path)
+				return current.Exists() && current.Type != gjson.Null
+			})
 		}
 
 		switch op.Mode {
@@ -971,7 +1005,7 @@ func applyOperations(jsonData []byte, operations []ParamOperation, conditionCont
 			}
 		case "regex_replace":
 			for _, path := range opPaths {
-				result, err = regexReplaceStringValue(result, path, op.From, op.To)
+				result, err = regexReplaceStringValue(result, path, compiledRegex, op.To)
 				if err != nil {
 					break
 				}
@@ -1805,10 +1839,6 @@ func trimStringValue(data []byte, path string, value interface{}, isPrefix bool)
 	if current.Type != gjson.String {
 		return data, fmt.Errorf("operation not supported for type: %v", current.Type)
 	}
-
-	if value == nil {
-		return data, fmt.Errorf("trim value is required")
-	}
 	valueStr := fmt.Sprintf("%v", value)
 
 	var newStr string
@@ -1825,14 +1855,7 @@ func ensureStringAffix(data []byte, path string, value interface{}, isPrefix boo
 	if current.Type != gjson.String {
 		return data, fmt.Errorf("operation not supported for type: %v", current.Type)
 	}
-
-	if value == nil {
-		return data, fmt.Errorf("ensure value is required")
-	}
 	valueStr := fmt.Sprintf("%v", value)
-	if valueStr == "" {
-		return data, fmt.Errorf("ensure value is required")
-	}
 
 	currentStr := current.String()
 	if isPrefix {
@@ -1861,23 +1884,13 @@ func replaceStringValue(data []byte, path, from, to string) ([]byte, error) {
 	if current.Type != gjson.String {
 		return data, fmt.Errorf("operation not supported for type: %v", current.Type)
 	}
-	if from == "" {
-		return data, fmt.Errorf("replace from is required")
-	}
 	return sjson.SetBytes(data, path, strings.ReplaceAll(current.String(), from, to))
 }
 
-func regexReplaceStringValue(data []byte, path, pattern, replacement string) ([]byte, error) {
+func regexReplaceStringValue(data []byte, path string, re *regexp.Regexp, replacement string) ([]byte, error) {
 	current := gjson.GetBytes(data, path)
 	if current.Type != gjson.String {
 		return data, fmt.Errorf("operation not supported for type: %v", current.Type)
-	}
-	if pattern == "" {
-		return data, fmt.Errorf("regex pattern is required")
-	}
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		return data, err
 	}
 	return sjson.SetBytes(data, path, re.ReplaceAllString(current.String(), replacement))
 }

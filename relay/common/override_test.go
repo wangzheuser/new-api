@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	common2 "github.com/QuantumNous/new-api/common"
@@ -12,7 +13,9 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/samber/lo"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestApplyParamOverrideTrimPrefix(t *testing.T) {
@@ -461,6 +464,166 @@ func TestApplyParamOverrideTrimSpaceMultiWildcardPath(t *testing.T) {
 	})
 	if !reflect.DeepEqual(names, []string{"alpha", "beta", "gamma"}) {
 		t.Fatalf("unexpected names after multi wildcard trim_space: %v", names)
+	}
+}
+
+func TestApplyParamOverrideRegexReplaceSkipsNullAndMissingToolCallIDs(t *testing.T) {
+	originalDebugEnabled := common2.DebugEnabled
+	common2.DebugEnabled = false
+	t.Cleanup(func() {
+		common2.DebugEnabled = originalDebugEnabled
+	})
+
+	info := &RelayInfo{
+		ChannelMeta: &ChannelMeta{
+			ParamOverride: map[string]interface{}{
+				"operations": []interface{}{
+					map[string]interface{}{
+						"mode": "regex_replace",
+						"path": "messages.*.tool_calls.*.id",
+						"from": "[^a-zA-Z0-9_-]+",
+						"to":   "_",
+					},
+					map[string]interface{}{
+						"mode": "regex_replace",
+						"path": "messages.*.tool_call_id",
+						"from": "[^a-zA-Z0-9_-]+",
+						"to":   "_",
+					},
+				},
+			},
+		},
+	}
+	input := []byte(`{
+		"messages":[
+			{"role":"assistant","tool_calls":[
+				{"id":"call.bad:1","type":"function"},
+				{"id":"call_valid-2","type":"function"},
+				{"id":null,"type":"function"},
+				{"type":"function"}
+			]},
+			{"role":"tool","tool_call_id":"call.bad:1","content":"ok"},
+			{"role":"tool","tool_call_id":null,"content":"ignored"},
+			{"role":"user","content":"continue"}
+		]
+	}`)
+
+	out, err := ApplyParamOverrideWithRelayInfo(input, info)
+	require.NoError(t, err)
+	assert.Equal(t, "call_bad_1", gjson.GetBytes(out, "messages.0.tool_calls.0.id").String())
+	assert.Equal(t, "call_valid-2", gjson.GetBytes(out, "messages.0.tool_calls.1.id").String())
+	assert.Equal(t, "null", gjson.GetBytes(out, "messages.0.tool_calls.2.id").Raw)
+	assert.False(t, gjson.GetBytes(out, "messages.0.tool_calls.3.id").Exists())
+	assert.Equal(t, "call_bad_1", gjson.GetBytes(out, "messages.1.tool_call_id").String())
+	assert.Equal(t, "null", gjson.GetBytes(out, "messages.2.tool_call_id").Raw)
+	assert.NotContains(t, strings.Join(info.ParamOverrideAudit, "\n"), "messages.0.tool_calls.2.id")
+	assert.NotContains(t, strings.Join(info.ParamOverrideAudit, "\n"), "messages.0.tool_calls.3.id")
+	assert.NotContains(t, strings.Join(info.ParamOverrideAudit, "\n"), "messages.2.tool_call_id")
+}
+
+func TestApplyParamOverrideTransformOperationsSkipNullAndMissingTargets(t *testing.T) {
+	tests := []struct {
+		name     string
+		mode     string
+		input    string
+		expected string
+		value    interface{}
+		from     string
+		to       string
+	}{
+		{name: "prepend", mode: "prepend", input: "value", expected: "pre-value", value: "pre-"},
+		{name: "append", mode: "append", input: "value", expected: "value-suf", value: "-suf"},
+		{name: "trim prefix", mode: "trim_prefix", input: "pre-value", expected: "value", value: "pre-"},
+		{name: "trim suffix", mode: "trim_suffix", input: "value-suf", expected: "value", value: "-suf"},
+		{name: "ensure prefix", mode: "ensure_prefix", input: "value", expected: "pre-value", value: "pre-"},
+		{name: "ensure suffix", mode: "ensure_suffix", input: "value", expected: "value-suf", value: "-suf"},
+		{name: "trim space", mode: "trim_space", input: " value ", expected: "value"},
+		{name: "to lower", mode: "to_lower", input: "VaLuE", expected: "value"},
+		{name: "to upper", mode: "to_upper", input: "value", expected: "VALUE"},
+		{name: "replace", mode: "replace", input: "a.b", expected: "a_b", from: ".", to: "_"},
+		{name: "regex replace", mode: "regex_replace", input: "a.b", expected: "a_b", from: `[^a-zA-Z0-9_-]+`, to: "_"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			operation := map[string]interface{}{
+				"mode": test.mode,
+				"path": "items.*.value",
+			}
+			if test.value != nil {
+				operation["value"] = test.value
+			}
+			if test.from != "" {
+				operation["from"] = test.from
+			}
+			if test.to != "" {
+				operation["to"] = test.to
+			}
+			input, err := common2.Marshal(map[string]interface{}{
+				"items": []interface{}{
+					map[string]interface{}{"value": test.input},
+					map[string]interface{}{"value": nil},
+					map[string]interface{}{},
+				},
+			})
+			require.NoError(t, err)
+
+			out, err := ApplyParamOverride(input, map[string]interface{}{
+				"operations": []interface{}{operation},
+			}, nil)
+			require.NoError(t, err)
+			assert.Equal(t, test.expected, gjson.GetBytes(out, "items.0.value").String())
+			assert.Equal(t, "null", gjson.GetBytes(out, "items.1.value").Raw)
+			assert.False(t, gjson.GetBytes(out, "items.2.value").Exists())
+		})
+	}
+}
+
+func TestApplyParamOverrideTransformOperationsRejectExistingUnsupportedTypes(t *testing.T) {
+	operations := []map[string]interface{}{
+		{"mode": "prepend", "path": "value", "value": "x"},
+		{"mode": "append", "path": "value", "value": "x"},
+		{"mode": "trim_prefix", "path": "value", "value": "x"},
+		{"mode": "trim_suffix", "path": "value", "value": "x"},
+		{"mode": "ensure_prefix", "path": "value", "value": "x"},
+		{"mode": "ensure_suffix", "path": "value", "value": "x"},
+		{"mode": "trim_space", "path": "value"},
+		{"mode": "to_lower", "path": "value"},
+		{"mode": "to_upper", "path": "value"},
+		{"mode": "replace", "path": "value", "from": "x", "to": "y"},
+		{"mode": "regex_replace", "path": "value", "from": "x", "to": "y"},
+	}
+
+	for _, operation := range operations {
+		t.Run(operation["mode"].(string), func(t *testing.T) {
+			_, err := ApplyParamOverride([]byte(`{"value":123}`), map[string]interface{}{
+				"operations": []interface{}{operation},
+			}, nil)
+			require.ErrorContains(t, err, "operation not supported for type: Number")
+		})
+	}
+}
+
+func TestApplyParamOverrideValidatesTransformOperationsBeforeSkippingTargets(t *testing.T) {
+	tests := []struct {
+		name      string
+		operation map[string]interface{}
+		errText   string
+	}{
+		{name: "trim value", operation: map[string]interface{}{"mode": "trim_prefix", "path": "items.*.value"}, errText: "trim value is required"},
+		{name: "ensure value", operation: map[string]interface{}{"mode": "ensure_suffix", "path": "items.*.value"}, errText: "ensure value is required"},
+		{name: "replace source", operation: map[string]interface{}{"mode": "replace", "path": "items.*.value"}, errText: "replace from is required"},
+		{name: "regex pattern", operation: map[string]interface{}{"mode": "regex_replace", "path": "items.*.value"}, errText: "regex pattern is required"},
+		{name: "invalid regex", operation: map[string]interface{}{"mode": "regex_replace", "path": "items.*.value", "from": "("}, errText: "error parsing regexp"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := ApplyParamOverride([]byte(`{"items":[{"value":null},{}]}`), map[string]interface{}{
+				"operations": []interface{}{test.operation},
+			}, nil)
+			require.ErrorContains(t, err, test.errText)
+		})
 	}
 }
 
