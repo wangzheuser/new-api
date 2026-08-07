@@ -5372,6 +5372,22 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Model Context Fallbacks": "Modèles de secours de contexte",
+    "When input plus reserved output exceeds the source model threshold, route once to the configured fallback model. The default threshold is 90%. Leave target_channel_ids empty to select any eligible channel in the same group.": "Lorsque l’entrée et la sortie réservée dépassent le seuil du modèle source, la requête est routée une fois vers le modèle de secours configuré. Le seuil par défaut est de 90 %. Laissez target_channel_ids vide pour choisir un canal éligible du même groupe.",
+    "Fallback rule JSON": "JSON de la règle de secours",
+    "Source Model": "Modèle source",
+    "Fallback Rule": "Règle de secours",
+    "No model context fallback rules configured.": "Aucune règle de secours de contexte configurée.",
+    "Context Fallback": "Secours de contexte",
+    "Routed": "Routé",
+    "Bypassed": "Ignoré",
+    "Route Mode": "Mode de routage",
+    "Model Route": "Route des modèles",
+    "Billing Model": "Modèle facturé",
+    "Channel Route": "Route des canaux",
+    "Source Demand": "Charge du modèle source",
+    "Fallback Demand": "Charge du modèle de secours",
+    "Injected Prompt Tokens": "Tokens de prompt injectés"
   }
 }

@@ -395,7 +395,7 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 			funding: &SubscriptionFunding{
 				requestId:        relayInfo.RequestId,
 				userId:           relayInfo.UserId,
-				modelName:        relayInfo.OriginModelName,
+				modelName:        relayInfo.GetBillingModelName(),
 				entitlementGroup: entitlementGroup,
 				amount:           subConsume,
 			},

@@ -87,6 +87,16 @@ export interface ChannelSettings {
   system_prompt?: string
   system_prompt_override?: boolean
   model_system_prompts?: Record<string, string>
+  model_context_fallbacks?: Record<string, ModelContextFallback>
+}
+
+export interface ModelContextFallback {
+  source_context_window_tokens: number
+  threshold_percent?: number
+  fallback_model: string
+  fallback_context_window_tokens: number
+  route_mode: 'same_channel' | 'cross_channel'
+  target_channel_ids?: number[]
 }
 
 export interface ChannelOtherSettings {

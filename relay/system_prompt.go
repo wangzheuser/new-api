@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -15,12 +16,124 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// SystemPromptPreview 描述当前渠道尝试的提示词与上下文 Token 结果。
+type SystemPromptPreview struct {
+	BaseInputTokens     int
+	PromptTokens        int
+	FinalInputTokens    int
+	OutputReserveTokens int
+	Applied             bool
+	Prepended           bool
+	Source              string
+	MatchedModel        string
+}
+
 // resolveSystemPrompt 解析当前渠道对原始请求模型生效的系统提示词。
 func resolveSystemPrompt(info *relaycommon.RelayInfo) (string, bool) {
 	if info == nil {
 		return "", false
 	}
-	return info.ChannelSetting.ResolveSystemPrompt(info.GetRequestedModelName())
+	prompt, prepend, _, _ := info.ChannelSetting.ResolveSystemPromptForAttempt(
+		info.GetRequestedModelName(),
+		info.GetAttemptModelName(),
+		info.IsContextFallbackActive(),
+	)
+	return prompt, prepend
+}
+
+// PreviewSystemPromptTokens 在不修改原请求、计费会话和审计上下文的情况下预演当前渠道提示词。
+func PreviewSystemPromptTokens(c *gin.Context, info *relaycommon.RelayInfo, request dto.Request, settings dto.ChannelSettings, attemptModel string, fallbackActive bool) (SystemPromptPreview, *types.NewAPIError) {
+	if info == nil || request == nil {
+		return SystemPromptPreview{}, nil
+	}
+	requestCopy, err := copySystemPromptRequest(request)
+	if err != nil {
+		return SystemPromptPreview{}, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
+	previewInfo := *info
+	previewInfo.SetAttemptModelName(attemptModel)
+	previewInfo.OriginModelName = attemptModel
+	previewInfo.ContextFallback = nil
+	previewInfo.ChannelMeta = &relaycommon.ChannelMeta{
+		ChannelSetting:    settings,
+		UpstreamModelName: attemptModel,
+	}
+	if err := relayhelper.ModelMappedHelper(c, &previewInfo, requestCopy); err != nil {
+		return SystemPromptPreview{}, types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
+	}
+
+	prompt, prepend, source, matchedModel := settings.ResolveSystemPromptForAttempt(
+		info.GetRequestedModelName(),
+		attemptModel,
+		fallbackActive,
+	)
+	before := requestCopy.GetTokenCountMeta()
+	applied, applyErr := applySystemPromptToRequest(nil, requestCopy, prompt, prepend)
+	if applyErr != nil {
+		return SystemPromptPreview{}, types.NewError(applyErr, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+	}
+	after := requestCopy.GetTokenCountMeta()
+	baseTokens, err := service.CountRequestToken(c, before, &previewInfo)
+	if err != nil {
+		return SystemPromptPreview{}, types.NewError(err, types.ErrorCodeCountTokenFailed, types.ErrOptionWithSkipRetry())
+	}
+	finalTokens, err := service.CountRequestToken(c, after, &previewInfo)
+	if err != nil {
+		return SystemPromptPreview{}, types.NewError(err, types.ErrorCodeCountTokenFailed, types.ErrOptionWithSkipRetry())
+	}
+	promptTokens := finalTokens - baseTokens
+	if promptTokens < 0 {
+		promptTokens = 0
+	}
+	return SystemPromptPreview{
+		BaseInputTokens:     baseTokens,
+		PromptTokens:        promptTokens,
+		FinalInputTokens:    finalTokens,
+		OutputReserveTokens: after.MaxTokens,
+		Applied:             applied,
+		Prepended:           applied && prepend,
+		Source:              source,
+		MatchedModel:        matchedModel,
+	}, nil
+}
+
+// copySystemPromptRequest 仅复制已支持系统提示词和上下文兜底的文本请求。
+func copySystemPromptRequest(request dto.Request) (dto.Request, error) {
+	switch typedRequest := request.(type) {
+	case *dto.GeneralOpenAIRequest:
+		return common.DeepCopy(typedRequest)
+	case *dto.OpenAIResponsesRequest:
+		return common.DeepCopy(typedRequest)
+	case *dto.OpenAIResponsesCompactionRequest:
+		return common.DeepCopy(typedRequest)
+	case *dto.ClaudeRequest:
+		return common.DeepCopy(typedRequest)
+	case *dto.GeminiChatRequest:
+		return common.DeepCopy(typedRequest)
+	default:
+		return nil, fmt.Errorf("context fallback does not handle request type %T", request)
+	}
+}
+
+// applySystemPromptToRequest 使用同一份协议逻辑处理预演与实际请求。
+func applySystemPromptToRequest(c *gin.Context, request dto.Request, systemPrompt string, prepend bool) (bool, error) {
+	switch typedRequest := request.(type) {
+	case *dto.GeneralOpenAIRequest:
+		return applyOpenAISystemPrompt(c, typedRequest, systemPrompt, prepend), nil
+	case *dto.OpenAIResponsesRequest:
+		return applyResponsesSystemPrompt(c, typedRequest, systemPrompt, prepend)
+	case *dto.OpenAIResponsesCompactionRequest:
+		responsesRequest := &dto.OpenAIResponsesRequest{Instructions: typedRequest.Instructions}
+		applied, err := applyResponsesSystemPrompt(c, responsesRequest, systemPrompt, prepend)
+		typedRequest.Instructions = responsesRequest.Instructions
+		return applied, err
+	case *dto.ClaudeRequest:
+		return applyClaudeSystemPrompt(c, typedRequest, systemPrompt, prepend), nil
+	case *dto.GeminiChatRequest:
+		return applyGeminiSystemPrompt(c, typedRequest, systemPrompt, prepend), nil
+	default:
+		return false, nil
+	}
 }
 
 // ApplySystemPromptForRequest 将渠道系统提示词应用到指定请求，并同步注入后的 Token 估算。
@@ -31,29 +144,9 @@ func ApplySystemPromptForRequest(c *gin.Context, info *relaycommon.RelayInfo, re
 
 	systemPrompt, prepend := resolveSystemPrompt(info)
 	before := request.GetTokenCountMeta()
-	applied := false
-
-	switch typedRequest := request.(type) {
-	case *dto.GeneralOpenAIRequest:
-		applied = applyOpenAISystemPrompt(c, typedRequest, systemPrompt, prepend)
-	case *dto.OpenAIResponsesRequest:
-		var err error
-		applied, err = applyResponsesSystemPrompt(c, typedRequest, systemPrompt, prepend)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-		}
-	case *dto.OpenAIResponsesCompactionRequest:
-		responsesRequest := &dto.OpenAIResponsesRequest{Instructions: typedRequest.Instructions}
-		var err error
-		applied, err = applyResponsesSystemPrompt(c, responsesRequest, systemPrompt, prepend)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-		}
-		typedRequest.Instructions = responsesRequest.Instructions
-	case *dto.ClaudeRequest:
-		applied = applyClaudeSystemPrompt(c, typedRequest, systemPrompt, prepend)
-	case *dto.GeminiChatRequest:
-		applied = applyGeminiSystemPrompt(c, typedRequest, systemPrompt, prepend)
+	applied, err := applySystemPromptToRequest(c, request, systemPrompt, prepend)
+	if err != nil {
+		return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
 
 	if !applied {
@@ -87,19 +180,16 @@ func accountInjectedSystemPrompt(c *gin.Context, info *relaycommon.RelayInfo, be
 	}
 
 	info.SetInjectedPromptTokenDelta(delta)
+	common.SetContextKey(c, constant.ContextKeySystemPromptTokens, delta)
 	if info.Billing == nil {
 		return nil
 	}
 
-	// 渠道适配可能改写 OriginModelName；补充预扣仍应沿用客户端请求模型的计费配置。
-	originModelName := info.OriginModelName
-	info.OriginModelName = info.GetRoutingModelName()
-	priceData, err := relayhelper.ModelPriceHelper(c, info, info.GetEstimatePromptTokens(), after)
-	info.OriginModelName = originModelName
+	quotaToReserve, err := relayhelper.EstimateQuotaWithFrozenPrice(info, info.GetEstimatePromptTokens(), after)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest), types.ErrOptionWithSkipRetry())
 	}
-	if err := info.Billing.Reserve(priceData.QuotaToPreConsume); err != nil {
+	if err := info.Billing.Reserve(quotaToReserve); err != nil {
 		return types.NewErrorWithStatusCode(err, types.ErrorCodePreConsumeTokenQuotaFailed, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 	}
 	return nil
@@ -110,14 +200,11 @@ func markSystemPromptApplied(c *gin.Context, info *relaycommon.RelayInfo) {
 	if c == nil || info == nil {
 		return
 	}
-	modelName := info.GetRequestedModelName()
-	source := "channel_default"
-	if info.ChannelMeta != nil {
-		prompt, ok := info.ChannelSetting.ModelSystemPrompts[modelName]
-		if ok && strings.TrimSpace(prompt) != "" {
-			source = "model"
-		}
-	}
+	_, _, source, modelName := info.ChannelSetting.ResolveSystemPromptForAttempt(
+		info.GetRequestedModelName(),
+		info.GetAttemptModelName(),
+		info.IsContextFallbackActive(),
+	)
 	common.SetContextKey(c, constant.ContextKeySystemPromptApplied, true)
 	common.SetContextKey(c, constant.ContextKeySystemPromptSource, source)
 	common.SetContextKey(c, constant.ContextKeySystemPromptModel, modelName)
@@ -185,11 +272,12 @@ func applyResponsesSystemPrompt(c *gin.Context, request *dto.OpenAIResponsesRequ
 
 	markSystemPromptOverridden(c)
 	var existing string
-	if err := common.Unmarshal(request.Instructions, &existing); err == nil {
-		existing = strings.TrimSpace(existing)
-		if existing != "" {
-			systemPrompt += "\n" + existing
-		}
+	if err := common.Unmarshal(request.Instructions, &existing); err != nil {
+		return false, fmt.Errorf("responses instructions must be a string when system prompt prepend is enabled: %w", err)
+	}
+	existing = strings.TrimSpace(existing)
+	if existing != "" {
+		systemPrompt += "\n" + existing
 	}
 	instructions, err := common.Marshal(systemPrompt)
 	if err != nil {

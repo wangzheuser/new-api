@@ -86,6 +86,30 @@ type TokenCountMeta struct {
 	estimatePromptTokens     int
 }
 
+// ContextFallbackDecision 保存本次请求的单跳上下文兜底决策，仅用于路由、校验与管理员审计。
+type ContextFallbackDecision struct {
+	Applied                     bool
+	BypassReason                string
+	RouteMode                   string
+	SourceModel                 string
+	FallbackModel               string
+	SourceChannelID             int
+	TargetChannelID             int
+	TargetChannelIDs            []int
+	SourceContextWindowTokens   int64
+	FallbackContextWindowTokens int64
+	ThresholdPercent            int
+	ThresholdTokens             int64
+	SourceBaseInputTokens       int
+	SourcePromptTokens          int
+	SourceOutputReserveTokens   int
+	SourceDemandTokens          int64
+	TargetBaseInputTokens       int
+	TargetPromptTokens          int
+	TargetOutputReserveTokens   int
+	TargetDemandTokens          int64
+}
+
 type RelayInfo struct {
 	TokenId           int
 	TokenKey          string
@@ -105,6 +129,7 @@ type RelayInfo struct {
 	RelayMode              int
 	RequestedModelName     string // 客户端请求体中的模型，初始化后不再修改
 	RoutingModelName       string // 用于渠道选择与计费的内部模型，初始化后不再修改
+	AttemptModelName       string // 当前尝试的逻辑模型，可在单跳上下文兜底时切换
 	OriginModelName        string
 	RequestURLPath         string
 	RequestHeaders         map[string]string
@@ -178,6 +203,7 @@ type RelayInfo struct {
 	// captured at pre-consume time. Non-nil only when billing mode is "tiered_expr".
 	TieredBillingSnapshot *billingexpr.BillingSnapshot
 	BillingRequestInput   *billingexpr.RequestInput
+	ContextFallback       *ContextFallbackDecision
 
 	Request dto.Request
 
@@ -203,6 +229,10 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
 	paramOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelParamOverride)
 	headerOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelHeaderOverride)
+	attemptModelName := common.GetContextKeyString(c, constant.ContextKeyAttemptModel)
+	if attemptModelName == "" {
+		attemptModelName = info.GetAttemptModelName()
+	}
 	apiType, _ := common.ChannelType2APIType(channelType)
 	channelMeta := &ChannelMeta{
 		ChannelType:          channelType,
@@ -217,7 +247,7 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 		ChannelCreateTime:    c.GetInt64("channel_create_time"),
 		ParamOverride:        paramOverride,
 		HeadersOverride:      headerOverride,
-		UpstreamModelName:    common.GetContextKeyString(c, constant.ContextKeyOriginalModel),
+		UpstreamModelName:    attemptModelName,
 		IsModelMapped:        false,
 		SupportStreamOptions: false,
 	}
@@ -248,7 +278,7 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 
 	// reset some fields based on channel meta
 	// 重置某些字段，例如模型名称等
-	info.OriginModelName = info.GetRoutingModelName()
+	info.OriginModelName = info.GetAttemptModelName()
 	info.ResetEstimatePromptTokens()
 	if info.Request != nil {
 		info.Request.SetModelName(info.GetRequestedModelName())
@@ -270,6 +300,7 @@ func (info *RelayInfo) ToString() string {
 	fmt.Fprintf(b, "RequestURLPath: %q, ", info.RequestURLPath)
 	fmt.Fprintf(b, "RequestedModelName: %q, ", info.RequestedModelName)
 	fmt.Fprintf(b, "RoutingModelName: %q, ", info.RoutingModelName)
+	fmt.Fprintf(b, "AttemptModelName: %q, ", info.AttemptModelName)
 	fmt.Fprintf(b, "OriginModelName: %q, ", info.OriginModelName)
 	fmt.Fprintf(b, "EstimatePromptTokens: %d, ", info.estimatePromptTokens)
 	fmt.Fprintf(b, "ShouldIncludeUsage: %t, ", info.ShouldIncludeUsage)
@@ -489,6 +520,7 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 
 		RequestedModelName: common.GetContextKeyString(c, constant.ContextKeyOriginalModel),
 		RoutingModelName:   common.GetContextKeyString(c, constant.ContextKeyOriginalModel),
+		AttemptModelName:   common.GetContextKeyString(c, constant.ContextKeyOriginalModel),
 		OriginModelName:    common.GetContextKeyString(c, constant.ContextKeyOriginalModel),
 
 		TokenId:        common.GetContextKeyInt(c, constant.ContextKeyTokenId),
@@ -714,6 +746,35 @@ func (info *RelayInfo) GetRoutingModelName() string {
 		return info.OriginModelName
 	}
 	return info.RequestedModelName
+}
+
+// GetBillingModelName 返回 fallback 发生前已冻结的初始计费模型。
+func (info *RelayInfo) GetBillingModelName() string {
+	return info.GetRoutingModelName()
+}
+
+// GetAttemptModelName 返回当前渠道尝试应使用的逻辑模型。
+func (info *RelayInfo) GetAttemptModelName() string {
+	if info == nil {
+		return ""
+	}
+	if info.AttemptModelName != "" {
+		return info.AttemptModelName
+	}
+	return info.GetRoutingModelName()
+}
+
+// SetAttemptModelName 切换当前尝试模型，不改动初始计费模型。
+func (info *RelayInfo) SetAttemptModelName(modelName string) {
+	if info == nil || modelName == "" {
+		return
+	}
+	info.AttemptModelName = modelName
+}
+
+// IsContextFallbackActive 返回本次请求是否已锁定上下文兜底。
+func (info *RelayInfo) IsContextFallbackActive() bool {
+	return info != nil && info.ContextFallback != nil && info.ContextFallback.Applied
 }
 
 func (info *RelayInfo) SetFirstResponseTime() {

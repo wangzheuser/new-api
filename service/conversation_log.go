@@ -66,7 +66,7 @@ func RecordConversationLog(c *gin.Context, info *relaycommon.RelayInfo, relayErr
 		TokenId:                   info.TokenId,
 		ChannelId:                 info.ChannelId,
 		Group:                     info.UsingGroup,
-		ModelName:                 info.OriginModelName,
+		ModelName:                 info.GetRequestedModelName(),
 		UpstreamModelName:         info.UpstreamModelName,
 		RelayFormat:               string(info.RelayFormat),
 		RequestPath:               info.RequestURLPath,

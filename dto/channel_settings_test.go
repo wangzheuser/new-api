@@ -2,6 +2,7 @@ package dto
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 	"testing"
@@ -62,6 +63,65 @@ func TestChannelSettingsValidateSystemPrompts(t *testing.T) {
 	require.Error(t, (ChannelSettings{ModelSystemPrompts: map[string]string{
 		"model-a": strings.Repeat("a", MaxModelSystemPromptBytes+1),
 	}}).ValidateSystemPrompts())
+}
+
+func TestChannelSettingsResolveSystemPromptForFallbackAttempt(t *testing.T) {
+	settings := ChannelSettings{
+		SystemPrompt: "channel default",
+		ModelSystemPrompts: map[string]string{
+			"model-a": "requested prompt",
+			"model-b": "attempt prompt",
+		},
+	}
+
+	prompt, prepend, source, matchedModel := settings.ResolveSystemPromptForAttempt("model-a", "model-b", true)
+	assert.Equal(t, "requested prompt", prompt)
+	assert.True(t, prepend)
+	assert.Equal(t, "model_requested", source)
+	assert.Equal(t, "model-a", matchedModel)
+
+	delete(settings.ModelSystemPrompts, "model-a")
+	prompt, prepend, source, matchedModel = settings.ResolveSystemPromptForAttempt("model-a", "model-b", true)
+	assert.Equal(t, "attempt prompt", prompt)
+	assert.True(t, prepend)
+	assert.Equal(t, "model_attempt", source)
+	assert.Equal(t, "model-b", matchedModel)
+}
+
+func TestChannelSettingsValidateContextFallbacks(t *testing.T) {
+	valid := ChannelSettings{ModelContextFallbacks: map[string]ModelContextFallback{
+		"model-a": {
+			SourceContextWindowTokens:   262144,
+			FallbackModel:               "model-b",
+			FallbackContextWindowTokens: 1048576,
+			RouteMode:                   ContextFallbackModeCross,
+			TargetChannelIDs:            []int{2, 3},
+		},
+	}}
+	require.NoError(t, valid.ValidateContextFallbacks())
+	rule, ok := valid.ResolveContextFallback("model-a")
+	require.True(t, ok)
+	assert.Equal(t, DefaultContextThreshold, rule.EffectiveThresholdPercent())
+	assert.Equal(t, int64(235929), rule.ThresholdTokens())
+	assert.Greater(t, (ModelContextFallback{SourceContextWindowTokens: math.MaxInt64, ThresholdPercent: 90}).ThresholdTokens(), int64(0))
+
+	tests := []struct {
+		name string
+		rule ModelContextFallback
+	}{
+		{name: "source window", rule: ModelContextFallback{FallbackModel: "model-b", FallbackContextWindowTokens: 1, RouteMode: ContextFallbackModeCross}},
+		{name: "threshold", rule: ModelContextFallback{SourceContextWindowTokens: 1, ThresholdPercent: 101, FallbackModel: "model-b", FallbackContextWindowTokens: 1, RouteMode: ContextFallbackModeCross}},
+		{name: "same model", rule: ModelContextFallback{SourceContextWindowTokens: 1, FallbackModel: "model-a", FallbackContextWindowTokens: 1, RouteMode: ContextFallbackModeCross}},
+		{name: "fallback window", rule: ModelContextFallback{SourceContextWindowTokens: 1, FallbackModel: "model-b", RouteMode: ContextFallbackModeCross}},
+		{name: "route mode", rule: ModelContextFallback{SourceContextWindowTokens: 1, FallbackModel: "model-b", FallbackContextWindowTokens: 1, RouteMode: "invalid"}},
+		{name: "same target ids", rule: ModelContextFallback{SourceContextWindowTokens: 1, FallbackModel: "model-b", FallbackContextWindowTokens: 1, RouteMode: ContextFallbackModeSame, TargetChannelIDs: []int{2}}},
+		{name: "duplicate target ids", rule: ModelContextFallback{SourceContextWindowTokens: 1, FallbackModel: "model-b", FallbackContextWindowTokens: 1, RouteMode: ContextFallbackModeCross, TargetChannelIDs: []int{2, 2}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Error(t, (ChannelSettings{ModelContextFallbacks: map[string]ModelContextFallback{"model-a": tt.rule}}).ValidateContextFallbacks())
+		})
+	}
 }
 
 func TestAdvancedCustomValidateResponsesToChatConverterPath(t *testing.T) {

@@ -640,6 +640,27 @@ export const useLogsData = () => {
           key: t('计费模式'),
           value: localCountMode,
         });
+        const contextFallback = other?.admin_info?.context_fallback;
+        if (contextFallback?.applied) {
+          expandDataLocal.push(
+            {
+              key: t('上下文兜底'),
+              value: `${contextFallback.source_model || '-'} -> ${contextFallback.attempt_model || '-'}`,
+            },
+            {
+              key: t('兜底渠道'),
+              value: `#${contextFallback.source_channel_id || '-'} -> #${contextFallback.target_channel_id || '-'}`,
+            },
+            {
+              key: t('兜底计费模型'),
+              value: contextFallback.billing_model || '-',
+            },
+            {
+              key: t('上下文用量'),
+              value: `${contextFallback.source_demand_tokens || 0}/${contextFallback.threshold_tokens || 0} -> ${contextFallback.target_demand_tokens || 0}/${contextFallback.fallback_context_window_tokens || 0}`,
+            },
+          );
+        }
       }
       if (isAdminUser && logs[i].type === 1) {
         const adminInfo = other?.admin_info;

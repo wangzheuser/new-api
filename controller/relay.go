@@ -94,7 +94,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
 			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
 			if relayStarted {
-				recordRelayErrorLog(c, newAPIError, relayClientErrorLogContent(newAPIError, relayFormat), rawFinalError, false)
+				recordRelayErrorLog(c, relayInfo, newAPIError, relayClientErrorLogContent(newAPIError, relayFormat), rawFinalError, false)
 			}
 			switch relayFormat {
 			case types.RelayFormatOpenAIRealtime:
@@ -156,6 +156,14 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	relayInfo.SetEstimatePromptTokens(tokens)
+	meta, newAPIError = prepareContextFallback(c, relayInfo, request, tokens)
+	if newAPIError != nil {
+		return
+	}
+	if relayInfo.IsContextFallbackActive() {
+		installContextFallbackResponseWriter(c, relayInfo.GetRequestedModelName())
+	}
+	tokens = relayInfo.GetEstimatePromptTokens()
 
 	priceData, err := helper.ModelPriceHelper(c, relayInfo, tokens, meta)
 	if err != nil {
@@ -185,12 +193,19 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 	}()
 
+	retryGroup := relayRetryGroup(relayInfo)
+	if relayInfo.IsContextFallbackActive() {
+		retryGroup = contextFallbackRoutingGroup(c, relayInfo)
+	}
 	retryParam := &service.RetryParam{
 		Ctx:         c,
-		TokenGroup:  relayRetryGroup(relayInfo),
-		ModelName:   relayInfo.GetRoutingModelName(),
+		TokenGroup:  retryGroup,
+		ModelName:   relayInfo.GetAttemptModelName(),
 		RequestPath: c.Request.URL.Path,
 		Retry:       common.GetPointer(0),
+	}
+	if relayInfo.IsContextFallbackActive() && relayInfo.ContextFallback.RouteMode == dto.ContextFallbackModeCross {
+		retryParam.ExcludedChannelIDs = map[int]struct{}{relayInfo.ContextFallback.SourceChannelID: {}}
 	}
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
@@ -238,9 +253,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		relayInfo.LastError = newAPIError
 
 		willRetry := shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry())
+		if relayInfo.IsContextFallbackActive() && relayInfo.ContextFallback.RouteMode == dto.ContextFallbackModeSame {
+			willRetry = false
+		}
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 		if willRetry {
-			recordRelayErrorLog(c, newAPIError, "", nil, true)
+			recordRelayErrorLog(c, relayInfo, newAPIError, "", nil, true)
 		}
 		if !willRetry {
 			break
@@ -359,9 +377,26 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 			AutoBan: &autoBanInt,
 		}, nil
 	}
-	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
-
-	info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
+	var channel *model.Channel
+	var selectGroup string
+	var err error
+	if info.IsContextFallbackActive() && info.ContextFallback.RouteMode == dto.ContextFallbackModeSame {
+		selectGroup = contextFallbackRoutingGroup(c, info)
+		channel, err = model.CacheGetChannel(info.ContextFallback.SourceChannelID)
+		if err == nil && !contextFallbackTargetEligible(channel, selectGroup, info.GetAttemptModelName(), c.Request.URL.Path) {
+			channel = nil
+		}
+	} else if info.IsContextFallbackActive() && info.ContextFallback.RouteMode == dto.ContextFallbackModeCross {
+		var channelErr *types.NewAPIError
+		channel, channelErr = selectContextFallbackTarget(c, info, retryParam.GetRetry())
+		if channelErr != nil {
+			return nil, channelErr
+		}
+		selectGroup = contextFallbackRoutingGroup(c, info)
+	} else {
+		channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(retryParam)
+		info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
+	}
 
 	if err != nil {
 		return nil, types.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectGroup, info.OriginModelName, err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
@@ -370,9 +405,15 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		return nil, types.NewError(fmt.Errorf("分组 %s 下模型 %s 的可用渠道不存在（retry）", selectGroup, info.OriginModelName), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 
-	newAPIError := middleware.SetupContextForSelectedChannel(c, channel, info.GetRoutingModelName())
+	newAPIError := middleware.SetupContextForSelectedChannel(c, channel, info.GetAttemptModelName())
 	if newAPIError != nil {
 		return nil, newAPIError
+	}
+	if info.IsContextFallbackActive() {
+		info.ContextFallback.TargetChannelID = channel.Id
+		if _, previewErr := prepareContextFallbackTarget(c, info, info.Request); previewErr != nil {
+			return nil, previewErr
+		}
 	}
 	return channel, nil
 }
@@ -465,7 +506,7 @@ func relayClientErrorLogContent(err *types.NewAPIError, relayFormat types.RelayF
 }
 
 // recordRelayErrorLog writes one relay error using the current channel context.
-func recordRelayErrorLog(c *gin.Context, err *types.NewAPIError, content string, rawError *types.NewAPIError, isIntermediate bool) {
+func recordRelayErrorLog(c *gin.Context, relayInfo *relaycommon.RelayInfo, err *types.NewAPIError, content string, rawError *types.NewAPIError, isIntermediate bool) {
 	if !constant.ErrorLogEnabled || !types.IsRecordErrorLog(err) {
 		return
 	}
@@ -478,6 +519,9 @@ func recordRelayErrorLog(c *gin.Context, err *types.NewAPIError, content string,
 	tokenId := c.GetInt("token_id")
 	userGroup := c.GetString("group")
 	channelId := c.GetInt("channel_id")
+	if relayInfo != nil && relayInfo.IsContextFallbackActive() {
+		channelId = relayInfo.ContextFallback.SourceChannelID
+	}
 	other := make(map[string]interface{})
 	if c.Request != nil && c.Request.URL != nil {
 		other["request_path"] = c.Request.URL.Path
@@ -486,8 +530,10 @@ func recordRelayErrorLog(c *gin.Context, err *types.NewAPIError, content string,
 	other["error_code"] = err.GetErrorCode()
 	other["status_code"] = err.StatusCode
 	other["channel_id"] = channelId
-	other["channel_name"] = c.GetString("channel_name")
-	other["channel_type"] = c.GetInt("channel_type")
+	if relayInfo == nil || !relayInfo.IsContextFallbackActive() {
+		other["channel_name"] = c.GetString("channel_name")
+		other["channel_type"] = c.GetInt("channel_type")
+	}
 	if rawError != nil {
 		other["public_error"] = true
 	}
@@ -499,6 +545,7 @@ func recordRelayErrorLog(c *gin.Context, err *types.NewAPIError, content string,
 		adminInfo["multi_key_index"] = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
 	}
 	service.AppendChannelAffinityAdminInfo(c, adminInfo)
+	service.AppendContextFallbackAdminInfo(relayInfo, adminInfo)
 	if rawError != nil {
 		adminInfo["upstream_error"] = common.LocalLogPreview(rawError.MaskSensitiveErrorWithStatusCode())
 	}
@@ -682,7 +729,7 @@ func RelayTask(c *gin.Context) {
 				*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey,
 					common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()),
 				relayError)
-			recordRelayErrorLog(c, relayError, "", nil, willRetry)
+			recordRelayErrorLog(c, relayInfo, relayError, "", nil, willRetry)
 		}
 
 		if !willRetry {

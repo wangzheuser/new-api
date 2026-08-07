@@ -181,7 +181,7 @@ func composeTieredTextQuota(relayInfo *relaycommon.RelayInfo, summary textQuotaS
 // the result with tiered billing, affinity observation and logging.
 func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage) textQuotaSummary {
 	summary := textQuotaSummary{
-		ModelName:            relayInfo.OriginModelName,
+		ModelName:            relayInfo.GetBillingModelName(),
 		TokenName:            ctx.GetString("token_name"),
 		UseTimeSeconds:       time.Now().Unix() - relayInfo.StartTime.Unix(),
 		CompletionRatio:      relayInfo.PriceData.CompletionRatio,
@@ -410,7 +410,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		logger.LogError(ctx, "error settling billing: "+err.Error())
 	}
 
-	logModel := summary.ModelName
+	logModel := relayInfo.GetRequestedModelName()
 	if strings.HasPrefix(logModel, "gpt-4-gizmo") {
 		logModel = "gpt-4-gizmo-*"
 		extraContent = append(extraContent, fmt.Sprintf("模型 %s", summary.ModelName))
@@ -498,8 +498,12 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 
 	attachQuotaSaturation(ctx, relayInfo, other)
 
+	logChannelID := relayInfo.ChannelId
+	if relayInfo.IsContextFallbackActive() {
+		logChannelID = relayInfo.ContextFallback.SourceChannelID
+	}
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
-		ChannelId:           relayInfo.ChannelId,
+		ChannelId:           logChannelID,
 		PromptTokens:        summary.PromptTokens,
 		CompletionTokens:    summary.CompletionTokens,
 		InputTokens:         &summary.InputTokens,

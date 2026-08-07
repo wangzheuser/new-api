@@ -293,6 +293,7 @@ const SENSITIVE_FORM_FIELDS = [
   'system_prompt',
   'system_prompt_override',
   'model_system_prompts',
+  'model_context_fallbacks',
   'allow_service_tier',
   'conversation_log_enabled',
   'disable_store',
@@ -753,6 +754,7 @@ export function ChannelMutateDrawer({
   const currentProxy = form.watch('proxy')
   const currentSystemPrompt = form.watch('system_prompt')
   const currentModelSystemPrompts = form.watch('model_system_prompts') || {}
+  const currentModelContextFallbacks = form.watch('model_context_fallbacks')
   const currentAllowServiceTier = form.watch('allow_service_tier')
   const currentConversationLogEnabled = form.watch('conversation_log_enabled')
   const currentDisableStore = form.watch('disable_store')
@@ -1034,6 +1036,7 @@ export function ChannelMutateDrawer({
     currentPriority ||
     currentWeight ||
     currentTestModel?.trim() ||
+    currentModelContextFallbacks?.trim() ||
     (currentAutoBan ?? 1) !== 1
   )
   const internalNotesConfigured = Boolean(
@@ -3886,6 +3889,51 @@ export function ChannelMutateDrawer({
                                   <FormDescription>
                                     {t(FIELD_DESCRIPTIONS.TEST_MODEL)}
                                   </FormDescription>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+
+                            <FormField
+                              control={form.control}
+                              name='model_context_fallbacks'
+                              render={({ field }) => (
+                                <FormItem className='space-y-3'>
+                                  <div className='space-y-1'>
+                                    <FormLabel>
+                                      {t('Model Context Fallbacks')}
+                                    </FormLabel>
+                                    <FormDescription>
+                                      {t(
+                                        'When input plus reserved output exceeds the source model threshold, route once to the configured fallback model. The default threshold is 90%. Leave target_channel_ids empty to select any eligible channel in the same group.'
+                                      )}
+                                    </FormDescription>
+                                  </div>
+                                  <FormControl>
+                                    <JsonEditor
+                                      value={field.value || ''}
+                                      onChange={field.onChange}
+                                      disabled={sensitiveLocked || isSubmitting}
+                                      keyPlaceholder='MODEL_A'
+                                      valuePlaceholder={t('Fallback rule JSON')}
+                                      keyLabel={t('Source Model')}
+                                      valueLabel={t('Fallback Rule')}
+                                      emptyMessage={t(
+                                        'No model context fallback rules configured.'
+                                      )}
+                                      template={{
+                                        MODEL_A: {
+                                          source_context_window_tokens: 262144,
+                                          threshold_percent: 90,
+                                          fallback_model: 'MODEL_B',
+                                          fallback_context_window_tokens: 1048576,
+                                          route_mode: 'cross_channel',
+                                          target_channel_ids: [],
+                                        },
+                                      }}
+                                      valueType='any'
+                                    />
+                                  </FormControl>
                                   <FormMessage />
                                 </FormItem>
                               )}

@@ -5372,6 +5372,22 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Model Context Fallbacks": "モデルコンテキストのフォールバック",
+    "When input plus reserved output exceeds the source model threshold, route once to the configured fallback model. The default threshold is 90%. Leave target_channel_ids empty to select any eligible channel in the same group.": "入力トークンと予約出力トークンの合計が元モデルのしきい値を超えると、設定したフォールバックモデルへ一度だけルーティングします。既定のしきい値は 90% です。target_channel_ids を空にすると、同じグループ内の利用可能なチャネルが選択されます。",
+    "Fallback rule JSON": "フォールバックルール JSON",
+    "Source Model": "元モデル",
+    "Fallback Rule": "フォールバックルール",
+    "No model context fallback rules configured.": "モデルコンテキストのフォールバックルールは未設定です。",
+    "Context Fallback": "コンテキストフォールバック",
+    "Routed": "ルーティング済み",
+    "Bypassed": "スキップ済み",
+    "Route Mode": "ルートモード",
+    "Model Route": "モデルルート",
+    "Billing Model": "課金モデル",
+    "Channel Route": "チャネルルート",
+    "Source Demand": "元モデルのコンテキスト使用量",
+    "Fallback Demand": "フォールバックモデルのコンテキスト使用量",
+    "Injected Prompt Tokens": "注入プロンプトトークン"
   }
 }

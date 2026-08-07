@@ -2154,12 +2154,15 @@ func BuildParamOverrideContext(info *RelayInfo) map[string]interface{} {
 		ctx["model"] = info.ChannelMeta.UpstreamModelName
 		ctx["upstream_model"] = info.ChannelMeta.UpstreamModelName
 	}
-	if info.OriginModelName != "" {
-		ctx["original_model"] = info.OriginModelName
+	if info.GetRequestedModelName() != "" {
+		ctx["original_model"] = info.GetRequestedModelName()
 		if _, exists := ctx["model"]; !exists {
-			ctx["model"] = info.OriginModelName
+			ctx["model"] = info.GetAttemptModelName()
 		}
 	}
+	ctx["routing_model"] = info.GetRoutingModelName()
+	ctx["billing_model"] = info.GetBillingModelName()
+	ctx["attempt_model"] = info.GetAttemptModelName()
 
 	if info.RequestURLPath != "" {
 		requestPath := info.RequestURLPath

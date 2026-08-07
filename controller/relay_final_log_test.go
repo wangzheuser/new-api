@@ -74,10 +74,10 @@ func TestRecordRelayErrorLogPersistsIntermediateState(t *testing.T) {
 		types.ErrorCodeBadResponseStatusCode,
 		http.StatusServiceUnavailable,
 	)
-	recordRelayErrorLog(ctx, relayError, "", nil, true)
+	recordRelayErrorLog(ctx, nil, relayError, "", nil, true)
 
 	ctx.Set(common.RequestIdKey, "req-terminal")
-	recordRelayErrorLog(ctx, relayError, "", nil, false)
+	recordRelayErrorLog(ctx, nil, relayError, "", nil, false)
 
 	var logs []model.Log
 	require.NoError(t, db.Order("id").Find(&logs).Error)

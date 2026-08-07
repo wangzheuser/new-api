@@ -5372,6 +5372,22 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Model Context Fallbacks": "Mô hình dự phòng ngữ cảnh",
+    "When input plus reserved output exceeds the source model threshold, route once to the configured fallback model. The default threshold is 90%. Leave target_channel_ids empty to select any eligible channel in the same group.": "Khi tổng token đầu vào và token đầu ra dự trữ vượt ngưỡng của mô hình nguồn, yêu cầu sẽ được định tuyến một lần sang mô hình dự phòng đã cấu hình. Ngưỡng mặc định là 90%. Để trống target_channel_ids để chọn một kênh phù hợp trong cùng nhóm.",
+    "Fallback rule JSON": "JSON quy tắc dự phòng",
+    "Source Model": "Mô hình nguồn",
+    "Fallback Rule": "Quy tắc dự phòng",
+    "No model context fallback rules configured.": "Chưa cấu hình quy tắc dự phòng ngữ cảnh mô hình.",
+    "Context Fallback": "Dự phòng ngữ cảnh",
+    "Routed": "Đã định tuyến",
+    "Bypassed": "Đã bỏ qua",
+    "Route Mode": "Chế độ định tuyến",
+    "Model Route": "Tuyến mô hình",
+    "Billing Model": "Mô hình tính phí",
+    "Channel Route": "Tuyến kênh",
+    "Source Demand": "Mức dùng của mô hình nguồn",
+    "Fallback Demand": "Mức dùng của mô hình dự phòng",
+    "Injected Prompt Tokens": "Token prompt được chèn"
   }
 }

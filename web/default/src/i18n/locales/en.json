@@ -5372,6 +5372,22 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Model Context Fallbacks": "Model Context Fallbacks",
+    "When input plus reserved output exceeds the source model threshold, route once to the configured fallback model. The default threshold is 90%. Leave target_channel_ids empty to select any eligible channel in the same group.": "When input plus reserved output exceeds the source model threshold, route once to the configured fallback model. The default threshold is 90%. Leave target_channel_ids empty to select any eligible channel in the same group.",
+    "Fallback rule JSON": "Fallback rule JSON",
+    "Source Model": "Source Model",
+    "Fallback Rule": "Fallback Rule",
+    "No model context fallback rules configured.": "No model context fallback rules configured.",
+    "Context Fallback": "Context Fallback",
+    "Routed": "Routed",
+    "Bypassed": "Bypassed",
+    "Route Mode": "Route Mode",
+    "Model Route": "Model Route",
+    "Billing Model": "Billing Model",
+    "Channel Route": "Channel Route",
+    "Source Demand": "Source Demand",
+    "Fallback Demand": "Fallback Demand",
+    "Injected Prompt Tokens": "Injected Prompt Tokens"
   }
 }

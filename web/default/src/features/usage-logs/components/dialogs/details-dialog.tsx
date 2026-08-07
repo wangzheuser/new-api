@@ -481,6 +481,9 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const showAdminIp =
     !!props.log.ip && (showTiming || (props.isAdmin && isTopup))
   const adminInfo = other?.admin_info
+  const contextFallback = props.isAdmin
+    ? adminInfo?.context_fallback
+    : undefined
   const topupAuditFields =
     isTopup && props.isAdmin && adminInfo
       ? ([
@@ -759,6 +762,72 @@ export function DetailsDialog(props: DetailsDialogProps) {
                 </div>
               </div>
             </div>
+          </DetailSection>
+        )}
+
+        {contextFallback && (
+          <DetailSection
+            icon={<Route className='size-3.5' aria-hidden='true' />}
+            iconTone='info'
+            label={t('Context Fallback')}
+          >
+            <DetailRow
+              label={t('Status')}
+              value={contextFallback.applied ? t('Routed') : t('Bypassed')}
+            />
+            {contextFallback.bypass_reason && (
+              <DetailRow
+                label={t('Reason')}
+                value={contextFallback.bypass_reason}
+                mono
+              />
+            )}
+            {contextFallback.applied && (
+              <>
+                <DetailRow
+                  label={t('Route Mode')}
+                  value={contextFallback.route_mode || '-'}
+                  mono
+                />
+                <DetailRow
+                  label={t('Model Route')}
+                  value={`${contextFallback.source_model || '-'} → ${contextFallback.attempt_model || '-'}`}
+                  mono
+                />
+                <DetailRow
+                  label={t('Billing Model')}
+                  value={contextFallback.billing_model || '-'}
+                  mono
+                />
+                <DetailRow
+                  label={t('Channel Route')}
+                  value={`#${contextFallback.source_channel_id ?? '-'} → #${contextFallback.target_channel_id ?? '-'}`}
+                  mono
+                />
+                <DetailRow
+                  label={t('Source Demand')}
+                  value={`${formatTokens(contextFallback.source_demand_tokens ?? 0)} / ${formatTokens(contextFallback.threshold_tokens ?? 0)}`}
+                  mono
+                />
+                <DetailRow
+                  label={t('Fallback Demand')}
+                  value={`${formatTokens(contextFallback.target_demand_tokens ?? 0)} / ${formatTokens(contextFallback.fallback_context_window_tokens ?? 0)}`}
+                  mono
+                />
+                <DetailRow
+                  label={t('Injected Prompt Tokens')}
+                  value={`${formatTokens(contextFallback.source_prompt_tokens ?? 0)} → ${formatTokens(contextFallback.target_prompt_tokens ?? 0)}`}
+                  mono
+                />
+                {contextFallback.upstream_model && (
+                  <DetailRow
+                    label={t('Upstream Model')}
+                    value={contextFallback.upstream_model}
+                    mono
+                  />
+                )}
+              </>
+            )}
           </DetailSection>
         )}
 

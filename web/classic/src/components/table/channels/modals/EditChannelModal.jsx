@@ -97,6 +97,17 @@ const STATUS_CODE_MAPPING_EXAMPLE = {
   400: '500',
 };
 
+const MODEL_CONTEXT_FALLBACK_EXAMPLE = {
+  MODEL_A: {
+    source_context_window_tokens: 262144,
+    threshold_percent: 90,
+    fallback_model: 'MODEL_B',
+    fallback_context_window_tokens: 1048576,
+    route_mode: 'cross_channel',
+    target_channel_ids: [],
+  },
+};
+
 const REGION_EXAMPLE = {
   default: 'global',
   'gemini-1.5-pro-002': 'europe-west2',
@@ -129,6 +140,39 @@ const PARAM_OVERRIDE_OPERATIONS_TEMPLATE = {
 };
 
 const DEPRECATED_DOUBAO_CODING_PLAN_BASE_URL = 'doubao-coding-plan';
+
+function validateModelContextFallbacks(rules) {
+  if (!rules || typeof rules !== 'object' || Array.isArray(rules)) {
+    return '上下文兜底规则必须是 JSON 对象';
+  }
+  const entries = Object.entries(rules);
+  if (entries.length > 256) return '上下文兜底规则最多配置 256 项';
+  for (const [sourceModel, rule] of entries) {
+    if (!sourceModel.trim() || sourceModel !== sourceModel.trim() || sourceModel.length > 255 || !rule || typeof rule !== 'object' || Array.isArray(rule)) {
+      return `源模型配置无效：${sourceModel}`;
+    }
+    if (!Number.isSafeInteger(rule.source_context_window_tokens) || rule.source_context_window_tokens <= 0) {
+      return `源模型上下文窗口必须是正整数：${sourceModel}`;
+    }
+    if (rule.threshold_percent !== undefined && (!Number.isInteger(rule.threshold_percent) || rule.threshold_percent < 1 || rule.threshold_percent > 100)) {
+      return `触发阈值必须在 1 到 100 之间：${sourceModel}`;
+    }
+    if (typeof rule.fallback_model !== 'string' || !rule.fallback_model.trim() || rule.fallback_model !== rule.fallback_model.trim() || rule.fallback_model.length > 255 || rule.fallback_model === sourceModel) {
+      return `兜底模型配置无效：${sourceModel}`;
+    }
+    if (!Number.isSafeInteger(rule.fallback_context_window_tokens) || rule.fallback_context_window_tokens <= 0) {
+      return `兜底模型上下文窗口必须是正整数：${sourceModel}`;
+    }
+    if (!['same_channel', 'cross_channel'].includes(rule.route_mode)) {
+      return `路由模式必须是 same_channel 或 cross_channel：${sourceModel}`;
+    }
+    const targetIds = rule.target_channel_ids || [];
+    if (!Array.isArray(targetIds) || targetIds.some((id) => !Number.isSafeInteger(id) || id <= 0) || new Set(targetIds).size !== targetIds.length || (rule.route_mode === 'same_channel' && targetIds.length > 0)) {
+      return `目标渠道 ID 配置无效：${sourceModel}`;
+    }
+  }
+  return '';
+}
 
 // 支持并且已适配通过接口获取模型列表的渠道类型
 const MODEL_FETCHABLE_TYPES = new Set([
@@ -197,6 +241,7 @@ const EditChannelModal = (props) => {
     system_prompt: '',
     system_prompt_override: false,
     model_system_prompts: {},
+    model_context_fallbacks: '',
     settings: '',
     // 仅 Vertex: 密钥格式（存入 settings.vertex_key_type）
     vertex_key_type: 'json',
@@ -527,6 +572,7 @@ const EditChannelModal = (props) => {
     system_prompt: '',
     system_prompt_override: false,
     model_system_prompts: {},
+    model_context_fallbacks: {},
   });
   const showApiConfigCard = true; // 控制是否显示 API 配置卡片
   const getInitValues = () => ({ ...originInputs });
@@ -548,6 +594,20 @@ const EditChannelModal = (props) => {
     const newSettings = { ...channelSettings, [key]: value };
     const settingsJson = JSON.stringify(newSettings);
     handleInputChange('setting', settingsJson);
+  };
+
+  // 同步保存可解析的上下文兜底规则；无效草稿留给编辑器继续修正。
+  const handleModelContextFallbacksChange = (value) => {
+    formApiRef.current?.setValue('model_context_fallbacks', value);
+    setInputs((prev) => ({ ...prev, model_context_fallbacks: value }));
+    try {
+      const rules = value?.trim() ? JSON.parse(value) : {};
+      if (!rules || typeof rules !== 'object' || Array.isArray(rules)) return;
+      setChannelSettings((prev) => ({ ...prev, model_context_fallbacks: rules }));
+      handleInputChange('setting', JSON.stringify({ ...channelSettings, model_context_fallbacks: rules }));
+    } catch {
+      // 编辑器会显示 JSON 错误，保留最后一次有效配置。
+    }
   };
 
   const handleChannelOtherSettingsChange = (key, value) => {
@@ -886,6 +946,12 @@ const EditChannelModal = (props) => {
             !Array.isArray(parsedSettings.model_system_prompts)
               ? parsedSettings.model_system_prompts
               : {};
+          data.model_context_fallbacks =
+            parsedSettings.model_context_fallbacks &&
+            typeof parsedSettings.model_context_fallbacks === 'object' &&
+            !Array.isArray(parsedSettings.model_context_fallbacks)
+              ? JSON.stringify(parsedSettings.model_context_fallbacks, null, 2)
+              : '';
         } catch (error) {
           console.error('解析渠道设置失败:', error);
           data.force_format = false;
@@ -895,6 +961,7 @@ const EditChannelModal = (props) => {
           data.system_prompt = '';
           data.system_prompt_override = false;
           data.model_system_prompts = {};
+          data.model_context_fallbacks = '';
         }
       } else {
         data.force_format = false;
@@ -904,6 +971,7 @@ const EditChannelModal = (props) => {
         data.system_prompt = '';
         data.system_prompt_override = false;
         data.model_system_prompts = {};
+        data.model_context_fallbacks = '';
       }
 
       if (data.settings) {
@@ -1014,6 +1082,9 @@ const EditChannelModal = (props) => {
         system_prompt: data.system_prompt,
         system_prompt_override: data.system_prompt_override || false,
         model_system_prompts: data.model_system_prompts || {},
+        model_context_fallbacks: data.model_context_fallbacks
+          ? JSON.parse(data.model_context_fallbacks)
+          : {},
       });
       initialModelsRef.current = (data.models || [])
         .map((model) => (model || '').trim())
@@ -1053,6 +1124,7 @@ const EditChannelModal = (props) => {
         (data.proxy && data.proxy.trim()) ||
         (data.system_prompt && data.system_prompt.trim()) ||
         Object.keys(data.model_system_prompts || {}).length > 0 ||
+        Boolean(data.model_context_fallbacks?.trim()) ||
         data.thinking_to_content ||
         data.pass_through_body_enabled ||
         data.force_format ||
@@ -1400,6 +1472,7 @@ const EditChannelModal = (props) => {
       system_prompt: '',
       system_prompt_override: false,
       model_system_prompts: {},
+      model_context_fallbacks: {},
     });
     // 重置密钥模式状态
     setKeyMode('append');
@@ -1696,6 +1769,20 @@ const EditChannelModal = (props) => {
         return;
       }
     }
+    let modelContextFallbacks = {};
+    if (localInputs.model_context_fallbacks?.trim()) {
+      try {
+        modelContextFallbacks = JSON.parse(localInputs.model_context_fallbacks);
+      } catch {
+        showInfo(t('上下文兜底规则必须是有效的 JSON'));
+        return;
+      }
+    }
+    const contextFallbackError = validateModelContextFallbacks(modelContextFallbacks);
+    if (contextFallbackError) {
+      showInfo(t(contextFallbackError));
+      return;
+    }
     if (
       localInputs.type === 45 &&
       (!localInputs.base_url || localInputs.base_url.trim() === '')
@@ -1792,6 +1879,7 @@ const EditChannelModal = (props) => {
       system_prompt: localInputs.system_prompt || '',
       system_prompt_override: localInputs.system_prompt_override || false,
       model_system_prompts: localInputs.model_system_prompts || {},
+      model_context_fallbacks: modelContextFallbacks,
     };
     localInputs.setting = JSON.stringify(channelExtraSettings);
     if (new TextEncoder().encode(localInputs.setting).length > 64 * 1024 - 1) {
@@ -1882,6 +1970,7 @@ const EditChannelModal = (props) => {
     delete localInputs.system_prompt;
     delete localInputs.system_prompt_override;
     delete localInputs.model_system_prompts;
+    delete localInputs.model_context_fallbacks;
     delete localInputs.is_enterprise_account;
     // 顶层的 vertex_key_type 不应发送给后端
     delete localInputs.vertex_key_type;
@@ -2574,6 +2663,23 @@ const EditChannelModal = (props) => {
                   <Form.Switch field='pass_through_body_enabled' label={t('透传请求体')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelSettingsChange('pass_through_body_enabled', value)} extraText={t('启用请求体透传功能')} />
 
                   <Form.Input field='proxy' label={t('代理地址')} placeholder={t('例如: socks5://user:pass@host:port')} onChange={(value) => handleChannelSettingsChange('proxy', value)} showClear extraText={t('用于配置网络代理，支持 socks5 协议')} />
+
+                  <div className='mt-4 mb-2 text-sm font-medium text-gray-700'>
+                    {t('模型上下文兜底')}
+                  </div>
+                  <JSONEditor
+                    key={`model_context_fallbacks-${isEdit ? channelId : 'new'}`}
+                    field='model_context_fallbacks'
+                    label={t('上下文兜底规则')}
+                    placeholder={JSON.stringify(MODEL_CONTEXT_FALLBACK_EXAMPLE, null, 2)}
+                    value={inputs.model_context_fallbacks || ''}
+                    onChange={handleModelContextFallbacksChange}
+                    template={MODEL_CONTEXT_FALLBACK_EXAMPLE}
+                    templateLabel={t('填入模板')}
+                    editorType='object'
+                    formApi={formApiRef.current}
+                    extraText={t('当输入 Token 与预留输出 Token 之和超过源模型阈值时，单次切换到兜底模型；阈值默认 90%。target_channel_ids 留空时在相同分组内自动选择渠道。')}
+                  />
 
                   <Form.TextArea field='system_prompt' label={t('系统提示词')} placeholder={t('输入系统提示词，用户的系统提示词将优先于此设置')} onChange={(value) => handleChannelSettingsChange('system_prompt', value)} autosize showClear extraText={t('用户优先：如果用户在请求中指定了系统提示词，将优先使用用户的设置')} />
                   <Form.Switch field='system_prompt_override' label={t('系统提示词拼接')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelSettingsChange('system_prompt_override', value)} extraText={t('如果用户请求中包含系统提示词，则使用此设置拼接到用户的系统提示词前面')} />

@@ -60,12 +60,16 @@ func GetAllEnableAbilities() []Ability {
 	return abilities
 }
 
-func getPriority(group string, model string, retry int) (int, error) {
+func getPriority(group string, model string, retry int, excludedChannelIDs []int) (int, error) {
 
 	var priorities []int
-	err := DB.Model(&Ability{}).
+	query := DB.Model(&Ability{}).
 		Select("DISTINCT(priority)").
-		Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true).
+		Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true)
+	if len(excludedChannelIDs) > 0 {
+		query = query.Not("channel_id IN ?", excludedChannelIDs)
+	}
+	err := query.
 		Order("priority DESC").              // 按优先级降序排序
 		Pluck("priority", &priorities).Error // Pluck用于将查询的结果直接扫描到一个切片中
 
@@ -90,15 +94,24 @@ func getPriority(group string, model string, retry int) (int, error) {
 	return priorityToUse, nil
 }
 
-func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
+func getChannelQuery(group string, model string, retry int, excludedChannelIDs []int) (*gorm.DB, error) {
 	maxPrioritySubQuery := DB.Model(&Ability{}).Select("MAX(priority)").Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true)
+	if len(excludedChannelIDs) > 0 {
+		maxPrioritySubQuery = maxPrioritySubQuery.Not("channel_id IN ?", excludedChannelIDs)
+	}
 	channelQuery := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = (?)", group, model, true, maxPrioritySubQuery)
+	if len(excludedChannelIDs) > 0 {
+		channelQuery = channelQuery.Not("channel_id IN ?", excludedChannelIDs)
+	}
 	if retry != 0 {
-		priority, err := getPriority(group, model, retry)
+		priority, err := getPriority(group, model, retry, excludedChannelIDs)
 		if err != nil {
 			return nil, err
 		} else {
 			channelQuery = DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = ?", group, model, true, priority)
+			if len(excludedChannelIDs) > 0 {
+				channelQuery = channelQuery.Not("channel_id IN ?", excludedChannelIDs)
+			}
 		}
 	}
 
@@ -106,11 +119,15 @@ func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
 }
 
 // GetChannel 从数据库候选中选择渠道，重试时优先排除本次请求已使用的渠道。
-func GetChannel(group string, model string, retry int, requestPath string, usedChannelIds map[int]struct{}) (*Channel, error) {
+func GetChannel(group string, model string, retry int, requestPath string, usedChannelIds map[int]struct{}, excludedChannelIds map[int]struct{}) (*Channel, error) {
 	var abilities []Ability
+	excludedIDs := make([]int, 0, len(excludedChannelIds))
+	for channelID := range excludedChannelIds {
+		excludedIDs = append(excludedIDs, channelID)
+	}
 
 	var err error = nil
-	channelQuery, err := getChannelQuery(group, model, retry)
+	channelQuery, err := getChannelQuery(group, model, retry, excludedIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -121,6 +138,15 @@ func GetChannel(group string, model string, retry int, requestPath string, usedC
 	}
 	if err != nil {
 		return nil, err
+	}
+	if len(excludedChannelIds) > 0 {
+		filtered := abilities[:0]
+		for _, ability := range abilities {
+			if _, excluded := excludedChannelIds[ability.ChannelId]; !excluded {
+				filtered = append(filtered, ability)
+			}
+		}
+		abilities = filtered
 	}
 	abilities = filterAbilitiesByRequestPathAndModel(abilities, requestPath, model)
 	candidateIds := make([]int, 0, len(abilities))
@@ -158,6 +184,20 @@ func GetChannel(group string, model string, retry int, requestPath string, usedC
 	}
 	err = DB.First(&channel, "id = ?", channel.Id).Error
 	return &channel, err
+}
+
+// filterExcludedChannelIds 永久排除本次路由不允许命中的渠道。
+func filterExcludedChannelIds(channelIds []int, excludedChannelIds map[int]struct{}) []int {
+	if len(channelIds) == 0 || len(excludedChannelIds) == 0 {
+		return channelIds
+	}
+	filtered := channelIds[:0]
+	for _, channelId := range channelIds {
+		if _, excluded := excludedChannelIds[channelId]; !excluded {
+			filtered = append(filtered, channelId)
+		}
+	}
+	return filtered
 }
 
 // preferredUntriedChannelIds 返回未使用候选；全部用过时返回 nil 以允许兜底复用。

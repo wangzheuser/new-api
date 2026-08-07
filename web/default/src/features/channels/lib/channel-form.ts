@@ -23,7 +23,7 @@ import {
   ERROR_MESSAGES,
   MODEL_FETCHABLE_TYPES,
 } from '../constants'
-import type { Channel } from '../types'
+import type { Channel, ModelContextFallback } from '../types'
 import {
   CHANNEL_TYPE_ADVANCED_CUSTOM,
   advancedCustomConfigUsesRelativeUpstreamPath,
@@ -89,6 +89,76 @@ function isOptionalStatusCodeMapping(value: string | undefined): boolean {
   } catch {
     return false
   }
+}
+
+function getContextFallbacksError(value: string | undefined): string | null {
+  if (!value?.trim()) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value)
+  } catch {
+    return ERROR_MESSAGES.INVALID_JSON
+  }
+  if (!isJsonObjectValue(parsed)) {
+    return 'Context fallback rules must be a JSON object'
+  }
+  const entries = Object.entries(parsed)
+  if (entries.length > 256) {
+    return 'Context fallback rules cannot exceed 256 entries'
+  }
+  for (const [sourceModel, rawRule] of entries) {
+    if (
+      !sourceModel.trim() ||
+      sourceModel !== sourceModel.trim() ||
+      sourceModel.length > 255 ||
+      !isJsonObjectValue(rawRule)
+    ) {
+      return 'Context fallback rule contains an invalid source model'
+    }
+    const rule = rawRule as Partial<ModelContextFallback>
+    if (
+      !Number.isSafeInteger(rule.source_context_window_tokens) ||
+      Number(rule.source_context_window_tokens) <= 0
+    ) {
+      return `Source context window must be a positive integer: ${sourceModel}`
+    }
+    if (
+      rule.threshold_percent != null &&
+      (!Number.isInteger(rule.threshold_percent) ||
+        rule.threshold_percent < 1 ||
+        rule.threshold_percent > 100)
+    ) {
+      return `Threshold percent must be between 1 and 100: ${sourceModel}`
+    }
+    if (
+      typeof rule.fallback_model !== 'string' ||
+      !rule.fallback_model.trim() ||
+      rule.fallback_model !== rule.fallback_model.trim() ||
+      rule.fallback_model.length > 255 ||
+      rule.fallback_model === sourceModel
+    ) {
+      return `Fallback model is invalid: ${sourceModel}`
+    }
+    if (
+      !Number.isSafeInteger(rule.fallback_context_window_tokens) ||
+      Number(rule.fallback_context_window_tokens) <= 0
+    ) {
+      return `Fallback context window must be a positive integer: ${sourceModel}`
+    }
+    if (!['same_channel', 'cross_channel'].includes(rule.route_mode ?? '')) {
+      return `Route mode must be same_channel or cross_channel: ${sourceModel}`
+    }
+    const targetIds = rule.target_channel_ids ?? []
+    if (
+      !Array.isArray(targetIds) ||
+      targetIds.some((id) => !Number.isSafeInteger(id) || id <= 0) ||
+      new Set(targetIds).size !== targetIds.length ||
+      (rule.route_mode === 'same_channel' && targetIds.length > 0)
+    ) {
+      return `Target channel IDs are invalid: ${sourceModel}`
+    }
+  }
+  return null
 }
 
 function isCodexCredential(value: string | undefined): boolean {
@@ -196,6 +266,7 @@ export const channelFormSchema = z
     system_prompt: z.string().optional(),
     system_prompt_override: z.boolean().optional(),
     model_system_prompts: z.record(z.string(), z.string()).optional(),
+    model_context_fallbacks: z.string().optional(),
     // Type-specific settings (stored in settings JSON)
     is_enterprise_account: z.boolean().optional(), // OpenRouter specific
     vertex_key_type: z.enum(['json', 'api_key']).optional(), // Vertex AI specific
@@ -254,13 +325,26 @@ export const channelFormSchema = z
       }
     }
 
+    const contextFallbacksError = getContextFallbacksError(
+      data.model_context_fallbacks
+    )
+    if (contextFallbacksError) {
+      addRequiredIssue(ctx, 'model_context_fallbacks', contextFallbacksError)
+    }
+
     if (
       new TextEncoder().encode(buildSettingJSON(data)).length >
       MAX_CHANNEL_SETTING_BYTES
     ) {
+      let settingErrorField = 'system_prompt'
+      if (modelPrompts.length > 0) {
+        settingErrorField = 'model_system_prompts'
+      } else if (data.model_context_fallbacks?.trim()) {
+        settingErrorField = 'model_context_fallbacks'
+      }
       addRequiredIssue(
         ctx,
-        modelPrompts.length > 0 ? 'model_system_prompts' : 'system_prompt',
+        settingErrorField,
         'Channel settings cannot exceed 64 KiB'
       )
     }
@@ -386,6 +470,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   system_prompt: '',
   system_prompt_override: false,
   model_system_prompts: {},
+  model_context_fallbacks: '',
   // Type-specific settings
   is_enterprise_account: false,
   vertex_key_type: 'json',
@@ -426,6 +511,7 @@ export function transformChannelToFormDefaults(
     system_prompt: '',
     system_prompt_override: false,
     model_system_prompts: {} as Record<string, string>,
+    model_context_fallbacks: '',
   }
 
   if (channel.setting) {
@@ -444,6 +530,12 @@ export function transformChannelToFormDefaults(
           !Array.isArray(parsed.model_system_prompts)
             ? parsed.model_system_prompts
             : {},
+        model_context_fallbacks:
+          parsed.model_context_fallbacks &&
+          typeof parsed.model_context_fallbacks === 'object' &&
+          !Array.isArray(parsed.model_context_fallbacks)
+            ? JSON.stringify(parsed.model_context_fallbacks, null, 2)
+            : '',
       }
     } catch (error) {
       // eslint-disable-next-line no-console
@@ -567,6 +659,16 @@ function buildSettingJSON(formData: ChannelFormValues): string {
   }
   if (Object.keys(formData.model_system_prompts || {}).length > 0) {
     settingObj.model_system_prompts = formData.model_system_prompts
+  }
+  if (formData.model_context_fallbacks?.trim()) {
+    try {
+      const rules = JSON.parse(formData.model_context_fallbacks)
+      if (isJsonObjectValue(rules) && Object.keys(rules).length > 0) {
+        settingObj.model_context_fallbacks = rules
+      }
+    } catch {
+      // The form validator reports invalid drafts before submission.
+    }
   }
   return JSON.stringify(settingObj)
 }

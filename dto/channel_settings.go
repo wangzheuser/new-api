@@ -15,16 +15,45 @@ const (
 	MaxChannelSettingBytes      = 64*1024 - 1
 	MaxModelSystemPromptEntries = 256
 	MaxModelSystemPromptBytes   = 64 * 1024
+	MaxModelContextFallbacks    = 256
+	DefaultContextThreshold     = 90
+	ContextFallbackModeSame     = "same_channel"
+	ContextFallbackModeCross    = "cross_channel"
 )
 
+// ModelContextFallback 定义某个源路由模型的上下文阈值与单次兜底目标。
+type ModelContextFallback struct {
+	SourceContextWindowTokens   int64  `json:"source_context_window_tokens"`
+	ThresholdPercent            int    `json:"threshold_percent,omitempty"`
+	FallbackModel               string `json:"fallback_model"`
+	FallbackContextWindowTokens int64  `json:"fallback_context_window_tokens"`
+	RouteMode                   string `json:"route_mode"`
+	TargetChannelIDs            []int  `json:"target_channel_ids,omitempty"`
+}
+
+// EffectiveThresholdPercent 返回规则的有效阈值百分比。
+func (r ModelContextFallback) EffectiveThresholdPercent() int {
+	if r.ThresholdPercent == 0 {
+		return DefaultContextThreshold
+	}
+	return r.ThresholdPercent
+}
+
+// ThresholdTokens 使用整数运算计算源模型的触发阈值。
+func (r ModelContextFallback) ThresholdTokens() int64 {
+	percent := int64(r.EffectiveThresholdPercent())
+	return r.SourceContextWindowTokens/100*percent + r.SourceContextWindowTokens%100*percent/100
+}
+
 type ChannelSettings struct {
-	ForceFormat            bool              `json:"force_format,omitempty"`
-	ThinkingToContent      bool              `json:"thinking_to_content,omitempty"`
-	Proxy                  string            `json:"proxy"`
-	PassThroughBodyEnabled bool              `json:"pass_through_body_enabled,omitempty"`
-	SystemPrompt           string            `json:"system_prompt,omitempty"`
-	SystemPromptOverride   bool              `json:"system_prompt_override,omitempty"`
-	ModelSystemPrompts     map[string]string `json:"model_system_prompts,omitempty"`
+	ForceFormat            bool                            `json:"force_format,omitempty"`
+	ThinkingToContent      bool                            `json:"thinking_to_content,omitempty"`
+	Proxy                  string                          `json:"proxy"`
+	PassThroughBodyEnabled bool                            `json:"pass_through_body_enabled,omitempty"`
+	SystemPrompt           string                          `json:"system_prompt,omitempty"`
+	SystemPromptOverride   bool                            `json:"system_prompt_override,omitempty"`
+	ModelSystemPrompts     map[string]string               `json:"model_system_prompts,omitempty"`
+	ModelContextFallbacks  map[string]ModelContextFallback `json:"model_context_fallbacks,omitempty"`
 }
 
 // ResolveSystemPrompt 返回指定原始模型应使用的渠道系统提示词，以及是否需要前置拼接客户端提示词。
@@ -33,6 +62,25 @@ func (s ChannelSettings) ResolveSystemPrompt(model string) (string, bool) {
 		return prompt, true
 	}
 	return s.SystemPrompt, s.SystemPromptOverride
+}
+
+// ResolveSystemPromptForAttempt 在兜底路由中优先保持客户端模型语义，再匹配实际尝试模型。
+func (s ChannelSettings) ResolveSystemPromptForAttempt(requestedModel, attemptModel string, fallbackActive bool) (string, bool, string, string) {
+	if prompt, ok := s.ModelSystemPrompts[requestedModel]; ok && strings.TrimSpace(prompt) != "" {
+		return prompt, true, "model_requested", requestedModel
+	}
+	if fallbackActive && attemptModel != "" && attemptModel != requestedModel {
+		if prompt, ok := s.ModelSystemPrompts[attemptModel]; ok && strings.TrimSpace(prompt) != "" {
+			return prompt, true, "model_attempt", attemptModel
+		}
+	}
+	return s.SystemPrompt, s.SystemPromptOverride, "channel_default", ""
+}
+
+// ResolveContextFallback 按初始路由模型精确查找渠道兜底规则。
+func (s ChannelSettings) ResolveContextFallback(model string) (ModelContextFallback, bool) {
+	rule, ok := s.ModelContextFallbacks[model]
+	return rule, ok
 }
 
 // ValidateSystemPrompts 校验模型专属系统提示词配置。
@@ -56,6 +104,53 @@ func (s ChannelSettings) ValidateSystemPrompts() error {
 		}
 		if len(prompt) > MaxModelSystemPromptBytes {
 			return fmt.Errorf("model system prompt is too long: %s", model)
+		}
+	}
+	return nil
+}
+
+// ValidateContextFallbacks 校验渠道模型上下文兜底规则。
+func (s ChannelSettings) ValidateContextFallbacks() error {
+	if len(s.ModelContextFallbacks) > MaxModelContextFallbacks {
+		return fmt.Errorf("model context fallback entries cannot exceed %d", MaxModelContextFallbacks)
+	}
+	for sourceModel, rule := range s.ModelContextFallbacks {
+		trimmedSource := strings.TrimSpace(sourceModel)
+		if trimmedSource == "" || trimmedSource != sourceModel || len(sourceModel) > 255 {
+			return fmt.Errorf("invalid model context fallback source model: %s", sourceModel)
+		}
+		if rule.SourceContextWindowTokens <= 0 {
+			return fmt.Errorf("source context window must be positive: %s", sourceModel)
+		}
+		threshold := rule.EffectiveThresholdPercent()
+		if threshold < 1 || threshold > 100 {
+			return fmt.Errorf("context fallback threshold must be between 1 and 100: %s", sourceModel)
+		}
+		fallbackModel := strings.TrimSpace(rule.FallbackModel)
+		if fallbackModel == "" || fallbackModel != rule.FallbackModel || len(fallbackModel) > 255 {
+			return fmt.Errorf("invalid context fallback model: %s", sourceModel)
+		}
+		if fallbackModel == sourceModel {
+			return fmt.Errorf("context fallback model must differ from source model: %s", sourceModel)
+		}
+		if rule.FallbackContextWindowTokens <= 0 {
+			return fmt.Errorf("fallback context window must be positive: %s", sourceModel)
+		}
+		if rule.RouteMode != ContextFallbackModeSame && rule.RouteMode != ContextFallbackModeCross {
+			return fmt.Errorf("invalid context fallback route mode: %s", sourceModel)
+		}
+		if rule.RouteMode == ContextFallbackModeSame && len(rule.TargetChannelIDs) > 0 {
+			return fmt.Errorf("same-channel fallback cannot specify target channel ids: %s", sourceModel)
+		}
+		seenChannelIDs := make(map[int]struct{}, len(rule.TargetChannelIDs))
+		for _, channelID := range rule.TargetChannelIDs {
+			if channelID <= 0 {
+				return fmt.Errorf("context fallback target channel id must be positive: %s", sourceModel)
+			}
+			if _, exists := seenChannelIDs[channelID]; exists {
+				return fmt.Errorf("duplicate context fallback target channel id %d: %s", channelID, sourceModel)
+			}
+			seenChannelIDs[channelID] = struct{}{}
 		}
 	}
 	return nil

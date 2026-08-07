@@ -46,7 +46,7 @@ func attachQuotaSaturation(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, o
 	}
 	attachQuotaSaturationToOther(other, clamp)
 	logger.LogWarn(ctx, fmt.Sprintf("quota saturation on consume log: op=%s kind=%s original=%g clamped=%d user=%d model=%s",
-		clamp.Op, clamp.Kind, clamp.Original, clamp.Clamped, relayInfo.UserId, relayInfo.OriginModelName))
+		clamp.Op, clamp.Kind, clamp.Original, clamp.Clamped, relayInfo.UserId, relayInfo.GetBillingModelName()))
 }
 
 func appendRequestPath(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
@@ -82,7 +82,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	if relayInfo.ReasoningEffort != "" {
 		other["reasoning_effort"] = relayInfo.ReasoningEffort
 	}
-	if relayInfo.IsModelMapped {
+	if relayInfo.IsModelMapped && !relayInfo.IsContextFallbackActive() {
 		other["is_model_mapped"] = true
 		other["upstream_model_name"] = relayInfo.UpstreamModelName
 	}
@@ -96,12 +96,14 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	adminInfo["use_channel"] = ctx.GetStringSlice("use_channel")
 	if common.GetContextKeyBool(ctx, constant.ContextKeySystemPromptApplied) {
 		adminInfo["system_prompt"] = map[string]interface{}{
-			"applied":       true,
-			"source":        common.GetContextKeyString(ctx, constant.ContextKeySystemPromptSource),
-			"matched_model": common.GetContextKeyString(ctx, constant.ContextKeySystemPromptModel),
-			"prepended":     isSystemPromptOverwritten,
+			"applied":         true,
+			"source":          common.GetContextKeyString(ctx, constant.ContextKeySystemPromptSource),
+			"matched_model":   common.GetContextKeyString(ctx, constant.ContextKeySystemPromptModel),
+			"prepended":       isSystemPromptOverwritten,
+			"injected_tokens": common.GetContextKeyInt(ctx, constant.ContextKeySystemPromptTokens),
 		}
 	}
+	AppendContextFallbackAdminInfo(relayInfo, adminInfo)
 	isMultiKey := common.GetContextKeyBool(ctx, constant.ContextKeyChannelIsMultiKey)
 	if isMultiKey {
 		adminInfo["is_multi_key"] = true
@@ -123,6 +125,47 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	appendParamOverrideInfo(relayInfo, other)
 	appendStreamStatus(relayInfo, other)
 	return other
+}
+
+// AppendContextFallbackAdminInfo 将上下文兜底路由细节放入管理员日志域。
+func AppendContextFallbackAdminInfo(relayInfo *relaycommon.RelayInfo, adminInfo map[string]interface{}) {
+	if relayInfo == nil || relayInfo.ContextFallback == nil || adminInfo == nil {
+		return
+	}
+	decision := relayInfo.ContextFallback
+	if !decision.Applied {
+		if decision.BypassReason != "" {
+			adminInfo["context_fallback"] = map[string]interface{}{
+				"applied":       false,
+				"bypass_reason": decision.BypassReason,
+			}
+		}
+		return
+	}
+	adminInfo["context_fallback"] = map[string]interface{}{
+		"applied":                        true,
+		"reason":                         "context_threshold",
+		"route_mode":                     decision.RouteMode,
+		"requested_model":                relayInfo.GetRequestedModelName(),
+		"billing_model":                  relayInfo.GetBillingModelName(),
+		"source_model":                   decision.SourceModel,
+		"attempt_model":                  decision.FallbackModel,
+		"upstream_model":                 relayInfo.UpstreamModelName,
+		"source_channel_id":              decision.SourceChannelID,
+		"target_channel_id":              decision.TargetChannelID,
+		"source_context_window_tokens":   decision.SourceContextWindowTokens,
+		"fallback_context_window_tokens": decision.FallbackContextWindowTokens,
+		"threshold_percent":              decision.ThresholdPercent,
+		"threshold_tokens":               decision.ThresholdTokens,
+		"source_base_input_tokens":       decision.SourceBaseInputTokens,
+		"source_prompt_tokens":           decision.SourcePromptTokens,
+		"source_output_reserve_tokens":   decision.SourceOutputReserveTokens,
+		"source_demand_tokens":           decision.SourceDemandTokens,
+		"target_base_input_tokens":       decision.TargetBaseInputTokens,
+		"target_prompt_tokens":           decision.TargetPromptTokens,
+		"target_output_reserve_tokens":   decision.TargetOutputReserveTokens,
+		"target_demand_tokens":           decision.TargetDemandTokens,
+	}
 }
 
 func appendParamOverrideInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {

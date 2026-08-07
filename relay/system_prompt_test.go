@@ -126,6 +126,12 @@ func TestInjectedSystemPromptUpdatesEstimateAndReserve(t *testing.T) {
 		UserGroup:          "default",
 		RelayFormat:        projecttypes.RelayFormatOpenAI,
 		Billing:            billing,
+		PriceData: projecttypes.PriceData{
+			ModelRatio: 1,
+			GroupRatioInfo: projecttypes.GroupRatioInfo{
+				GroupRatio: 1,
+			},
+		},
 		ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: dto.ChannelSettings{
 			ModelSystemPrompts: map[string]string{"gpt-3.5-turbo": "configured"},
 		}},

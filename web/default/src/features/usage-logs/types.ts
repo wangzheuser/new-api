@@ -137,6 +137,31 @@ export interface LogOtherData {
       original: number
       clamped: number
     }
+    context_fallback?: {
+      applied: boolean
+      bypass_reason?: string
+      reason?: string
+      route_mode?: 'same_channel' | 'cross_channel' | string
+      requested_model?: string
+      billing_model?: string
+      source_model?: string
+      attempt_model?: string
+      upstream_model?: string
+      source_channel_id?: number
+      target_channel_id?: number
+      source_context_window_tokens?: number
+      fallback_context_window_tokens?: number
+      threshold_percent?: number
+      threshold_tokens?: number
+      source_base_input_tokens?: number
+      source_prompt_tokens?: number
+      source_output_reserve_tokens?: number
+      source_demand_tokens?: number
+      target_base_input_tokens?: number
+      target_prompt_tokens?: number
+      target_output_reserve_tokens?: number
+      target_demand_tokens?: number
+    }
   }
   // Language-independent operation descriptor (audit/login logs).
   // Frontend renders localized content from action + params via i18n templates.

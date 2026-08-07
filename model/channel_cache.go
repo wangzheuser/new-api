@@ -112,10 +112,10 @@ func SyncChannelCache(frequency int) {
 }
 
 // GetRandomSatisfiedChannel 按优先级和权重选择渠道，重试时优先选择未使用渠道。
-func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string, usedChannelIds map[int]struct{}) (*Channel, error) {
+func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string, usedChannelIds map[int]struct{}, excludedChannelIds map[int]struct{}) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannel(group, model, retry, requestPath, usedChannelIds)
+		return GetChannel(group, model, retry, requestPath, usedChannelIds, excludedChannelIds)
 	}
 
 	channelSyncLock.RLock()
@@ -129,6 +129,7 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
 		channels = filterChannelsByRequestPathAndModel(group2model2channels[group][normalizedModel], requestPath, model)
 	}
+	channels = filterExcludedChannelIds(channels, excludedChannelIds)
 
 	if len(channels) == 0 {
 		return nil, nil

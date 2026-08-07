@@ -8,6 +8,7 @@ const (
 	ContextKeyEstimatedTokens ContextKey = "estimated_tokens"
 
 	ContextKeyOriginalModel    ContextKey = "original_model"
+	ContextKeyAttemptModel     ContextKey = "attempt_model"
 	ContextKeyRequestStartTime ContextKey = "request_start_time"
 
 	/* token related keys */
@@ -58,6 +59,7 @@ const (
 	ContextKeySystemPromptApplied  ContextKey = "system_prompt_applied"
 	ContextKeySystemPromptSource   ContextKey = "system_prompt_source"
 	ContextKeySystemPromptModel    ContextKey = "system_prompt_model"
+	ContextKeySystemPromptTokens   ContextKey = "system_prompt_tokens"
 
 	// ContextKeyFileSourcesToCleanup stores file sources that need cleanup when request ends
 	ContextKeyFileSourcesToCleanup ContextKey = "file_sources_to_cleanup"

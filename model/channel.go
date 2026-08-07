@@ -951,6 +951,9 @@ func (channel *Channel) ValidateSettings() error {
 	if err := channelParams.ValidateSystemPrompts(); err != nil {
 		return err
 	}
+	if err := channelParams.ValidateContextFallbacks(); err != nil {
+		return err
+	}
 	channelOtherSettings := &dto.ChannelOtherSettings{}
 	if channel.OtherSettings != "" {
 		err := common.UnmarshalJsonStr(channel.OtherSettings, channelOtherSettings)

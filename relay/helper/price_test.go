@@ -272,3 +272,73 @@ func TestModelPriceHelperRequestBillingRatiosOnlyApplyToFixedPrice(t *testing.T)
 	require.Equal(t, common.QuotaClampOverflow, clamp.Kind)
 	require.Nil(t, info.Billing)
 }
+
+func TestModelPriceHelperAndReserveKeepInitialBillingModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	savedModelRatios := ratio_setting.ModelRatio2JSONString()
+	savedGroupRatios := ratio_setting.GroupRatio2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(savedModelRatios))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(savedGroupRatios))
+	})
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"MODEL_A":2,"MODEL_B":100}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set("group", "default")
+	info := &relaycommon.RelayInfo{
+		RoutingModelName: "MODEL_A",
+		AttemptModelName: "MODEL_B",
+		OriginModelName:  "MODEL_B",
+		UserGroup:        "default",
+		UsingGroup:       "default",
+	}
+	priceData, err := ModelPriceHelper(ctx, info, 10_000, &types.TokenCountMeta{})
+	require.NoError(t, err)
+	require.Equal(t, 2.0, priceData.ModelRatio)
+
+	targetQuota, err := EstimateQuotaWithFrozenPrice(info, 20_000, &types.TokenCountMeta{})
+	require.NoError(t, err)
+	require.Equal(t, 40_000, targetQuota)
+	require.Equal(t, 2.0, info.PriceData.ModelRatio)
+}
+
+func TestEstimateQuotaWithFrozenTieredSnapshot(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	saved := map[string]string{}
+	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+		saved[key] = value
+		return nil
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(saved))
+	})
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"billing_setting.billing_mode":    `{"MODEL_A":"tiered_expr","MODEL_B":"tiered_expr"}`,
+		"billing_setting.billing_expr":    `{"MODEL_A":"tier(\"a\", p * 2)","MODEL_B":"tier(\"b\", p * 100)"}`,
+		"group_ratio_setting.group_ratio": `{"default":1}`,
+	}))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	ctx.Set("group", "default")
+	info := &relaycommon.RelayInfo{
+		RoutingModelName: "MODEL_A",
+		AttemptModelName: "MODEL_B",
+		OriginModelName:  "MODEL_B",
+		UserGroup:        "default",
+		UsingGroup:       "default",
+		BillingRequestInput: &billingexpr.RequestInput{
+			Body: []byte(`{}`),
+		},
+	}
+	_, err := ModelPriceHelper(ctx, info, 1_000, &types.TokenCountMeta{MaxTokens: 1})
+	require.NoError(t, err)
+	require.Equal(t, "MODEL_A", info.TieredBillingSnapshot.ModelName)
+
+	targetQuota, err := EstimateQuotaWithFrozenPrice(info, 2_000, &types.TokenCountMeta{MaxTokens: 1})
+	require.NoError(t, err)
+	require.Equal(t, 2_000, targetQuota)
+	require.Equal(t, "MODEL_A", info.TieredBillingSnapshot.ModelName)
+	require.Equal(t, "tier(\"a\", p * 2)", info.TieredBillingSnapshot.ExprString)
+}

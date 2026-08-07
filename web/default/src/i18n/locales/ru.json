@@ -5372,6 +5372,22 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Model Context Fallbacks": "Резервные модели контекста",
+    "When input plus reserved output exceeds the source model threshold, route once to the configured fallback model. The default threshold is 90%. Leave target_channel_ids empty to select any eligible channel in the same group.": "Когда сумма входных токенов и резерва вывода превышает порог исходной модели, запрос один раз направляется на настроенную резервную модель. Порог по умолчанию — 90 %. Оставьте target_channel_ids пустым, чтобы выбрать подходящий канал в той же группе.",
+    "Fallback rule JSON": "JSON резервного правила",
+    "Source Model": "Исходная модель",
+    "Fallback Rule": "Резервное правило",
+    "No model context fallback rules configured.": "Правила резервирования контекста не настроены.",
+    "Context Fallback": "Резервирование контекста",
+    "Routed": "Маршрутизировано",
+    "Bypassed": "Пропущено",
+    "Route Mode": "Режим маршрутизации",
+    "Model Route": "Маршрут моделей",
+    "Billing Model": "Тарифицируемая модель",
+    "Channel Route": "Маршрут каналов",
+    "Source Demand": "Нагрузка исходной модели",
+    "Fallback Demand": "Нагрузка резервной модели",
+    "Injected Prompt Tokens": "Токены внедрённого промпта"
   }
 }

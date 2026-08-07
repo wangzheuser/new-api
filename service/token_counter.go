@@ -229,7 +229,7 @@ func countRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *relayco
 		return totalAudioToken, nil
 	}
 
-	model := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
+	model := info.GetAttemptModelName()
 	tkm := 0
 
 	if meta.TokenType == types.TokenTypeTextNumber {

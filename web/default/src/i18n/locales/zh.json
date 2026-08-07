@@ -5372,6 +5372,22 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Model Context Fallbacks": "模型上下文兜底",
+    "When input plus reserved output exceeds the source model threshold, route once to the configured fallback model. The default threshold is 90%. Leave target_channel_ids empty to select any eligible channel in the same group.": "当输入 Token 与预留输出 Token 之和超过源模型阈值时，单次切换到配置的兜底模型。默认阈值为 90%。target_channel_ids 留空时，将在同一分组中选择任一可用渠道。",
+    "Fallback rule JSON": "兜底规则 JSON",
+    "Source Model": "源模型",
+    "Fallback Rule": "兜底规则",
+    "No model context fallback rules configured.": "尚未配置模型上下文兜底规则。",
+    "Context Fallback": "上下文兜底",
+    "Routed": "已路由",
+    "Bypassed": "已跳过",
+    "Route Mode": "路由模式",
+    "Model Route": "模型路由",
+    "Billing Model": "计费模型",
+    "Channel Route": "渠道路由",
+    "Source Demand": "源模型上下文用量",
+    "Fallback Demand": "兜底模型上下文用量",
+    "Injected Prompt Tokens": "注入提示词 Token"
   }
 }

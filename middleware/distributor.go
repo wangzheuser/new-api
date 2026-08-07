@@ -453,7 +453,10 @@ func getTaskOriginModelName(c *gin.Context) string {
 }
 
 func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, modelName string) *types.NewAPIError {
-	c.Set("original_model", modelName) // for retry
+	if common.GetContextKeyString(c, constant.ContextKeyOriginalModel) == "" {
+		common.SetContextKey(c, constant.ContextKeyOriginalModel, modelName)
+	}
+	common.SetContextKey(c, constant.ContextKeyAttemptModel, modelName)
 	if channel == nil {
 		return types.NewError(errors.New("channel is nil"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
@@ -470,9 +473,11 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	}
 	common.SetContextKey(c, constant.ContextKeyChannelParamOverride, paramOverride)
 	common.SetContextKey(c, constant.ContextKeyChannelHeaderOverride, headerOverride)
-	if nil != channel.OpenAIOrganization && *channel.OpenAIOrganization != "" {
-		common.SetContextKey(c, constant.ContextKeyChannelOrganization, *channel.OpenAIOrganization)
+	organization := ""
+	if channel.OpenAIOrganization != nil {
+		organization = *channel.OpenAIOrganization
 	}
+	common.SetContextKey(c, constant.ContextKeyChannelOrganization, organization)
 	common.SetContextKey(c, constant.ContextKeyChannelAutoBan, channel.GetAutoBan())
 	common.SetContextKey(c, constant.ContextKeyChannelModelMapping, channel.GetModelMapping())
 	common.SetContextKey(c, constant.ContextKeyChannelStatusCodeMapping, channel.GetStatusCodeMapping())
@@ -496,7 +501,13 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	common.SetContextKey(c, constant.ContextKeySystemPromptApplied, false)
 	common.SetContextKey(c, constant.ContextKeySystemPromptSource, "")
 	common.SetContextKey(c, constant.ContextKeySystemPromptModel, "")
+	common.SetContextKey(c, constant.ContextKeySystemPromptTokens, 0)
 
+	// 切换渠道前清理上一渠道的类型专属参数，避免跨类型重试串值。
+	c.Set("api_version", "")
+	c.Set("region", "")
+	c.Set("plugin", "")
+	c.Set("bot_id", "")
 	// TODO: api_version统一
 	switch channel.Type {
 	case constant.ChannelTypeAzure:
