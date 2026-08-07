@@ -35,6 +35,7 @@ import { MultiSelect } from '@/components/multi-select'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { ComboboxInput } from '@/components/ui/combobox-input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -83,17 +84,30 @@ export function ModelSystemPromptEditor(props: ModelSystemPromptEditorProps) {
     () => new Set(Object.keys(props.value)),
     [props.value]
   )
-  const modelSet = useMemo(() => new Set(props.models), [props.models])
+  const publishedModels = useMemo(
+    () => [...new Set(props.models)],
+    [props.models]
+  )
+  const modelSet = useMemo(() => new Set(publishedModels), [publishedModels])
   const missingModels = useMemo(
     () => Object.keys(props.value).filter((model) => !modelSet.has(model)),
     [modelSet, props.value]
   )
-  const availableModelOptions = useMemo(
+  const createModelOptions = useMemo(
     () =>
-      props.models
+      publishedModels
         .filter((model) => !configuredModels.has(model))
         .map((model) => ({ label: model, value: model })),
-    [configuredModels, props.models]
+    [configuredModels, publishedModels]
+  )
+  const editModelOptions = useMemo(
+    () =>
+      publishedModels
+        .filter(
+          (model) => model === editingModel || !configuredModels.has(model)
+        )
+        .map((model) => ({ label: model, value: model })),
+    [configuredModels, editingModel, publishedModels]
   )
   let promptTestTooltip = t('Test system prompt effect')
   if (!props.channelId) {
@@ -126,6 +140,9 @@ export function ModelSystemPromptEditor(props: ModelSystemPromptEditorProps) {
     if (selectedModels.length === 0 || !prompt.trim()) return
 
     const next = { ...props.value }
+    if (editingModel && selectedModels[0] !== editingModel) {
+      delete next[editingModel]
+    }
     for (const model of selectedModels) {
       next[model] = prompt
     }
@@ -459,11 +476,11 @@ export function ModelSystemPromptEditor(props: ModelSystemPromptEditorProps) {
             disabled={
               props.disabled ||
               props.models.length === 0 ||
-              availableModelOptions.length === 0
+              createModelOptions.length === 0
             }
           >
             <Plus className='mr-2 h-4 w-4' aria-hidden='true' />
-            {availableModelOptions.length === 0
+            {createModelOptions.length === 0
               ? t('All published models are configured')
               : t('Add model system prompt')}
           </Button>
@@ -486,16 +503,24 @@ export function ModelSystemPromptEditor(props: ModelSystemPromptEditorProps) {
           </div>
 
           <div className='space-y-2'>
-            <Label>{t('Applicable Models *')}</Label>
+            <Label htmlFor='model-system-prompt-models'>
+              {t('Applicable Models *')}
+            </Label>
             {editingModel ? (
-              <div className='border-input bg-muted/30 rounded-md border px-3 py-2'>
-                <Badge variant='secondary' className='font-mono'>
-                  {editingModel}
-                </Badge>
-              </div>
+              <ComboboxInput
+                id='model-system-prompt-models'
+                options={editModelOptions}
+                value={selectedModels[0] || ''}
+                onValueChange={(model) => setSelectedModels([model])}
+                placeholder={t('Select a published model')}
+                emptyText={t('No matching items')}
+                disabled={props.disabled}
+                aria-invalid={submitted && selectedModels.length === 0}
+              />
             ) : (
               <MultiSelect
-                options={availableModelOptions}
+                id='model-system-prompt-models'
+                options={createModelOptions}
                 selected={selectedModels}
                 onChange={setSelectedModels}
                 placeholder={t('Select one or more published models')}
