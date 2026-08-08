@@ -30,6 +30,8 @@ import type {
   ReplaceUserGroupGrantsPayload,
   UserGroupGrantData,
   ApiResponse,
+  UserImpersonationTicket,
+  ImpersonatedSessionUser,
 } from './types'
 
 // ============================================================================
@@ -142,6 +144,26 @@ export async function resetUserPasskey(id: number): Promise<ApiResponse> {
  */
 export async function resetUserTwoFA(id: number): Promise<ApiResponse> {
   const res = await api.delete(`/api/user/${id}/2fa`)
+  return res.data
+}
+
+/**
+ * Create a short-lived, single-use impersonation ticket for a common user.
+ */
+export async function createUserImpersonationTicket(
+  userId: number
+): Promise<ApiResponse<UserImpersonationTicket>> {
+  const res = await api.post(`/api/user/${userId}/impersonation-ticket`)
+  return res.data
+}
+
+/**
+ * Redeem an impersonation ticket in a signed-out browser context.
+ */
+export async function redeemUserImpersonationTicket(
+  ticket: string
+): Promise<ApiResponse<ImpersonatedSessionUser>> {
+  const res = await api.post('/api/user/impersonation/redeem', { ticket })
   return res.data
 }
 

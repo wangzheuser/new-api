@@ -31,6 +31,7 @@ import {
   CreditCard,
   Key,
   Gift,
+  VenetianMask,
 } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -50,8 +51,14 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { UserSubscriptionsDialog } from '@/features/subscriptions/components/dialogs/user-subscriptions-dialog'
+import { copyToClipboard } from '@/lib/copy-to-clipboard'
 
-import { manageUser, resetUserPasskey, resetUserTwoFA } from '../api'
+import {
+  createUserImpersonationTicket,
+  manageUser,
+  resetUserPasskey,
+  resetUserTwoFA,
+} from '../api'
 import {
   USER_STATUS,
   USER_ROLE,
@@ -78,6 +85,8 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const [bindingDialogOpen, setBindingDialogOpen] = useState(false)
   const [subscriptionsDialogOpen, setSubscriptionsDialogOpen] = useState(false)
   const [groupGrantsOpen, setGroupGrantsOpen] = useState(false)
+  const [impersonationOpen, setImpersonationOpen] = useState(false)
+  const [impersonationLoading, setImpersonationLoading] = useState(false)
 
   const handleEdit = () => {
     setCurrentRow(user)
@@ -137,9 +146,41 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
     }
   }
 
+  const handleCreateImpersonationLink = async () => {
+    setImpersonationLoading(true)
+    try {
+      const result = await createUserImpersonationTicket(user.id)
+      if (!result.success || !result.data?.ticket) {
+        toast.error(result.message || t('Failed to create impersonation link'))
+        return
+      }
+
+      const link = `${window.location.origin}/impersonate#ticket=${encodeURIComponent(result.data.ticket)}`
+      if (await copyToClipboard(link)) {
+        toast.success(
+          t(
+            'Incognito login link for {{username}} copied. It expires in 5 minutes.',
+            {
+              username: user.username,
+            }
+          )
+        )
+      } else {
+        toast.error(t('Copy failed. Generate a new link and try again.'))
+      }
+    } catch {
+      toast.error(t(ERROR_MESSAGES.UNEXPECTED))
+    } finally {
+      setImpersonationLoading(false)
+      setImpersonationOpen(false)
+    }
+  }
+
   const isDisabled = user.status === USER_STATUS.DISABLED
   const isAdmin = user.role >= USER_ROLE.ADMIN
   const isRoot = user.role === USER_ROLE.ROOT
+  const canImpersonate =
+    user.status === USER_STATUS.ENABLED && user.role === USER_ROLE.USER
 
   if (isUserDeleted(user)) {
     return null
@@ -165,7 +206,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
 
       <DataTableRowActionMenu
         ariaLabel={t('Open menu')}
-        contentClassName='w-48'
+        contentClassName='w-56'
       >
         {isDisabled ? (
           <DropdownMenuItem onClick={() => handleManage('enable')}>
@@ -254,6 +295,20 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           </DropdownMenuShortcut>
         </DropdownMenuItem>
 
+        {canImpersonate && (
+          <DropdownMenuItem
+            onSelect={(event) => {
+              event.preventDefault()
+              setImpersonationOpen(true)
+            }}
+          >
+            {t('Copy Incognito login link')}
+            <DropdownMenuShortcut>
+              <VenetianMask size={16} />
+            </DropdownMenuShortcut>
+          </DropdownMenuItem>
+        )}
+
         <DropdownMenuSeparator />
 
         <DropdownMenuItem
@@ -295,6 +350,18 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           </DropdownMenuShortcut>
         </DropdownMenuItem>
       </DataTableRowActionMenu>
+
+      <ConfirmDialog
+        open={impersonationOpen}
+        onOpenChange={setImpersonationOpen}
+        title={t('Copy Incognito login link')}
+        desc={t(
+          'This link is valid for 5 minutes and can be used only once. Paste it into a signed-out Chrome or Edge Incognito window. Opening it in this window will not switch your current administrator session.'
+        )}
+        confirmText={t('Generate and copy link')}
+        handleConfirm={handleCreateImpersonationLink}
+        isLoading={impersonationLoading}
+      />
 
       <ConfirmDialog
         open={resetPasskeyOpen}

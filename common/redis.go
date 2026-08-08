@@ -86,6 +86,21 @@ func RedisGet(key string) (string, error) {
 	return val, err
 }
 
+// RedisGetDel atomically reads and deletes a key using commands supported by older Redis versions.
+func RedisGetDel(key string) (string, error) {
+	if DebugEnabled {
+		SysLog(fmt.Sprintf("Redis GET DEL: key=%s", key))
+	}
+	const script = `
+local value = redis.call("GET", KEYS[1])
+if value then
+    redis.call("DEL", KEYS[1])
+end
+return value
+`
+	return RDB.Eval(context.Background(), script, []string{key}).Text()
+}
+
 //func RedisExpire(key string, expiration time.Duration) error {
 //	ctx := context.Background()
 //	return RDB.Expire(ctx, key, expiration).Err()

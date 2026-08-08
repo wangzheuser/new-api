@@ -130,6 +130,14 @@ const (
 	MsgUserQuotaChangeZero           = "user.quota_change_zero"
 )
 
+// User impersonation messages
+const (
+	MsgUserImpersonationRedisRequired   = "user.impersonation_redis_required"
+	MsgUserImpersonationTargetInvalid   = "user.impersonation_target_invalid"
+	MsgUserImpersonationTicketInvalid   = "user.impersonation_ticket_invalid"
+	MsgUserImpersonationExistingSession = "user.impersonation_existing_session"
+)
+
 // Quota related messages
 const (
 	MsgQuotaNegative        = "quota.negative"

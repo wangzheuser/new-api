@@ -33,6 +33,7 @@ import { Route as authResetRouteImport } from './routes/(auth)/reset'
 import { Route as authRegisterRouteImport } from './routes/(auth)/register'
 import { Route as authOtpRouteImport } from './routes/(auth)/otp'
 import { Route as authOauthRouteImport } from './routes/(auth)/oauth'
+import { Route as authImpersonateRouteImport } from './routes/(auth)/impersonate'
 import { Route as authForgotPasswordRouteImport } from './routes/(auth)/forgot-password'
 import { Route as AuthenticatedSystemSettingsRouteRouteImport } from './routes/_authenticated/system-settings/route'
 import { Route as PricingModelIdIndexRouteImport } from './routes/pricing/$modelId/index'
@@ -188,6 +189,11 @@ const authOtpRoute = authOtpRouteImport.update({
 const authOauthRoute = authOauthRouteImport.update({
   id: '/oauth',
   path: '/oauth',
+  getParentRoute: () => authRouteRoute,
+} as any)
+const authImpersonateRoute = authImpersonateRouteImport.update({
+  id: '/impersonate',
+  path: '/impersonate',
   getParentRoute: () => authRouteRoute,
 } as any)
 const authForgotPasswordRoute = authForgotPasswordRouteImport.update({
@@ -419,6 +425,7 @@ export interface FileRoutesByFullPath {
   '/user-agreement': typeof UserAgreementRoute
   '/system-settings': typeof AuthenticatedSystemSettingsRouteRouteWithChildren
   '/forgot-password': typeof authForgotPasswordRoute
+  '/impersonate': typeof authImpersonateRoute
   '/oauth': typeof authOauthRoute
   '/otp': typeof authOtpRoute
   '/register': typeof authRegisterRoute
@@ -480,6 +487,7 @@ export interface FileRoutesByTo {
   '/privacy-policy': typeof PrivacyPolicyRoute
   '/user-agreement': typeof UserAgreementRoute
   '/forgot-password': typeof authForgotPasswordRoute
+  '/impersonate': typeof authImpersonateRoute
   '/oauth': typeof authOauthRoute
   '/otp': typeof authOtpRoute
   '/register': typeof authRegisterRoute
@@ -545,6 +553,7 @@ export interface FileRoutesById {
   '/user-agreement': typeof UserAgreementRoute
   '/_authenticated/system-settings': typeof AuthenticatedSystemSettingsRouteRouteWithChildren
   '/(auth)/forgot-password': typeof authForgotPasswordRoute
+  '/(auth)/impersonate': typeof authImpersonateRoute
   '/(auth)/oauth': typeof authOauthRoute
   '/(auth)/otp': typeof authOtpRoute
   '/(auth)/register': typeof authRegisterRoute
@@ -609,6 +618,7 @@ export interface FileRouteTypes {
     | '/user-agreement'
     | '/system-settings'
     | '/forgot-password'
+    | '/impersonate'
     | '/oauth'
     | '/otp'
     | '/register'
@@ -670,6 +680,7 @@ export interface FileRouteTypes {
     | '/privacy-policy'
     | '/user-agreement'
     | '/forgot-password'
+    | '/impersonate'
     | '/oauth'
     | '/otp'
     | '/register'
@@ -734,6 +745,7 @@ export interface FileRouteTypes {
     | '/user-agreement'
     | '/_authenticated/system-settings'
     | '/(auth)/forgot-password'
+    | '/(auth)/impersonate'
     | '/(auth)/oauth'
     | '/(auth)/otp'
     | '/(auth)/register'
@@ -980,6 +992,13 @@ declare module '@tanstack/react-router' {
       path: '/oauth'
       fullPath: '/oauth'
       preLoaderRoute: typeof authOauthRouteImport
+      parentRoute: typeof authRouteRoute
+    }
+    '/(auth)/impersonate': {
+      id: '/(auth)/impersonate'
+      path: '/impersonate'
+      fullPath: '/impersonate'
+      preLoaderRoute: typeof authImpersonateRouteImport
       parentRoute: typeof authRouteRoute
     }
     '/(auth)/forgot-password': {
@@ -1253,6 +1272,7 @@ declare module '@tanstack/react-router' {
 
 interface authRouteRouteChildren {
   authForgotPasswordRoute: typeof authForgotPasswordRoute
+  authImpersonateRoute: typeof authImpersonateRoute
   authOauthRoute: typeof authOauthRoute
   authOtpRoute: typeof authOtpRoute
   authRegisterRoute: typeof authRegisterRoute
@@ -1264,6 +1284,7 @@ interface authRouteRouteChildren {
 
 const authRouteRouteChildren: authRouteRouteChildren = {
   authForgotPasswordRoute: authForgotPasswordRoute,
+  authImpersonateRoute: authImpersonateRoute,
   authOauthRoute: authOauthRoute,
   authOtpRoute: authOtpRoute,
   authRegisterRoute: authRegisterRoute,

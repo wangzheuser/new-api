@@ -74,8 +74,23 @@ export const userListSchema = z.array(userSchema)
 /** Generic API response */
 export interface ApiResponse<T = unknown> {
   success: boolean
+  code?: string
   message?: string
   data?: T
+}
+
+export interface UserImpersonationTicket {
+  ticket: string
+  expires_at: number
+}
+
+export interface ImpersonatedSessionUser {
+  id: number
+  username: string
+  display_name: string
+  role: number
+  status: number
+  group: string
 }
 
 export interface GetUsersParams {

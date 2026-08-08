@@ -325,6 +325,10 @@ const AUDIT_TEMPLATES: Record<string, string> = {
   'user.topup_complete': 'Completed top-up order for the user',
   'user.reset_passkey': 'Reset the user passkey',
   'user.oauth_unbind': 'Removed an OAuth binding for the user',
+  'user.impersonation_link_create':
+    'Created an impersonation link for user {{target_username}} (ID: {{target_user_id}})',
+  'user.impersonation_redeem':
+    'Impersonated user {{target_username}} (ID: {{target_user_id}})',
   // API keys delegated by administrators
   'token.create':
     'Created API key {{name}} (ID: {{id}}) for user {{target_user_id}}',

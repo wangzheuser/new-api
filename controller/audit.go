@@ -38,6 +38,9 @@ var auditContentTemplates = map[string]string{
 	"token.key_view_batch":     "Viewed ${count} API keys for user ${target_user_id}",
 	"option.update":            "Updated system setting ${key}",
 
+	"user.impersonation_link_create": "Created an impersonation link for user ${target_username} (ID: ${target_user_id})",
+	"user.impersonation_redeem":      "Impersonated user ${target_username} (ID: ${target_user_id})",
+
 	"channel.create":             "Created channel ${name} (type ${type}, count ${count})",
 	"channel.update":             "Updated channel ${name} (ID: ${id})",
 	"channel.delete":             "Deleted channel ${name} (ID: ${id})",

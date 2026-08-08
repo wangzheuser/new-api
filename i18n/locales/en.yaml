@@ -116,6 +116,10 @@ user.telegram_id_empty: "Telegram ID is empty!"
 user.telegram_not_bound: "This Telegram account is not bound"
 user.linux_do_id_empty: "Linux DO ID is empty!"
 user.quota_change_zero: "Quota change amount cannot be zero"
+user.impersonation_redis_required: "Shared Redis is required for impersonation links"
+user.impersonation_target_invalid: "Impersonation links can only be created for enabled common users"
+user.impersonation_ticket_invalid: "This impersonation link is invalid or has expired"
+user.impersonation_existing_session: "Open this link in a signed-out Incognito window"
 
 # Quota messages
 quota.negative: "Quota cannot be negative!"

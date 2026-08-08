@@ -117,6 +117,10 @@ user.telegram_id_empty: "Telegram id 为空！"
 user.telegram_not_bound: "该 Telegram 账户未绑定"
 user.linux_do_id_empty: "Linux DO id 为空！"
 user.quota_change_zero: "额度变更量不能为0"
+user.impersonation_redis_required: "代登录链接需要启用共享 Redis"
+user.impersonation_target_invalid: "仅可为已启用的普通用户生成代登录链接"
+user.impersonation_ticket_invalid: "该代登录链接无效或已过期"
+user.impersonation_existing_session: "请在未登录的隐身窗口打开此链接"
 
 # Quota messages
 quota.negative: "额度不能为负数！"
