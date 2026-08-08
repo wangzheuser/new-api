@@ -281,10 +281,10 @@ export interface LogStatistics {
 // ============================================================================
 
 export interface MidjourneyLog {
-  id: number
-  user_id: number
-  channel_id: number
-  code: number
+  id?: number
+  user_id?: number
+  channel_id?: number
+  code?: number
   mj_id: string
   action: string // IMAGINE, UPSCALE, VARIATION, etc. (backend field name)
   submit_time: number // milliseconds
@@ -295,9 +295,12 @@ export interface MidjourneyLog {
   prompt: string
   prompt_en?: string
   description?: string
-  buttons?: string
-  properties?: string
+  buttons?: string | unknown[]
+  properties?: string | { finalPrompt?: string; finalZhPrompt?: string }
   image_url?: string
+  video_url?: string
+  video_urls?: Array<{ url: string }>
+  quota?: number
   status: string // NOT_START, SUBMITTED, IN_PROGRESS, SUCCESS, FAILURE, MODAL
   other?: string
   created_at?: number
@@ -309,18 +312,20 @@ export interface MidjourneyLog {
 // ============================================================================
 
 export interface TaskLog {
-  id: number
-  user_id: number
+  id?: number
+  user_id?: number
   username?: string
   platform: string // suno, kling, runway, etc.
   task_id: string
   action: string // MUSIC, LYRICS, GENERATE, TEXT_GENERATE, etc.
-  channel_id: number
+  channel_id?: number
+  quota?: number
+  result_url?: string
   submit_time: number // seconds
   finish_time?: number // seconds
   progress?: string
   progress_message_en?: string
-  data?: string // JSON string
+  data?: unknown
   fail_reason?: string
   status: string // NOT_START, SUBMITTED, IN_PROGRESS, SUCCESS, FAILURE, QUEUED, UNKNOWN
   other?: string

@@ -128,6 +128,7 @@ export function buildBaseParams(config: {
   pageSize: number
   searchParams: Record<string, unknown>
   useMilliseconds?: boolean
+  isAdmin: boolean
 }): {
   p: number
   page_size: number
@@ -135,12 +136,18 @@ export function buildBaseParams(config: {
   start_timestamp?: number
   end_timestamp?: number
 } {
-  const { page, pageSize, searchParams, useMilliseconds = false } = config
+  const {
+    page,
+    pageSize,
+    searchParams,
+    useMilliseconds = false,
+    isAdmin,
+  } = config
 
   return {
     p: page,
     page_size: pageSize,
-    ...(searchParams.channel
+    ...(isAdmin && searchParams.channel
       ? {
           channel_id: String(searchParams.channel),
         }
@@ -194,7 +201,7 @@ export function buildApiParams(config: {
     ...(searchParams.requestId
       ? { request_id: String(searchParams.requestId) }
       : {}),
-    ...(searchParams.upstreamRequestId
+    ...(isAdmin && searchParams.upstreamRequestId
       ? { upstream_request_id: String(searchParams.upstreamRequestId) }
       : {}),
     latest_per_request: isAdmin
@@ -264,6 +271,7 @@ export async function fetchLogsByCategory(
     pageSize,
     searchParams,
     useMilliseconds: logCategory === 'drawing',
+    isAdmin,
   })
 
   const paramsWithFilter = {

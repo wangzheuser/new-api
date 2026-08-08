@@ -443,7 +443,7 @@ func GetUserTopUps(c *gin.Context) {
 	keyword := c.Query("keyword")
 
 	var (
-		topups []*model.TopUp
+		topups []*model.UserTopUp
 		total  int64
 		err    error
 	)

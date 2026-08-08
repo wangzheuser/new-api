@@ -335,7 +335,7 @@ func sunoFetchRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *dto.Ta
 			return
 		}
 		for _, task := range taskModels {
-			tasks = append(tasks, TaskModel2Dto(task))
+			tasks = append(tasks, TaskModel2UserDto(task))
 		}
 	} else {
 		tasks = make([]any, 0)
@@ -363,7 +363,7 @@ func sunoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *dt
 
 	respBody, err = common.Marshal(dto.TaskResponse[any]{
 		Code: "success",
-		Data: TaskModel2Dto(originTask),
+		Data: TaskModel2UserDto(originTask),
 	})
 	return
 }
@@ -397,7 +397,7 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 	if isOpenAIVideoAPI {
 		adaptor := GetTaskAdaptor(originTask.Platform)
 		if adaptor == nil {
-			taskResp = service.TaskErrorWrapperLocal(fmt.Errorf("invalid channel id: %d", originTask.ChannelId), "invalid_channel_id", http.StatusBadRequest)
+			taskResp = service.TaskErrorWrapperLocal(errors.New("video task unavailable"), "video_task_unavailable", http.StatusBadRequest)
 			return
 		}
 		if converter, ok := adaptor.(channel.OpenAIVideoConverter); ok {
@@ -409,14 +409,14 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 			respBody = openAIVideoData
 			return
 		}
-		taskResp = service.TaskErrorWrapperLocal(fmt.Errorf("not_implemented:%s", originTask.Platform), "not_implemented", http.StatusNotImplemented)
+		taskResp = service.TaskErrorWrapperLocal(errors.New("video task format unavailable"), "not_implemented", http.StatusNotImplemented)
 		return
 	}
 
 	// 通用 TaskDto 格式
 	respBody, err = common.Marshal(dto.TaskResponse[any]{
 		Code: "success",
-		Data: TaskModel2Dto(originTask),
+		Data: TaskModel2UserDto(originTask),
 	})
 	if err != nil {
 		taskResp = service.TaskErrorWrapper(err, "marshal_response_failed", http.StatusInternalServerError)
@@ -491,60 +491,12 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 		return nil
 	}
 
-	// 非 OpenAI Video API: 构建自定义格式响应
-	format := detectVideoFormat(body)
-	out := map[string]any{
-		"error":    nil,
-		"format":   format,
-		"metadata": nil,
-		"status":   mapTaskStatusToSimple(task.Status),
-		"task_id":  task.TaskID,
-		"url":      task.GetResultURL(),
-	}
+	// 非 OpenAI Video API 与其他普通任务查询使用同一公开 DTO。
 	respBody, _ := common.Marshal(dto.TaskResponse[any]{
 		Code: "success",
-		Data: out,
+		Data: TaskModel2UserDto(task),
 	})
 	return respBody
-}
-
-// detectVideoFormat 从 Gemini/Vertex 原始响应中探测视频格式
-func detectVideoFormat(rawBody []byte) string {
-	var raw map[string]any
-	if err := common.Unmarshal(rawBody, &raw); err != nil {
-		return "mp4"
-	}
-	respObj, ok := raw["response"].(map[string]any)
-	if !ok {
-		return "mp4"
-	}
-	vids, ok := respObj["videos"].([]any)
-	if !ok || len(vids) == 0 {
-		return "mp4"
-	}
-	v0, ok := vids[0].(map[string]any)
-	if !ok {
-		return "mp4"
-	}
-	mt, ok := v0["mimeType"].(string)
-	if !ok || mt == "" || strings.Contains(mt, "mp4") {
-		return "mp4"
-	}
-	return mt
-}
-
-// mapTaskStatusToSimple 将内部 TaskStatus 映射为简化状态字符串
-func mapTaskStatusToSimple(status model.TaskStatus) string {
-	switch status {
-	case model.TaskStatusSuccess:
-		return "succeeded"
-	case model.TaskStatusFailure:
-		return "failed"
-	case model.TaskStatusQueued, model.TaskStatusSubmitted:
-		return "queued"
-	default:
-		return "processing"
-	}
 }
 
 func TaskModel2Dto(task *model.Task) *dto.TaskDto {
@@ -569,5 +521,64 @@ func TaskModel2Dto(task *model.Task) *dto.TaskDto {
 		Properties: task.Properties,
 		Username:   task.Username,
 		Data:       task.Data,
+	}
+}
+
+// TaskModel2UserDto removes provider and routing details from ordinary task responses.
+func TaskModel2UserDto(task *model.Task) *dto.UserTaskDto {
+	if task == nil {
+		return nil
+	}
+	platform := "video"
+	var data any
+	if task.Platform == constant.TaskPlatformSuno {
+		platform = string(constant.TaskPlatformSuno)
+		var songs []dto.SunoSong
+		if err := common.Unmarshal(task.Data, &songs); err == nil {
+			publicSongs := make([]dto.PublicSunoSong, 0, len(songs))
+			for _, song := range songs {
+				publicSongs = append(publicSongs, dto.PublicSunoSong{
+					ID:            song.ID,
+					VideoURL:      song.VideoURL,
+					AudioURL:      song.AudioURL,
+					ImageURL:      song.ImageURL,
+					ImageLargeURL: song.ImageLargeURL,
+					Status:        song.Status,
+					Title:         song.Title,
+					Text:          song.Text,
+					Metadata: dto.PublicSunoMetadata{
+						Tags:                 song.Metadata.Tags,
+						Prompt:               song.Metadata.Prompt,
+						GPTDescriptionPrompt: song.Metadata.GPTDescriptionPrompt,
+						Duration:             song.Metadata.Duration,
+					},
+				})
+			}
+			data = publicSongs
+		}
+	}
+
+	failReason := ""
+	if task.Status == model.TaskStatusFailure {
+		failReason = "任务处理失败"
+	}
+	resultURL := ""
+	if platform == "video" && task.Status == model.TaskStatusSuccess {
+		resultURL = "/v1/videos/" + task.TaskID + "/content"
+	}
+
+	return &dto.UserTaskDto{
+		TaskID:     task.TaskID,
+		Platform:   platform,
+		Quota:      task.Quota,
+		Action:     task.Action,
+		Status:     string(task.Status),
+		FailReason: failReason,
+		ResultURL:  resultURL,
+		SubmitTime: task.SubmitTime,
+		StartTime:  task.StartTime,
+		FinishTime: task.FinishTime,
+		Progress:   task.Progress,
+		Data:       data,
 	}
 }

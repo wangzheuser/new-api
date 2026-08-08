@@ -52,7 +52,10 @@ func GetAllUserTask(userId int, startIdx int, num int, queryParams TaskQueryPara
 	}
 
 	// 获取数据
-	err = query.Order("id desc").Limit(num).Offset(startIdx).Find(&tasks).Error
+	err = query.Select(
+		"action, mj_id, prompt, prompt_en, description, submit_time, start_time, finish_time, image_url, " +
+			"video_url, video_urls, status, progress, fail_reason, quota, buttons, properties",
+	).Order("id desc").Limit(num).Offset(startIdx).Find(&tasks).Error
 	if err != nil {
 		return nil
 	}

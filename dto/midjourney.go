@@ -52,7 +52,7 @@ type MidjourneyDto struct {
 	Prompt      string      `json:"prompt"`
 	PromptEn    string      `json:"promptEn"`
 	Description string      `json:"description"`
-	State       string      `json:"state"`
+	State       string      `json:"state,omitempty"`
 	SubmitTime  int64       `json:"submitTime"`
 	StartTime   int64       `json:"startTime"`
 	FinishTime  int64       `json:"finishTime"`
@@ -65,6 +65,27 @@ type MidjourneyDto struct {
 	Buttons     any         `json:"buttons"`
 	MaskBase64  string      `json:"maskBase64"`
 	Properties  *Properties `json:"properties"`
+}
+
+// UserMidjourneyTask defines the ordinary-user drawing task response.
+type UserMidjourneyTask struct {
+	Action      string      `json:"action"`
+	MjId        string      `json:"mj_id"`
+	Prompt      string      `json:"prompt"`
+	PromptEn    string      `json:"prompt_en"`
+	Description string      `json:"description"`
+	SubmitTime  int64       `json:"submit_time"`
+	StartTime   int64       `json:"start_time"`
+	FinishTime  int64       `json:"finish_time"`
+	ImageUrl    string      `json:"image_url"`
+	VideoUrl    string      `json:"video_url"`
+	VideoUrls   []ImgUrls   `json:"video_urls,omitempty"`
+	Status      string      `json:"status"`
+	Progress    string      `json:"progress"`
+	FailReason  string      `json:"fail_reason"`
+	Quota       int         `json:"quota"`
+	Buttons     any         `json:"buttons,omitempty"`
+	Properties  *Properties `json:"properties,omitempty"`
 }
 
 type ImgUrls struct {

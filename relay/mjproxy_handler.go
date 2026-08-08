@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -28,10 +27,10 @@ import (
 
 func RelayMidjourneyImage(c *gin.Context) {
 	taskId := c.Param("id")
-	midjourneyTask := model.GetByOnlyMJId(taskId)
+	midjourneyTask := model.GetByMJId(c.GetInt("id"), taskId)
 	if midjourneyTask == nil {
-		c.JSON(400, gin.H{
-			"error": "midjourney_task_not_found",
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "media_not_available",
 		})
 		return
 	}
@@ -41,8 +40,9 @@ func RelayMidjourneyImage(c *gin.Context) {
 		proxy = channel.GetSetting().Proxy
 		if proxy != "" {
 			if httpClient, err = service.NewProxyHttpClient(proxy); err != nil {
-				c.JSON(400, gin.H{
-					"error": "proxy_url_invalid",
+				logger.LogError(c.Request.Context(), fmt.Sprintf("midjourney image proxy client failed task_id=%s error=%q", taskId, err.Error()))
+				c.JSON(http.StatusBadGateway, gin.H{
+					"error": "media_not_available",
 				})
 				return
 			}
@@ -61,23 +61,25 @@ func RelayMidjourneyImage(c *gin.Context) {
 		validateErr = common.ValidateURLWithFetchSetting(midjourneyTask.ImageUrl, fetchSetting.EnableSSRFProtection, fetchSetting.AllowPrivateIp, fetchSetting.DomainFilterMode, fetchSetting.IpFilterMode, fetchSetting.DomainList, fetchSetting.IpList, fetchSetting.AllowedPorts, fetchSetting.ApplyIPFilterForDomain)
 	}
 	if validateErr != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("midjourney image URL blocked task_id=%s error=%q", taskId, validateErr.Error()))
 		c.JSON(http.StatusForbidden, gin.H{
-			"error": fmt.Sprintf("request blocked: %v", validateErr),
+			"error": "media_not_available",
 		})
 		return
 	}
 	resp, err := httpClient.Get(midjourneyTask.ImageUrl)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "http_get_image_failed",
+		logger.LogError(c.Request.Context(), fmt.Sprintf("midjourney image fetch failed task_id=%s error=%q", taskId, err.Error()))
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": "media_not_available",
 		})
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		responseBody, _ := io.ReadAll(resp.Body)
-		c.JSON(resp.StatusCode, gin.H{
-			"error": string(responseBody),
+		logger.LogError(c.Request.Context(), fmt.Sprintf("midjourney image upstream status task_id=%s status=%d", taskId, resp.StatusCode))
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": "media_not_available",
 		})
 		return
 	}
@@ -92,7 +94,7 @@ func RelayMidjourneyImage(c *gin.Context) {
 	// 将图片流式传输到响应体
 	_, err = io.Copy(c.Writer, resp.Body)
 	if err != nil {
-		log.Println("Failed to stream image:", err)
+		logger.LogError(c.Request.Context(), fmt.Sprintf("midjourney image stream failed task_id=%s error=%q", taskId, err.Error()))
 	}
 	return
 }
@@ -144,24 +146,23 @@ func coverMidjourneyTaskDto(c *gin.Context, originTask *model.Midjourney) (midjo
 	midjourneyTask.MjId = originTask.MjId
 	midjourneyTask.Progress = originTask.Progress
 	midjourneyTask.PromptEn = originTask.PromptEn
-	midjourneyTask.State = originTask.State
 	midjourneyTask.SubmitTime = originTask.SubmitTime
 	midjourneyTask.StartTime = originTask.StartTime
 	midjourneyTask.FinishTime = originTask.FinishTime
 	midjourneyTask.ImageUrl = ""
-	if originTask.ImageUrl != "" && setting.MjForwardUrlEnabled {
-		midjourneyTask.ImageUrl = system_setting.ServerAddress + "/mj/image/" + originTask.MjId
+	if originTask.ImageUrl != "" {
+		midjourneyTask.ImageUrl = "/mj/image/" + originTask.MjId
 		if originTask.Status != "SUCCESS" {
 			midjourneyTask.ImageUrl += "?rand=" + strconv.FormatInt(time.Now().UnixNano(), 10)
 		}
-	} else {
-		midjourneyTask.ImageUrl = originTask.ImageUrl
 	}
 	if originTask.VideoUrl != "" {
 		midjourneyTask.VideoUrl = originTask.VideoUrl
 	}
 	midjourneyTask.Status = originTask.Status
-	midjourneyTask.FailReason = originTask.FailReason
+	if originTask.Status != "SUCCESS" && originTask.FailReason != "" {
+		midjourneyTask.FailReason = "任务处理失败"
+	}
 	midjourneyTask.Action = originTask.Action
 	midjourneyTask.Description = originTask.Description
 	midjourneyTask.Prompt = originTask.Prompt

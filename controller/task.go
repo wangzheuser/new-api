@@ -56,8 +56,17 @@ func GetUserTask(c *gin.Context) {
 	items := model.TaskGetAllUserTask(userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
 	total := model.TaskCountAllUserTask(userId, queryParams)
 	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(tasksToDto(items, false))
+	pageInfo.SetItems(userTasksToDto(items))
 	common.ApiSuccess(c, pageInfo)
+}
+
+// userTasksToDto maps ordinary task queries to the public task contract.
+func userTasksToDto(tasks []*model.Task) []*dto.UserTaskDto {
+	result := make([]*dto.UserTaskDto, len(tasks))
+	for i, task := range tasks {
+		result[i] = relay.TaskModel2UserDto(task)
+	}
+	return result
 }
 
 func tasksToDto(tasks []*model.Task, fillUser bool) []*dto.TaskDto {

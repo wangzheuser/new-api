@@ -138,16 +138,33 @@ func assignDisplayLogIds(logs []*Log, startIdx int) {
 
 func formatUserLogs(logs []*Log, startIdx int) {
 	for i := range logs {
+		logs[i].ChannelId = 0
 		logs[i].ChannelName = ""
+		logs[i].UpstreamRequestId = ""
 		var otherMap map[string]interface{}
 		otherMap, _ = common.StrToMap(logs[i].Other)
 		if otherMap != nil {
-			// Remove admin-only debug fields.
-			delete(otherMap, "admin_info")
-			// Remove operation-audit details (operator/route info), admin-only.
-			delete(otherMap, "audit_info")
-			// delete(otherMap, "reject_reason")
-			delete(otherMap, "stream_status")
+			// 普通用户日志只保留请求与计费信息，运营字段统一由管理员日志查看。
+			for _, key := range []string{
+				"channel_id",
+				"channel_name",
+				"channel_type",
+				"is_model_mapped",
+				"upstream_model_name",
+				"request_conversion",
+				"po",
+				"is_system_prompt_overwritten",
+				"admin_info",
+				"audit_info",
+				"stream_status",
+			} {
+				delete(otherMap, key)
+			}
+			if _, isTaskBillingLog := otherMap["task_id"]; isTaskBillingLog {
+				if _, hasReason := otherMap["reason"]; hasReason {
+					otherMap["reason"] = "任务失败，额度已退回"
+				}
+			}
 		}
 		logs[i].Other = common.MapToJsonStr(otherMap)
 	}
@@ -599,7 +616,7 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 
 const logSearchCountLimit = 10000
 
-func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string, latestPerRequest bool) (logs []*Log, total int64, err error) {
+func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, latestPerRequest bool) (logs []*Log, total int64, err error) {
 	tx := LOG_DB.Model(&Log{}).Where("logs.user_id = ?", userId)
 	if startTimestamp != 0 {
 		tx = tx.Where("logs.created_at >= ?", startTimestamp)
@@ -622,9 +639,6 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 	}
 	if tokenName != "" {
 		tx = tx.Where("logs.token_name = ?", tokenName)
-	}
-	if upstreamRequestId != "" {
-		tx = tx.Where("logs.upstream_request_id = ?", upstreamRequestId)
 	}
 	if group != "" {
 		tx = tx.Where("logs."+logGroupCol+" = ?", group)

@@ -33,8 +33,8 @@ export const subscriptionPlanSchema = z.object({
   custom_seconds: z.number().optional(),
   quota_reset_period: z.enum(['never', 'daily', 'weekly', 'monthly', 'custom']),
   quota_reset_custom_seconds: z.number().optional(),
-  enabled: z.boolean(),
-  sort_order: z.number(),
+  enabled: z.boolean().default(true),
+  sort_order: z.number().default(0),
   allow_balance_pay: z.boolean().optional().default(true),
   allow_wallet_overflow: z.boolean().optional().default(true),
   max_purchase_per_user: z.number(),
@@ -58,6 +58,10 @@ export const subscriptionPlanSchema = z.object({
   stripe_price_id: z.string().optional(),
   creem_product_id: z.string().optional(),
   waffo_pancake_product_id: z.string().optional(),
+  available_payment_methods: z
+    .array(z.enum(['balance', 'stripe', 'creem', 'waffo_pancake']))
+    .optional()
+    .default([]),
 })
 
 export type SubscriptionPlan = z.infer<typeof subscriptionPlanSchema>
@@ -72,7 +76,7 @@ export interface PlanRecord {
 
 export const userSubscriptionSchema = z.object({
   id: z.number(),
-  user_id: z.number(),
+  user_id: z.number().optional(),
   plan_id: z.number(),
   status: z.string(),
   source: z.string().optional(),
@@ -84,6 +88,7 @@ export const userSubscriptionSchema = z.object({
   entitlement_group: z.string().optional(),
   grant_groups: z.array(z.string()).optional().default([]),
   next_reset_time: z.number().optional(),
+  allow_wallet_overflow: z.boolean().optional(),
 })
 
 export type UserSubscription = z.infer<typeof userSubscriptionSchema>

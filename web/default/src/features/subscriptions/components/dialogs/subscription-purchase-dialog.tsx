@@ -86,10 +86,11 @@ export function SubscriptionPurchaseDialog(props: Props) {
   const plan = props.plan?.plan
   if (!plan) return null
 
-  const hasStripe = props.enableStripe && !!plan.stripe_price_id
-  const hasCreem = props.enableCreem && !!plan.creem_product_id
+  const paymentMethods = plan.available_payment_methods
+  const hasStripe = props.enableStripe && paymentMethods.includes('stripe')
+  const hasCreem = props.enableCreem && paymentMethods.includes('creem')
   const hasWaffoPancake =
-    props.enableWaffoPancake && !!plan.waffo_pancake_product_id
+    props.enableWaffoPancake && paymentMethods.includes('waffo_pancake')
   const hasEpay =
     props.enableOnlineTopUp && (props.epayMethods || []).length > 0
   const hasAnyPayment = hasStripe || hasCreem || hasWaffoPancake || hasEpay

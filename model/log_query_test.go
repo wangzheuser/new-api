@@ -38,7 +38,7 @@ func TestLogQueriesLatestPerRequest(t *testing.T) {
 	require.Len(t, errorLogs, 1)
 	assert.Equal(t, "final same second", errorLogs[0].Content)
 
-	userLogs, total, err := GetUserLogs(1, LogTypeUnknown, 0, 0, "", "", 0, 20, "", "", "", true)
+	userLogs, total, err := GetUserLogs(1, LogTypeUnknown, 0, 0, "", "", 0, 20, "", "", true)
 	require.NoError(t, err)
 	assert.EqualValues(t, 4, total)
 	assert.ElementsMatch(t, []string{"success", "final same second", "empty one", "empty two"}, logContents(userLogs))
@@ -85,7 +85,7 @@ func TestLogQueriesLatestPerRequestAcrossTimeRange(t *testing.T) {
 	require.Len(t, latestLogs, 1)
 	assert.Equal(t, "legacy empty request", latestLogs[0].Content)
 
-	userLogs, total, err := GetUserLogs(1, LogTypeUnknown, 0, 150, "", "", 0, 20, "", "", "", true)
+	userLogs, total, err := GetUserLogs(1, LogTypeUnknown, 0, 150, "", "", 0, 20, "", "", true)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, total)
 	require.Len(t, userLogs, 1)

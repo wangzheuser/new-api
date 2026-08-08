@@ -143,7 +143,7 @@ func VideoProxy(c *gin.Context) {
 	}
 	if validateErr != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Video URL blocked for task %s: %v", taskID, validateErr))
-		videoProxyError(c, http.StatusForbidden, "server_error", fmt.Sprintf("request blocked: %v", validateErr))
+		videoProxyError(c, http.StatusForbidden, "server_error", "Video content is not available")
 		return
 	}
 
@@ -152,6 +152,9 @@ func VideoProxy(c *gin.Context) {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to parse URL %s: %s", videoURL, err.Error()))
 		videoProxyError(c, http.StatusInternalServerError, "server_error", "Failed to create proxy request")
 		return
+	}
+	if rangeHeader := c.GetHeader("Range"); rangeHeader != "" {
+		req.Header.Set("Range", rangeHeader)
 	}
 
 	resp, err := client.Do(req)
@@ -162,23 +165,37 @@ func VideoProxy(c *gin.Context) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Upstream returned status %d for %s", resp.StatusCode, videoURL))
 		videoProxyError(c, http.StatusBadGateway, "server_error",
 			fmt.Sprintf("Upstream service returned status %d", resp.StatusCode))
 		return
 	}
 
-	for key, values := range resp.Header {
-		for _, value := range values {
-			c.Writer.Header().Add(key, value)
-		}
-	}
+	copyVideoResponseHeaders(c.Writer.Header(), resp.Header)
 
 	c.Writer.Header().Set("Cache-Control", "public, max-age=86400")
 	c.Writer.WriteHeader(resp.StatusCode)
 	if _, err = io.Copy(c.Writer, resp.Body); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to stream video content: %s", err.Error()))
+	}
+}
+
+// copyVideoResponseHeaders copies only representation headers required by media clients.
+func copyVideoResponseHeaders(dst, src http.Header) {
+	for _, key := range []string{
+		"Content-Type",
+		"Content-Disposition",
+		"Accept-Ranges",
+		"Content-Range",
+		"ETag",
+		"Last-Modified",
+		"Cache-Control",
+		"Expires",
+	} {
+		for _, value := range src.Values(key) {
+			dst.Add(key, value)
+		}
 	}
 }
 

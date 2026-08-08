@@ -52,6 +52,22 @@ type TaskDto struct {
 	Data       json.RawMessage `json:"data"`
 }
 
+// UserTaskDto defines the ordinary-user task contract without routing or provider metadata.
+type UserTaskDto struct {
+	TaskID     string `json:"task_id"`
+	Platform   string `json:"platform"`
+	Quota      int    `json:"quota"`
+	Action     string `json:"action"`
+	Status     string `json:"status"`
+	FailReason string `json:"fail_reason"`
+	ResultURL  string `json:"result_url,omitempty"`
+	SubmitTime int64  `json:"submit_time"`
+	StartTime  int64  `json:"start_time"`
+	FinishTime int64  `json:"finish_time"`
+	Progress   string `json:"progress"`
+	Data       any    `json:"data,omitempty"`
+}
+
 type FetchReq struct {
 	IDs []string `json:"ids"`
 }

@@ -236,10 +236,34 @@ func TaskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQ
 		query = query.Where("submit_time <= ?", queryParams.EndTimestamp)
 	}
 
-	// 获取数据
-	err = query.Omit("channel_id").Order("id desc").Limit(num).Offset(startIdx).Find(&tasks).Error
+	// 普通列表先只读取公开列，视频任务不读取原始上游响应。
+	err = query.Select(
+		"task_id, platform, quota, action, status, fail_reason, submit_time, start_time, finish_time, progress",
+	).Order("id desc").Limit(num).Offset(startIdx).Find(&tasks).Error
 	if err != nil {
 		return nil
+	}
+
+	// Suno 播放需要 data，只按当前页的 Suno 任务二次读取。
+	sunoTasks := make(map[string]*Task)
+	sunoTaskIDs := make([]string, 0)
+	for _, task := range tasks {
+		if task.Platform == constant.TaskPlatformSuno {
+			sunoTasks[task.TaskID] = task
+			sunoTaskIDs = append(sunoTaskIDs, task.TaskID)
+		}
+	}
+	if len(sunoTasks) > 0 {
+		var dataRows []struct {
+			TaskID string `gorm:"column:task_id"`
+			Data   string `gorm:"column:data"`
+		}
+		if err = DB.Model(&Task{}).Select("task_id, data").Where("user_id = ? AND task_id IN ?", userId, sunoTaskIDs).Find(&dataRows).Error; err != nil {
+			return nil
+		}
+		for i := range dataRows {
+			sunoTasks[dataRows[i].TaskID].Data = []byte(dataRows[i].Data)
+		}
 	}
 
 	return tasks

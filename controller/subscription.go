@@ -19,6 +19,35 @@ type SubscriptionPlanDTO struct {
 	Plan model.SubscriptionPlan `json:"plan"`
 }
 
+// PublicSubscriptionPlanDTO contains the plan fields required by ordinary purchase flows.
+type PublicSubscriptionPlanDTO struct {
+	Plan PublicSubscriptionPlan `json:"plan"`
+}
+
+// PublicSubscriptionPlan omits provider product IDs and database metadata.
+type PublicSubscriptionPlan struct {
+	Id                      int              `json:"id"`
+	Title                   string           `json:"title"`
+	Subtitle                string           `json:"subtitle"`
+	PriceAmount             float64          `json:"price_amount"`
+	Currency                string           `json:"currency"`
+	DurationUnit            string           `json:"duration_unit"`
+	DurationValue           int              `json:"duration_value"`
+	CustomSeconds           int64            `json:"custom_seconds"`
+	AllowBalancePay         bool             `json:"allow_balance_pay"`
+	AllowWalletOverflow     bool             `json:"allow_wallet_overflow"`
+	MaxPurchasePerUser      int              `json:"max_purchase_per_user"`
+	RepeatPurchaseMode      string           `json:"repeat_purchase_mode"`
+	EntitlementGroup        string           `json:"entitlement_group"`
+	GrantGroups             model.GroupNames `json:"grant_groups"`
+	UpgradeGroup            string           `json:"upgrade_group"`
+	DowngradeGroup          string           `json:"downgrade_group"`
+	TotalAmount             int64            `json:"total_amount"`
+	QuotaResetPeriod        string           `json:"quota_reset_period"`
+	QuotaResetCustomSeconds int64            `json:"quota_reset_custom_seconds"`
+	AvailablePaymentMethods []string         `json:"available_payment_methods"`
+}
+
 type BillingPreferenceRequest struct {
 	BillingPreference string `json:"billing_preference"`
 }
@@ -67,7 +96,7 @@ func normalizeSubscriptionPlanGroups(plan *model.SubscriptionPlan) error {
 
 func GetSubscriptionPlans(c *gin.Context) {
 	if !operation_setting.IsPaymentComplianceConfirmed() {
-		common.ApiSuccess(c, []SubscriptionPlanDTO{})
+		common.ApiSuccess(c, []PublicSubscriptionPlanDTO{})
 		return
 	}
 
@@ -76,12 +105,10 @@ func GetSubscriptionPlans(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	result := make([]SubscriptionPlanDTO, 0, len(plans))
+	result := make([]PublicSubscriptionPlanDTO, 0, len(plans))
 	for _, p := range plans {
 		p.NormalizeDefaults()
-		result = append(result, SubscriptionPlanDTO{
-			Plan: p,
-		})
+		result = append(result, publicSubscriptionPlanDTO(p))
 	}
 	common.ApiSuccess(c, result)
 }
@@ -92,15 +119,15 @@ func GetSubscriptionSelf(c *gin.Context) {
 	pref := common.NormalizeBillingPreference(settingMap.BillingPreference)
 
 	// Get all subscriptions (including expired)
-	allSubscriptions, err := model.GetAllUserSubscriptions(userId)
+	allSubscriptions, err := model.GetAllPublicUserSubscriptions(userId)
 	if err != nil {
-		allSubscriptions = []model.SubscriptionSummary{}
+		allSubscriptions = []model.PublicSubscriptionSummary{}
 	}
 
 	// Get active subscriptions for backward compatibility
-	activeSubscriptions, err := model.GetAllActiveUserSubscriptions(userId)
+	activeSubscriptions, err := model.GetAllActivePublicUserSubscriptions(userId)
 	if err != nil {
-		activeSubscriptions = []model.SubscriptionSummary{}
+		activeSubscriptions = []model.PublicSubscriptionSummary{}
 	}
 
 	common.ApiSuccess(c, gin.H{
@@ -108,6 +135,47 @@ func GetSubscriptionSelf(c *gin.Context) {
 		"subscriptions":      activeSubscriptions, // all active subscriptions
 		"all_subscriptions":  allSubscriptions,    // all subscriptions including expired
 	})
+}
+
+// publicSubscriptionPlanDTO maps internal payment configuration to public capabilities.
+func publicSubscriptionPlanDTO(plan model.SubscriptionPlan) PublicSubscriptionPlanDTO {
+	methods := make([]string, 0, 4)
+	if plan.AllowBalancePay != nil && *plan.AllowBalancePay {
+		methods = append(methods, model.PaymentProviderBalance)
+	}
+	if strings.TrimSpace(plan.StripePriceId) != "" {
+		methods = append(methods, model.PaymentProviderStripe)
+	}
+	if strings.TrimSpace(plan.CreemProductId) != "" {
+		methods = append(methods, model.PaymentProviderCreem)
+	}
+	if strings.TrimSpace(plan.WaffoPancakeProductId) != "" {
+		methods = append(methods, model.PaymentProviderWaffoPancake)
+	}
+	allowBalancePay := plan.AllowBalancePay != nil && *plan.AllowBalancePay
+	allowWalletOverflow := plan.AllowWalletOverflow != nil && *plan.AllowWalletOverflow
+	return PublicSubscriptionPlanDTO{Plan: PublicSubscriptionPlan{
+		Id:                      plan.Id,
+		Title:                   plan.Title,
+		Subtitle:                plan.Subtitle,
+		PriceAmount:             plan.PriceAmount,
+		Currency:                plan.Currency,
+		DurationUnit:            plan.DurationUnit,
+		DurationValue:           plan.DurationValue,
+		CustomSeconds:           plan.CustomSeconds,
+		AllowBalancePay:         allowBalancePay,
+		AllowWalletOverflow:     allowWalletOverflow,
+		MaxPurchasePerUser:      plan.MaxPurchasePerUser,
+		RepeatPurchaseMode:      plan.RepeatPurchaseMode,
+		EntitlementGroup:        plan.EntitlementGroup,
+		GrantGroups:             plan.GrantGroups,
+		UpgradeGroup:            plan.UpgradeGroup,
+		DowngradeGroup:          plan.DowngradeGroup,
+		TotalAmount:             plan.TotalAmount,
+		QuotaResetPeriod:        plan.QuotaResetPeriod,
+		QuotaResetCustomSeconds: plan.QuotaResetCustomSeconds,
+		AvailablePaymentMethods: methods,
+	}}
 }
 
 func UpdateSubscriptionPreference(c *gin.Context) {

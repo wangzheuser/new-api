@@ -331,14 +331,54 @@ func GetUserMidjourney(c *gin.Context) {
 
 	items := model.GetAllUserTask(userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
 	total := model.CountAllUserTask(userId, queryParams)
-
-	if setting.MjForwardUrlEnabled {
-		for i, midjourney := range items {
-			midjourney.ImageUrl = system_setting.ServerAddress + "/mj/image/" + midjourney.MjId
-			items[i] = midjourney
-		}
-	}
 	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(items)
+	pageInfo.SetItems(midjourneyTasksToUserDto(items))
 	common.ApiSuccess(c, pageInfo)
+}
+
+// midjourneyTasksToUserDto maps ordinary drawing tasks to the public contract.
+func midjourneyTasksToUserDto(items []*model.Midjourney) []*dto.UserMidjourneyTask {
+	result := make([]*dto.UserMidjourneyTask, 0, len(items))
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		public := &dto.UserMidjourneyTask{
+			Action:      item.Action,
+			MjId:        item.MjId,
+			Prompt:      item.Prompt,
+			PromptEn:    item.PromptEn,
+			Description: item.Description,
+			SubmitTime:  item.SubmitTime,
+			StartTime:   item.StartTime,
+			FinishTime:  item.FinishTime,
+			VideoUrl:    item.VideoUrl,
+			Status:      item.Status,
+			Progress:    item.Progress,
+			Quota:       item.Quota,
+		}
+		if item.ImageUrl != "" {
+			public.ImageUrl = "/mj/image/" + item.MjId
+		}
+		if item.Status != "SUCCESS" && item.FailReason != "" {
+			public.FailReason = "任务处理失败"
+		}
+		if item.VideoUrls != "" {
+			_ = common.Unmarshal([]byte(item.VideoUrls), &public.VideoUrls)
+		}
+		if item.Buttons != "" {
+			var buttons []dto.ActionButton
+			if err := common.Unmarshal([]byte(item.Buttons), &buttons); err == nil {
+				public.Buttons = buttons
+			}
+		}
+		if item.Properties != "" {
+			var properties dto.Properties
+			if err := common.Unmarshal([]byte(item.Properties), &properties); err == nil {
+				public.Properties = &properties
+			}
+		}
+		result = append(result, public)
+	}
+	return result
 }

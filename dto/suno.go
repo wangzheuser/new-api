@@ -51,6 +51,27 @@ type SunoMetadata struct {
 	ErrorMessage         interface{} `json:"error_message"`
 }
 
+// PublicSunoSong contains only the clip fields required for playback and follow-up actions.
+type PublicSunoSong struct {
+	ID            string             `json:"id"`
+	VideoURL      string             `json:"video_url"`
+	AudioURL      string             `json:"audio_url"`
+	ImageURL      string             `json:"image_url"`
+	ImageLargeURL string             `json:"image_large_url"`
+	Status        string             `json:"status"`
+	Title         string             `json:"title"`
+	Text          string             `json:"text"`
+	Metadata      PublicSunoMetadata `json:"metadata"`
+}
+
+// PublicSunoMetadata omits provider model, internal prompt IDs and upstream errors.
+type PublicSunoMetadata struct {
+	Tags                 string      `json:"tags"`
+	Prompt               string      `json:"prompt"`
+	GPTDescriptionPrompt interface{} `json:"gpt_description_prompt"`
+	Duration             interface{} `json:"duration"`
+}
+
 type SunoLyrics struct {
 	ID     string `json:"id"`
 	Status string `json:"status"`

@@ -24,6 +24,18 @@ type TopUp struct {
 	Status          string  `json:"status"`
 }
 
+// UserTopUp contains the order fields required by its owner.
+type UserTopUp struct {
+	Id            int     `json:"id"`
+	Amount        int64   `json:"amount"`
+	Money         float64 `json:"money"`
+	TradeNo       string  `json:"trade_no"`
+	PaymentMethod string  `json:"payment_method"`
+	CreateTime    int64   `json:"create_time"`
+	CompleteTime  int64   `json:"complete_time"`
+	Status        string  `json:"status"`
+}
+
 const (
 	PaymentMethodStripe       = "stripe"
 	PaymentMethodCreem        = "creem"
@@ -167,7 +179,7 @@ func topUpQueryCutoff() int64 {
 	return common.GetTimestamp() - topUpQueryWindowSeconds
 }
 
-func GetUserTopUps(userId int, pageInfo *common.PageInfo) (topups []*TopUp, total int64, err error) {
+func GetUserTopUps(userId int, pageInfo *common.PageInfo) (topups []*UserTopUp, total int64, err error) {
 	// Start transaction
 	tx := DB.Begin()
 	if tx.Error != nil {
@@ -189,7 +201,10 @@ func GetUserTopUps(userId int, pageInfo *common.PageInfo) (topups []*TopUp, tota
 	}
 
 	// Get paginated topups within same transaction
-	err = tx.Where("user_id = ? AND create_time >= ?", userId, cutoff).Order("id desc").Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Find(&topups).Error
+	err = tx.Model(&TopUp{}).
+		Select("id, amount, money, trade_no, payment_method, create_time, complete_time, status").
+		Where("user_id = ? AND create_time >= ?", userId, cutoff).
+		Order("id desc").Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Find(&topups).Error
 	if err != nil {
 		tx.Rollback()
 		return nil, 0, err
@@ -237,7 +252,7 @@ func GetAllTopUps(pageInfo *common.PageInfo) (topups []*TopUp, total int64, err 
 const searchTopUpCountHardLimit = 10000
 
 // SearchUserTopUps 按订单号搜索某用户的充值记录
-func SearchUserTopUps(userId int, keyword string, pageInfo *common.PageInfo) (topups []*TopUp, total int64, err error) {
+func SearchUserTopUps(userId int, keyword string, pageInfo *common.PageInfo) (topups []*UserTopUp, total int64, err error) {
 	tx := DB.Begin()
 	if tx.Error != nil {
 		return nil, 0, tx.Error
@@ -264,7 +279,8 @@ func SearchUserTopUps(userId int, keyword string, pageInfo *common.PageInfo) (to
 		return nil, 0, errors.New("搜索充值记录失败")
 	}
 
-	if err = query.Order("id desc").Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Find(&topups).Error; err != nil {
+	if err = query.Select("id, amount, money, trade_no, payment_method, create_time, complete_time, status").
+		Order("id desc").Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Find(&topups).Error; err != nil {
 		tx.Rollback()
 		common.SysError("failed to search topups: " + err.Error())
 		return nil, 0, errors.New("搜索充值记录失败")

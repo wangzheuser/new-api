@@ -114,7 +114,7 @@ const SubscriptionPlansCard = ({
   };
 
   const payStripe = async () => {
-    if (!selectedPlan?.plan?.stripe_price_id) {
+    if (!selectedPlan?.plan?.available_payment_methods?.includes('stripe')) {
       showError(t('该套餐未配置 Stripe'));
       return;
     }
@@ -142,7 +142,7 @@ const SubscriptionPlansCard = ({
   };
 
   const payCreem = async () => {
-    if (!selectedPlan?.plan?.creem_product_id) {
+    if (!selectedPlan?.plan?.available_payment_methods?.includes('creem')) {
       showError(t('该套餐未配置 Creem'));
       return;
     }

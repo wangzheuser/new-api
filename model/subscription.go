@@ -323,6 +323,27 @@ type SubscriptionSummary struct {
 	Subscription *UserSubscription `json:"subscription"`
 }
 
+// PublicUserSubscription contains the subscription state required by its owner.
+type PublicUserSubscription struct {
+	Id                  int        `json:"id"`
+	PlanId              int        `json:"plan_id"`
+	AmountTotal         int64      `json:"amount_total"`
+	AmountUsed          int64      `json:"amount_used"`
+	AllocationCount     int64      `json:"allocation_count"`
+	StartTime           int64      `json:"start_time"`
+	EndTime             int64      `json:"end_time"`
+	Status              string     `json:"status"`
+	NextResetTime       int64      `json:"next_reset_time"`
+	EntitlementGroup    string     `json:"entitlement_group"`
+	GrantGroups         GroupNames `json:"grant_groups"`
+	AllowWalletOverflow bool       `json:"allow_wallet_overflow"`
+}
+
+// PublicSubscriptionSummary preserves the existing response wrapper for ordinary users.
+type PublicSubscriptionSummary struct {
+	Subscription *PublicUserSubscription `json:"subscription"`
+}
+
 // UserSubscriptionUpdate contains the administrator-editable subscription fields.
 type UserSubscriptionUpdate struct {
 	EndTime     *int64
@@ -947,6 +968,14 @@ func GetAllActiveUserSubscriptions(userId int) ([]SubscriptionSummary, error) {
 	return buildSubscriptionSummaries(subs), nil
 }
 
+// GetAllActivePublicUserSubscriptions returns active subscriptions without internal snapshots.
+func GetAllActivePublicUserSubscriptions(userId int) ([]PublicSubscriptionSummary, error) {
+	if userId <= 0 {
+		return nil, errors.New("invalid userId")
+	}
+	return getPublicUserSubscriptions(userId, true)
+}
+
 // HasActiveUserSubscription returns whether the user has any active subscription.
 // This is a lightweight existence check to avoid heavy pre-consume transactions.
 func HasActiveUserSubscription(userId int) (bool, error) {
@@ -1085,6 +1114,33 @@ func GetAllUserSubscriptions(userId int) ([]SubscriptionSummary, error) {
 		return nil, err
 	}
 	return buildSubscriptionSummaries(subs), nil
+}
+
+// GetAllPublicUserSubscriptions returns all owner-visible subscriptions using a column whitelist.
+func GetAllPublicUserSubscriptions(userId int) ([]PublicSubscriptionSummary, error) {
+	if userId <= 0 {
+		return nil, errors.New("invalid userId")
+	}
+	return getPublicUserSubscriptions(userId, false)
+}
+
+// getPublicUserSubscriptions queries only fields used by the ordinary subscription UI.
+func getPublicUserSubscriptions(userId int, activeOnly bool) ([]PublicSubscriptionSummary, error) {
+	query := DB.Model(&UserSubscription{}).
+		Select("id, plan_id, amount_total, amount_used, allocation_count, start_time, end_time, status, next_reset_time, entitlement_group, grant_groups, allow_wallet_overflow").
+		Where("user_id = ?", userId)
+	if activeOnly {
+		query = query.Where("status = ? AND end_time > ?", "active", common.GetTimestamp())
+	}
+	var subscriptions []PublicUserSubscription
+	if err := query.Order("end_time desc, id desc").Find(&subscriptions).Error; err != nil {
+		return nil, err
+	}
+	result := make([]PublicSubscriptionSummary, 0, len(subscriptions))
+	for i := range subscriptions {
+		result = append(result, PublicSubscriptionSummary{Subscription: &subscriptions[i]})
+	}
+	return result, nil
 }
 
 func buildSubscriptionSummaries(subs []UserSubscription) []SubscriptionSummary {

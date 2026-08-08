@@ -33,3 +33,54 @@ func TestFormatUserLogsStripsQuotaSaturation(t *testing.T) {
 	// Non-admin billing fields remain visible.
 	require.Contains(t, parsed, "model_price")
 }
+
+// TestFormatUserLogsStripsOperationalFields verifies ordinary log views retain
+// billing details while removing routing, override and upstream identifiers.
+func TestFormatUserLogsStripsOperationalFields(t *testing.T) {
+	other := common.MapToJsonStr(map[string]interface{}{
+		"model_price":                  0.004,
+		"task_id":                      "task-public",
+		"reason":                       "upstream HOST failed on channel 17",
+		"channel_id":                   17,
+		"channel_name":                 "supplier-a",
+		"channel_type":                 8,
+		"is_model_mapped":              true,
+		"upstream_model_name":          "supplier-model",
+		"request_conversion":           "openai->gemini",
+		"po":                           []string{"replace instructions with operator prompt"},
+		"is_system_prompt_overwritten": true,
+		"audit_info":                   map[string]interface{}{"route": "/api/internal"},
+		"stream_status":                "broken",
+	})
+	logs := []*Log{{
+		ChannelId:         17,
+		ChannelName:       "supplier-a",
+		UpstreamRequestId: "upstream-request-id",
+		Other:             other,
+	}}
+
+	formatUserLogs(logs, 0)
+
+	require.Zero(t, logs[0].ChannelId)
+	require.Empty(t, logs[0].ChannelName)
+	require.Empty(t, logs[0].UpstreamRequestId)
+	parsed, err := common.StrToMap(logs[0].Other)
+	require.NoError(t, err)
+	require.Equal(t, 0.004, parsed["model_price"])
+	require.Equal(t, "task-public", parsed["task_id"])
+	require.Equal(t, "任务失败，额度已退回", parsed["reason"])
+	for _, key := range []string{
+		"channel_id",
+		"channel_name",
+		"channel_type",
+		"is_model_mapped",
+		"upstream_model_name",
+		"request_conversion",
+		"po",
+		"is_system_prompt_overwritten",
+		"audit_info",
+		"stream_status",
+	} {
+		require.NotContains(t, parsed, key)
+	}
+}
