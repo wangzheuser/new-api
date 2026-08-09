@@ -91,23 +91,15 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	defer func() {
 		if newAPIError != nil {
-			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
-			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
-			if relayStarted {
-				recordRelayErrorLog(c, relayInfo, newAPIError, relayClientErrorLogContent(newAPIError, relayFormat), rawFinalError, false)
-			}
-			switch relayFormat {
-			case types.RelayFormatOpenAIRealtime:
-				helper.WssError(c, ws, newAPIError.ToOpenAIError())
-			case types.RelayFormatClaude:
-				c.JSON(newAPIError.StatusCode, gin.H{
-					"type":  "error",
-					"error": newAPIError.ToClaudeError(),
-				})
-			default:
-				c.JSON(newAPIError.StatusCode, gin.H{
-					"error": newAPIError.ToOpenAIError(),
-				})
+			if c.Request.Context().Err() != nil {
+				logger.LogInfo(c, "relay canceled by client")
+			} else {
+				logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
+				newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
+				if relayStarted {
+					recordRelayErrorLog(c, relayInfo, newAPIError, relayClientErrorLogContent(newAPIError, relayFormat), rawFinalError, false)
+				}
+				writeRelayErrorResponse(c, relayFormat, ws, relayInfo, newAPIError)
 			}
 		}
 		service.RecordConversationLog(c, relayInfo, newAPIError)
@@ -248,6 +240,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			relayInfo.LastError = nil
 			return
 		}
+		if requestErr := c.Request.Context().Err(); requestErr != nil {
+			if relayInfo.StreamStatus != nil {
+				relayInfo.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, requestErr)
+			}
+			return
+		}
 
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
 		relayInfo.LastError = newAPIError
@@ -280,6 +278,44 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 		newAPIError = resolveConfiguredFinalRelayError(c, relayInfo)
 	}
+}
+
+// writeRelayErrorResponse 按客户端协议输出错误，已提交的流式响应继续使用 SSE 帧。
+func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, ws *websocket.Conn, relayInfo *relaycommon.RelayInfo, newAPIError *types.NewAPIError) {
+	if relayFormat == types.RelayFormatOpenAIRealtime {
+		helper.WssError(c, ws, newAPIError.ToOpenAIError())
+		return
+	}
+
+	streamCommitted := relayInfo != nil && relayInfo.IsStream && c.Writer.Written()
+	if streamCommitted {
+		// 客户端已断开时无需继续写错误帧，也避免产生无意义的写失败日志。
+		if c.Request.Context().Err() != nil {
+			return
+		}
+		if relayFormat == types.RelayFormatClaude {
+			_ = helper.ClaudeData(c, dto.ClaudeResponse{
+				Type:  "error",
+				Error: newAPIError.ToClaudeError(),
+			})
+			return
+		}
+		if err := helper.ObjectData(c, gin.H{"error": newAPIError.ToOpenAIError()}); err != nil {
+			logger.LogError(c, "write stream error failed: "+err.Error())
+		}
+		return
+	}
+
+	if relayFormat == types.RelayFormatClaude {
+		c.JSON(newAPIError.StatusCode, gin.H{
+			"type":  "error",
+			"error": newAPIError.ToClaudeError(),
+		})
+		return
+	}
+	c.JSON(newAPIError.StatusCode, gin.H{
+		"error": newAPIError.ToOpenAIError(),
+	})
 }
 
 // CountTokens 返回 Claude Messages 请求的本地输入 token 估算，不进入上游和计费链。
