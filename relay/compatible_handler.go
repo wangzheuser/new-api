@@ -81,6 +81,42 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 			}
 		}
 	}
+	if isNativeProtocolRoute(info) {
+		nativeRequest := any(request)
+		if !passThroughRequest {
+			convertedRequest, convertErr := adaptor.ConvertOpenAIRequest(c, info, request)
+			if convertErr != nil {
+				return types.NewError(convertErr, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			}
+			nativeRequest = convertedRequest
+		}
+		usage, nativeErr := executeNativeTextRoute(c, info, adaptor, nativeRequest, passThroughRequest)
+		if nativeErr != nil {
+			return nativeErr
+		}
+		containAudioTokens := usage.CompletionTokenDetails.AudioTokens > 0 || usage.PromptTokensDetails.AudioTokens > 0
+		containsAudioRatios := ratio_setting.ContainsAudioRatio(info.GetBillingModelName()) || ratio_setting.ContainsAudioCompletionRatio(info.GetBillingModelName())
+		if containAudioTokens && containsAudioRatios {
+			service.PostAudioConsumeQuota(c, info, usage, "")
+		} else {
+			service.PostTextConsumeQuota(c, info, usage, nil)
+		}
+		return nil
+	}
+	if isConvertedProtocolRoute(info) {
+		usage, newApiErr := executeConvertedTextRoute(c, info, adaptor, request)
+		if newApiErr != nil {
+			return newApiErr
+		}
+		containAudioTokens := usage.CompletionTokenDetails.AudioTokens > 0 || usage.PromptTokensDetails.AudioTokens > 0
+		containsAudioRatios := ratio_setting.ContainsAudioRatio(info.GetBillingModelName()) || ratio_setting.ContainsAudioCompletionRatio(info.GetBillingModelName())
+		if containAudioTokens && containsAudioRatios {
+			service.PostAudioConsumeQuota(c, info, usage, "")
+		} else {
+			service.PostTextConsumeQuota(c, info, usage, nil)
+		}
+		return nil
+	}
 	if info.RelayMode == relayconstant.RelayModeChatCompletions &&
 		!passThroughGlobal &&
 		!info.ChannelSetting.PassThroughBodyEnabled &&

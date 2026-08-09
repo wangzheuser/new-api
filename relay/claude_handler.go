@@ -116,6 +116,22 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 			}
 		}
 	}
+	if isNativeProtocolRoute(info) {
+		usage, nativeErr := executeNativeTextRoute(c, info, adaptor, request, passThroughRequest)
+		if nativeErr != nil {
+			return nativeErr
+		}
+		service.PostTextConsumeQuota(c, info, usage, nil)
+		return nil
+	}
+	if isConvertedProtocolRoute(info) {
+		usage, convertedErr := executeConvertedTextRoute(c, info, adaptor, request)
+		if convertedErr != nil {
+			return convertedErr
+		}
+		service.PostTextConsumeQuota(c, info, usage, nil)
+		return nil
+	}
 
 	if !passThroughRequest &&
 		service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName) {

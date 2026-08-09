@@ -116,6 +116,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	}
 
 	AppendChannelAffinityAdminInfo(ctx, adminInfo)
+	appendChannelRoutePlan(relayInfo, adminInfo)
 
 	other["admin_info"] = adminInfo
 	appendRequestPath(ctx, relayInfo, other)
@@ -125,6 +126,28 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	appendParamOverrideInfo(relayInfo, other)
 	appendStreamStatus(relayInfo, other)
 	return other
+}
+
+func appendChannelRoutePlan(relayInfo *relaycommon.RelayInfo, adminInfo map[string]interface{}) {
+	if relayInfo == nil || relayInfo.ChannelRoutePlan == nil || adminInfo == nil {
+		return
+	}
+	plan := relayInfo.ChannelRoutePlan
+	adminInfo["protocol_route"] = map[string]interface{}{
+		"mode":                      plan.RouteMode,
+		"client_endpoint_type":      plan.ClientEndpointType,
+		"upstream_endpoint_type":    plan.UpstreamEndpointType,
+		"client_relay_format":       plan.ClientRelayFormat,
+		"upstream_relay_format":     plan.UpstreamRelayFormat,
+		"upstream_path":             plan.UpstreamPath,
+		"quality":                   plan.Quality,
+		"request_converter":         plan.RequestConverter,
+		"response_converter":        plan.ResponseConverter,
+		"request_conversion_steps":  plan.RequestSteps,
+		"response_conversion_steps": plan.ResponseSteps,
+		"stream":                    plan.Stream,
+		"capability_source":         plan.CapabilitySource,
+	}
 }
 
 // AppendContextFallbackAdminInfo 将上下文兜底路由细节放入管理员日志域。

@@ -82,13 +82,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	adaptor.Init(info)
 	var requestBody io.Reader
 	passThroughRequest := model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled
-	if passThroughRequest {
-		storage, err := common.GetBodyStorage(c)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
-		}
-		requestBody = common.ReaderOnly(storage)
-	} else {
+	if !passThroughRequest {
 		systemPrompt, prepend := resolveSystemPrompt(info)
 		before := request.GetTokenCountMeta()
 		applied, err := applyResponsesSystemPrompt(c, request, systemPrompt, prepend)
@@ -100,6 +94,46 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 				return accountingErr
 			}
 		}
+	}
+	if isNativeProtocolRoute(info) {
+		nativeRequest := any(request)
+		if !passThroughRequest {
+			convertedRequest, convertErr := adaptor.ConvertOpenAIResponsesRequest(c, info, *request)
+			if convertErr != nil {
+				return types.NewError(convertErr, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			}
+			nativeRequest = convertedRequest
+		}
+		usage, nativeErr := executeNativeTextRoute(c, info, adaptor, nativeRequest, passThroughRequest)
+		if nativeErr != nil {
+			return nativeErr
+		}
+		if strings.HasPrefix(info.GetBillingModelName(), "gpt-4o-audio") {
+			service.PostAudioConsumeQuota(c, info, usage, "")
+		} else {
+			service.PostTextConsumeQuota(c, info, usage, nil)
+		}
+		return nil
+	}
+	if isConvertedProtocolRoute(info) {
+		usage, convertedErr := executeConvertedTextRoute(c, info, adaptor, request)
+		if convertedErr != nil {
+			return convertedErr
+		}
+		if strings.HasPrefix(info.GetBillingModelName(), "gpt-4o-audio") {
+			service.PostAudioConsumeQuota(c, info, usage, "")
+		} else {
+			service.PostTextConsumeQuota(c, info, usage, nil)
+		}
+		return nil
+	}
+	if passThroughRequest {
+		storage, err := common.GetBodyStorage(c)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
+		}
+		requestBody = common.ReaderOnly(storage)
+	} else {
 		convertedRequest, err := adaptor.ConvertOpenAIResponsesRequest(c, info, *request)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())

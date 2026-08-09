@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/service/relayconvert"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -107,7 +108,10 @@ func GetModelSupportEndpointTypes(model string) []constant.EndpointType {
 	return make([]constant.EndpointType, 0)
 }
 
-func getPricingEndpointTypesForAbility(ability AbilityWithChannel, advancedCustomConfigs map[int]*dto.AdvancedCustomConfig) []constant.EndpointType {
+func getPricingEndpointTypesForAbility(ability AbilityWithChannel, advancedCustomConfigs map[int]*dto.AdvancedCustomConfig, channelSettings map[int]dto.ChannelSettings) []constant.EndpointType {
+	if settings, ok := channelSettings[ability.ChannelId]; ok && settings.ProtocolPolicy != nil {
+		return effectiveProtocolEndpointTypes(*settings.ProtocolPolicy, settings.PassThroughBodyEnabled, ability.Model)
+	}
 	if ability.ChannelType != constant.ChannelTypeAdvancedCustom {
 		return common.GetEndpointTypesByChannelType(ability.ChannelType, ability.Model)
 	}
@@ -115,6 +119,68 @@ func getPricingEndpointTypesForAbility(ability AbilityWithChannel, advancedCusto
 		return config.SupportedEndpointTypesForModel(ability.Model)
 	}
 	return common.GetEndpointTypesByChannelType(ability.ChannelType, ability.Model)
+}
+
+var pricingTextProtocolFormats = map[constant.EndpointType]types.RelayFormat{
+	constant.EndpointTypeOpenAI:         types.RelayFormatOpenAI,
+	constant.EndpointTypeOpenAIResponse: types.RelayFormatOpenAIResponses,
+	constant.EndpointTypeAnthropic:      types.RelayFormatClaude,
+	constant.EndpointTypeGemini:         types.RelayFormatGemini,
+}
+
+// effectiveProtocolEndpointTypes returns native and allowed converted endpoints for model metadata.
+func effectiveProtocolEndpointTypes(policy dto.ChannelProtocolPolicy, passThrough bool, modelName string) []constant.EndpointType {
+	native, _ := policy.NativeForModel(modelName)
+	orderedEndpoints := []constant.EndpointType{
+		constant.EndpointTypeOpenAI,
+		constant.EndpointTypeOpenAIResponse,
+		constant.EndpointTypeAnthropic,
+		constant.EndpointTypeGemini,
+	}
+	effective := make([]constant.EndpointType, 0, len(orderedEndpoints))
+	for _, clientEndpoint := range orderedEndpoints {
+		clientCapability := native[clientEndpoint]
+		if clientCapability.NonStream || clientCapability.Stream {
+			effective = append(effective, clientEndpoint)
+			continue
+		}
+		if !policy.AutoConvert || passThrough {
+			continue
+		}
+		clientFormat := pricingTextProtocolFormats[clientEndpoint]
+		for upstreamEndpoint, upstreamCapability := range native {
+			upstreamFormat, ok := pricingTextProtocolFormats[upstreamEndpoint]
+			if !ok {
+				continue
+			}
+			supported := false
+			for _, stream := range []bool{false, true} {
+				if (stream && !upstreamCapability.Stream) || (!stream && !upstreamCapability.NonStream) {
+					continue
+				}
+				route, exists := relayconvert.ResolveRoute(clientFormat, upstreamFormat, stream)
+				if exists && pricingProtocolQualityAllowed(route.Quality, policy.EffectiveMaxQuality()) {
+					supported = true
+					break
+				}
+			}
+			if supported {
+				effective = append(effective, clientEndpoint)
+				break
+			}
+		}
+	}
+	return effective
+}
+
+func pricingProtocolQualityAllowed(quality relayconvert.TextConverterQuality, maxQuality dto.ProtocolConversionQuality) bool {
+	if quality == relayconvert.TextConverterQualityDiscouraged {
+		return false
+	}
+	if maxQuality == dto.ProtocolConversionQualityGood {
+		return quality == relayconvert.TextConverterQualityGood
+	}
+	return quality == relayconvert.TextConverterQualityGood || quality == relayconvert.TextConverterQualityFair
 }
 
 // loadPricingAdvancedCustomConfigs runs inside updatePricing while
@@ -168,6 +234,55 @@ func loadPricingAdvancedCustomConfigs(enableAbilities []AbilityWithChannel) map[
 		}
 	}
 	return configs
+}
+
+func loadPricingChannelSettings(enableAbilities []AbilityWithChannel) map[int]dto.ChannelSettings {
+	channelIDs := make([]int, 0)
+	seen := make(map[int]struct{})
+	for _, ability := range enableAbilities {
+		if ability.ChannelType != constant.ChannelTypeOpenAI {
+			continue
+		}
+		if _, exists := seen[ability.ChannelId]; exists {
+			continue
+		}
+		seen[ability.ChannelId] = struct{}{}
+		channelIDs = append(channelIDs, ability.ChannelId)
+	}
+	if len(channelIDs) == 0 {
+		return nil
+	}
+
+	settingsByChannel := make(map[int]dto.ChannelSettings, len(channelIDs))
+	readSetting := func(channelID int, raw *string) {
+		if raw == nil || strings.TrimSpace(*raw) == "" {
+			return
+		}
+		var settings dto.ChannelSettings
+		if err := common.Unmarshal([]byte(*raw), &settings); err == nil && settings.ProtocolPolicy != nil {
+			settingsByChannel[channelID] = settings
+		}
+	}
+	if common.MemoryCacheEnabled {
+		channelSyncLock.RLock()
+		defer channelSyncLock.RUnlock()
+		for _, channelID := range channelIDs {
+			if channel := channelsIDM[channelID]; channel != nil {
+				readSetting(channelID, channel.Setting)
+			}
+		}
+		return settingsByChannel
+	}
+
+	var channels []Channel
+	if err := DB.Select("id", "setting").Where("id IN ?", channelIDs).Find(&channels).Error; err != nil {
+		common.SysLog(fmt.Sprintf("load channel protocol settings error: %v", err))
+		return settingsByChannel
+	}
+	for i := range channels {
+		readSetting(channels[i].Id, channels[i].Setting)
+	}
+	return settingsByChannel
 }
 
 func appendPricingEndpoint(endpoints []string, endpoint string) []string {
@@ -272,11 +387,12 @@ func updatePricing() {
 	//这里使用切片而不是Set，因为一个模型可能支持多个端点类型，并且第一个端点是优先使用端点
 	modelSupportEndpointsStr := make(map[string][]string)
 	advancedCustomConfigs := loadPricingAdvancedCustomConfigs(enableAbilities)
+	channelSettings := loadPricingChannelSettings(enableAbilities)
 
 	// 先根据已有能力填充原生端点
 	for _, ability := range enableAbilities {
 		endpoints := modelSupportEndpointsStr[ability.Model]
-		channelTypes := getPricingEndpointTypesForAbility(ability, advancedCustomConfigs)
+		channelTypes := getPricingEndpointTypesForAbility(ability, advancedCustomConfigs, channelSettings)
 		for _, channelType := range channelTypes {
 			if !common.StringsContains(endpoints, string(channelType)) {
 				endpoints = append(endpoints, string(channelType))

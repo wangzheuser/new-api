@@ -16,10 +16,34 @@ const (
 	MaxModelSystemPromptEntries = 256
 	MaxModelSystemPromptBytes   = 64 * 1024
 	MaxModelContextFallbacks    = 256
+	MaxModelProtocolOverrides   = 256
 	DefaultContextThreshold     = 90
 	ContextFallbackModeSame     = "same_channel"
 	ContextFallbackModeCross    = "cross_channel"
 )
+
+type ProtocolConversionQuality string
+
+const (
+	ProtocolConversionQualityGood ProtocolConversionQuality = "good"
+	ProtocolConversionQualityFair ProtocolConversionQuality = "fair"
+)
+
+type ProtocolCapability struct {
+	NonStream bool `json:"non_stream"`
+	Stream    bool `json:"stream"`
+}
+
+type ModelProtocolProfile struct {
+	Native map[constant.EndpointType]ProtocolCapability `json:"native"`
+}
+
+type ChannelProtocolPolicy struct {
+	Native         map[constant.EndpointType]ProtocolCapability `json:"native,omitempty"`
+	ModelOverrides map[string]ModelProtocolProfile              `json:"model_overrides,omitempty"`
+	AutoConvert    bool                                         `json:"auto_convert"`
+	MaxQuality     ProtocolConversionQuality                    `json:"max_quality"`
+}
 
 // ModelContextFallback 定义某个源路由模型的上下文阈值与单次兜底目标。
 type ModelContextFallback struct {
@@ -54,6 +78,75 @@ type ChannelSettings struct {
 	SystemPromptOverride   bool                            `json:"system_prompt_override,omitempty"`
 	ModelSystemPrompts     map[string]string               `json:"model_system_prompts,omitempty"`
 	ModelContextFallbacks  map[string]ModelContextFallback `json:"model_context_fallbacks,omitempty"`
+	ProtocolPolicy         *ChannelProtocolPolicy          `json:"protocol_policy,omitempty"`
+}
+
+// EffectiveMaxQuality returns the configured conversion ceiling.
+func (p ChannelProtocolPolicy) EffectiveMaxQuality() ProtocolConversionQuality {
+	if p.MaxQuality == "" {
+		return ProtocolConversionQualityFair
+	}
+	return p.MaxQuality
+}
+
+// NativeForModel resolves an exact model override before the channel defaults.
+func (p ChannelProtocolPolicy) NativeForModel(model string) (map[constant.EndpointType]ProtocolCapability, string) {
+	if override, ok := p.ModelOverrides[model]; ok {
+		return override.Native, "model_override"
+	}
+	return p.Native, "channel_default"
+}
+
+// Validate validates protocol capability declarations stored on a channel.
+func (p ChannelProtocolPolicy) Validate() error {
+	if err := validateNativeProtocolCapabilities(p.Native, "channel"); err != nil {
+		return err
+	}
+	if len(p.ModelOverrides) > MaxModelProtocolOverrides {
+		return fmt.Errorf("model protocol overrides cannot exceed %d", MaxModelProtocolOverrides)
+	}
+	for model, profile := range p.ModelOverrides {
+		trimmedModel := strings.TrimSpace(model)
+		if trimmedModel == "" || trimmedModel != model || len(model) > 255 {
+			return fmt.Errorf("invalid model protocol override: %s", model)
+		}
+		if err := validateNativeProtocolCapabilities(profile.Native, "model "+model); err != nil {
+			return err
+		}
+	}
+	quality := p.EffectiveMaxQuality()
+	if quality != ProtocolConversionQualityGood && quality != ProtocolConversionQualityFair {
+		return fmt.Errorf("invalid protocol conversion quality: %s", p.MaxQuality)
+	}
+	return nil
+}
+
+func validateNativeProtocolCapabilities(capabilities map[constant.EndpointType]ProtocolCapability, scope string) error {
+	if len(capabilities) == 0 {
+		return fmt.Errorf("%s native protocol capabilities are required", scope)
+	}
+	for endpointType, capability := range capabilities {
+		if !IsTextProtocolEndpointType(endpointType) {
+			return fmt.Errorf("invalid text protocol endpoint type: %s", endpointType)
+		}
+		if !capability.NonStream && !capability.Stream {
+			return fmt.Errorf("protocol capability %s for %s must enable non-stream or stream", endpointType, scope)
+		}
+	}
+	return nil
+}
+
+// IsTextProtocolEndpointType reports whether an endpoint belongs to the v1 text protocol policy.
+func IsTextProtocolEndpointType(endpointType constant.EndpointType) bool {
+	switch endpointType {
+	case constant.EndpointTypeOpenAI,
+		constant.EndpointTypeOpenAIResponse,
+		constant.EndpointTypeAnthropic,
+		constant.EndpointTypeGemini:
+		return true
+	default:
+		return false
+	}
 }
 
 // ResolveSystemPrompt 返回指定原始模型应使用的渠道系统提示词，以及是否需要前置拼接客户端提示词。

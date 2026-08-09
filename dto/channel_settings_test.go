@@ -124,6 +124,61 @@ func TestChannelSettingsValidateContextFallbacks(t *testing.T) {
 	}
 }
 
+func TestChannelProtocolPolicyValidateAndResolveModelOverride(t *testing.T) {
+	policy := ChannelProtocolPolicy{
+		Native: map[constant.EndpointType]ProtocolCapability{
+			constant.EndpointTypeOpenAI: {NonStream: true, Stream: true},
+		},
+		ModelOverrides: map[string]ModelProtocolProfile{
+			"MODEL_X": {
+				Native: map[constant.EndpointType]ProtocolCapability{
+					constant.EndpointTypeOpenAIResponse: {NonStream: true},
+				},
+			},
+		},
+		AutoConvert: true,
+	}
+	require.NoError(t, policy.Validate())
+	assert.Equal(t, ProtocolConversionQualityFair, policy.EffectiveMaxQuality())
+
+	native, source := policy.NativeForModel("MODEL_X")
+	assert.Equal(t, "model_override", source)
+	assert.Contains(t, native, constant.EndpointTypeOpenAIResponse)
+	assert.NotContains(t, native, constant.EndpointTypeOpenAI)
+
+	native, source = policy.NativeForModel("MODEL_Y")
+	assert.Equal(t, "channel_default", source)
+	assert.Contains(t, native, constant.EndpointTypeOpenAI)
+}
+
+func TestChannelProtocolPolicyValidateRejectsInvalidConfigurations(t *testing.T) {
+	validNative := map[constant.EndpointType]ProtocolCapability{
+		constant.EndpointTypeOpenAI: {NonStream: true},
+	}
+	tests := []struct {
+		name   string
+		policy ChannelProtocolPolicy
+	}{
+		{name: "empty native", policy: ChannelProtocolPolicy{}},
+		{name: "unsupported endpoint", policy: ChannelProtocolPolicy{Native: map[constant.EndpointType]ProtocolCapability{constant.EndpointTypeEmbeddings: {NonStream: true}}}},
+		{name: "empty capability", policy: ChannelProtocolPolicy{Native: map[constant.EndpointType]ProtocolCapability{constant.EndpointTypeOpenAI: {}}}},
+		{name: "invalid quality", policy: ChannelProtocolPolicy{Native: validNative, MaxQuality: "discouraged"}},
+		{name: "empty model override", policy: ChannelProtocolPolicy{Native: validNative, ModelOverrides: map[string]ModelProtocolProfile{"MODEL_X": {}}}},
+		{name: "invalid model name", policy: ChannelProtocolPolicy{Native: validNative, ModelOverrides: map[string]ModelProtocolProfile{" MODEL_X": {Native: validNative}}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Error(t, tt.policy.Validate())
+		})
+	}
+
+	tooMany := make(map[string]ModelProtocolProfile, MaxModelProtocolOverrides+1)
+	for i := 0; i <= MaxModelProtocolOverrides; i++ {
+		tooMany[fmt.Sprintf("MODEL_%d", i)] = ModelProtocolProfile{Native: validNative}
+	}
+	require.Error(t, (ChannelProtocolPolicy{Native: validNative, ModelOverrides: tooMany}).Validate())
+}
+
 func TestAdvancedCustomValidateResponsesToChatConverterPath(t *testing.T) {
 	valid := &AdvancedCustomConfig{
 		Routes: []AdvancedCustomRoute{

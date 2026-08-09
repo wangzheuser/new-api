@@ -122,34 +122,36 @@ type RelayInfo struct {
 	FirstResponseTime time.Time
 	isFirstResponse   bool
 	//SendLastReasoningResponse bool
-	IsStream               bool
-	IsGeminiBatchEmbedding bool
-	IsPlayground           bool
-	UsePrice               bool
-	RelayMode              int
-	RequestedModelName     string // 客户端请求体中的模型，初始化后不再修改
-	RoutingModelName       string // 用于渠道选择与计费的内部模型，初始化后不再修改
-	AttemptModelName       string // 当前尝试的逻辑模型，可在单跳上下文兜底时切换
-	OriginModelName        string
-	RequestURLPath         string
-	RequestHeaders         map[string]string
-	ShouldIncludeUsage     bool
-	DisablePing            bool // 是否禁止向下游发送自定义 Ping
-	ClientWs               *websocket.Conn
-	TargetWs               *websocket.Conn
-	InputAudioFormat       string
-	OutputAudioFormat      string
-	RealtimeTools          []dto.RealTimeTool
-	IsFirstRequest         bool
-	AudioUsage             bool
-	ReasoningEffort        string
-	UserSetting            dto.UserSetting
-	UserEmail              string
-	UserQuota              int
-	RelayFormat            types.RelayFormat
-	SendResponseCount      int
-	ReceivedResponseCount  int
-	FinalPreConsumedQuota  int // 最终预消耗的配额
+	IsStream                 bool
+	IsGeminiBatchEmbedding   bool
+	IsPlayground             bool
+	UsePrice                 bool
+	RelayMode                int
+	RequestedModelName       string // 客户端请求体中的模型，初始化后不再修改
+	RoutingModelName         string // 用于渠道选择与计费的内部模型，初始化后不再修改
+	AttemptModelName         string // 当前尝试的逻辑模型，可在单跳上下文兜底时切换
+	OriginModelName          string
+	RequestURLPath           string
+	RequestHeaders           map[string]string
+	ShouldIncludeUsage       bool
+	DisablePing              bool // 是否禁止向下游发送自定义 Ping
+	ClientWs                 *websocket.Conn
+	TargetWs                 *websocket.Conn
+	InputAudioFormat         string
+	OutputAudioFormat        string
+	RealtimeTools            []dto.RealTimeTool
+	IsFirstRequest           bool
+	AudioUsage               bool
+	ReasoningEffort          string
+	UserSetting              dto.UserSetting
+	UserEmail                string
+	UserQuota                int
+	RelayFormat              types.RelayFormat
+	ChannelRoutePlan         *types.ChannelRoutePlan
+	ProtocolEndpointMismatch bool
+	SendResponseCount        int
+	ReceivedResponseCount    int
+	FinalPreConsumedQuota    int // 最终预消耗的配额
 	// ForcePreConsume 为 true 时禁用 BillingSession 的信任额度旁路，
 	// 强制预扣全额。用于异步任务（视频/音乐生成等），因为请求返回后任务仍在运行，
 	// 必须在提交前锁定全额。
@@ -257,6 +259,9 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	}
 	if channelType == constant.ChannelTypeVertexAi {
 		channelMeta.ApiVersion = c.GetString("region")
+	}
+	if routePlan, ok := common.GetContextKeyType[types.ChannelRoutePlan](c, constant.ContextKeyChannelRoutePlan); ok {
+		info.ChannelRoutePlan = &routePlan
 	}
 
 	channelSetting, ok := common.GetContextKeyType[dto.ChannelSettings](c, constant.ContextKeyChannelSetting)

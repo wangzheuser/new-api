@@ -138,6 +138,29 @@ func TestResolveChannelTestUserIDUsesRequestUser(t *testing.T) {
 	require.Equal(t, 2, userID)
 }
 
+func TestClassifyNativeProbeResult(t *testing.T) {
+	tests := []struct {
+		name   string
+		result testResult
+		want   string
+	}{
+		{name: "confirmed", result: testResult{upstreamStatus: http.StatusOK}, want: "confirmed"},
+		{name: "path not found", result: testResult{localErr: assert.AnError, upstreamStatus: http.StatusNotFound}, want: "path_mismatch"},
+		{name: "method not allowed", result: testResult{localErr: assert.AnError, upstreamStatus: http.StatusMethodNotAllowed}, want: "path_mismatch"},
+		{name: "authentication", result: testResult{localErr: assert.AnError, upstreamStatus: http.StatusUnauthorized}, want: "auth_error"},
+		{name: "rate limited", result: testResult{localErr: assert.AnError, upstreamStatus: http.StatusTooManyRequests}, want: "rate_limited"},
+		{name: "upstream format", result: testResult{localErr: assert.AnError, upstreamStatus: http.StatusOK}, want: "upstream_error"},
+		{name: "upstream service", result: testResult{localErr: assert.AnError, upstreamStatus: http.StatusBadGateway}, want: "upstream_error"},
+		{name: "transport", result: testResult{localErr: assert.AnError}, want: "transport_error"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, classifyNativeProbeResult(test.result))
+		})
+	}
+}
+
 func TestSelectChannelsForAutomaticTestPassiveRecoveryOnlyUsesAutoDisabled(t *testing.T) {
 	channels := []*model.Channel{
 		{Id: 1, Status: common.ChannelStatusEnabled},

@@ -184,6 +184,7 @@ import { StatusCodeRiskDialog } from '../dialogs/status-code-risk-dialog'
 import { ModelContextFallbackEditor } from '../model-context-fallback-editor'
 import { ModelMappingEditor } from '../model-mapping-editor'
 import { ModelSystemPromptEditor } from '../model-system-prompt-editor'
+import { ProtocolPolicyEditor } from '../protocol-policy-editor'
 import {
   ChannelAdvancedSection,
   ChannelApiAccessSection,
@@ -265,6 +266,7 @@ const ADVANCED_SETTINGS_SECTION_IDS = {
   conversationCapture: 'channel-section-advanced-conversation-capture',
   fieldPassthrough: 'channel-section-advanced-field-passthrough',
   upstreamModelDetection: 'channel-section-advanced-upstream-model-detection',
+  protocolCapabilities: 'channel-section-advanced-protocol-capabilities',
 } as const
 const ADVANCED_SETTINGS_CHILD_SECTION_IDS: string[] = Object.values(
   ADVANCED_SETTINGS_SECTION_IDS
@@ -295,6 +297,7 @@ const SENSITIVE_FORM_FIELDS = [
   'system_prompt_override',
   'model_system_prompts',
   'model_context_fallbacks',
+  'protocol_policy',
   'allow_service_tier',
   'conversation_log_enabled',
   'disable_store',
@@ -346,6 +349,7 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.force_format ||
     values.thinking_to_content ||
     values.pass_through_body_enabled ||
+    values.protocol_policy?.trim() ||
     values.claude_beta_query ||
     values.upstream_model_update_check_enabled ||
     values.upstream_model_update_auto_sync_enabled ||
@@ -778,6 +782,7 @@ export function ChannelMutateDrawer({
   const currentSystemPrompt = form.watch('system_prompt')
   const currentModelSystemPrompts = form.watch('model_system_prompts') || {}
   const currentModelContextFallbacks = form.watch('model_context_fallbacks')
+  const currentProtocolPolicy = form.watch('protocol_policy')
   const currentAllowServiceTier = form.watch('allow_service_tier')
   const currentConversationLogEnabled = form.watch('conversation_log_enabled')
   const currentDisableStore = form.watch('disable_store')
@@ -996,7 +1001,8 @@ export function ChannelMutateDrawer({
     formErrors.model_system_prompts
   )
   const advancedHaveErrors =
-    hasAdvancedSettingsErrors(formErrors) || Boolean(formErrors.advanced_custom)
+    hasAdvancedSettingsErrors(formErrors) ||
+    Boolean(formErrors.advanced_custom || formErrors.protocol_policy)
   const providerRequiresBaseUrl = [3, 8, 36, 45].includes(currentType)
   const providerRequiresOther = [3, 18, 21, 39, 41, 49].includes(currentType)
   const identityComplete = Boolean(currentName?.trim() && currentType > 0)
@@ -1102,6 +1108,9 @@ export function ChannelMutateDrawer({
     currentUpstreamModelUpdateAutoSyncEnabled ||
     currentUpstreamModelUpdateIgnoredModels?.trim()
   )
+  const protocolCapabilitiesConfigured = Boolean(
+    currentType === 1 && currentProtocolPolicy?.trim()
+  )
   const advancedConfigured = Boolean(
     routingStrategyConfigured ||
     internalNotesConfigured ||
@@ -1109,6 +1118,7 @@ export function ChannelMutateDrawer({
     extraSettingsConfigured ||
     conversationCaptureConfigured ||
     fieldPassthroughConfigured ||
+    protocolCapabilitiesConfigured ||
     upstreamModelDetectionConfigured
   )
   const advancedNavChildren: ChannelEditorNavChildItem[] = [
@@ -1133,6 +1143,13 @@ export function ChannelMutateDrawer({
       configured: extraSettingsConfigured,
     },
   ]
+  if (currentType === 1 || currentType === CHANNEL_TYPE_ADVANCED_CUSTOM) {
+    advancedNavChildren.push({
+      id: ADVANCED_SETTINGS_SECTION_IDS.protocolCapabilities,
+      title: t('Protocol Capabilities'),
+      configured: protocolCapabilitiesConfigured,
+    })
+  }
   if (isRoot) {
     advancedNavChildren.push({
       id: ADVANCED_SETTINGS_SECTION_IDS.conversationCapture,
@@ -1369,6 +1386,14 @@ export function ChannelMutateDrawer({
       shouldValidate: true,
     })
   }, [currentBaseUrl, currentType, form])
+
+  useEffect(() => {
+    if (currentType === 1 || !form.getValues('protocol_policy')?.trim()) return
+    form.setValue('protocol_policy', '', {
+      shouldDirty: true,
+      shouldValidate: true,
+    })
+  }, [currentType, form])
 
   useEffect(() => {
     if (isEditing || supportsMultiKeyAddMode) return
@@ -4308,6 +4333,47 @@ export function ChannelMutateDrawer({
                             </fieldset>
                           </div>
                         </div>
+
+                        {(currentType === 1 ||
+                          currentType === CHANNEL_TYPE_ADVANCED_CUSTOM) && (
+                          <div
+                            id={
+                              ADVANCED_SETTINGS_SECTION_IDS.protocolCapabilities
+                            }
+                            className={sideDrawerSectionClassName(
+                              configuredAdvancedSectionClassName(
+                                'scroll-mt-4',
+                                Boolean(currentProtocolPolicy?.trim())
+                              )
+                            )}
+                          >
+                            <CardHeading
+                              title={t('Protocol Capabilities')}
+                              icon={<Route className='h-4 w-4' />}
+                              iconTone='chart-2'
+                            />
+                            <FormField
+                              control={form.control}
+                              name='protocol_policy'
+                              render={({ field }) => (
+                                <FormItem>
+                                  <ProtocolPolicyEditor
+                                    channelId={channelId ?? undefined}
+                                    channelType={currentType}
+                                    models={currentModelsArray}
+                                    value={field.value}
+                                    disabled={sensitiveLocked || isSubmitting}
+                                    onChange={(nextValue) => {
+                                      field.onChange(nextValue)
+                                      void form.trigger('protocol_policy')
+                                    }}
+                                  />
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                          </div>
+                        )}
 
                         {/* ── Extra Settings ── */}
                         <div

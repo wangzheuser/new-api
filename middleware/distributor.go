@@ -25,8 +25,9 @@ import (
 )
 
 type ModelRequest struct {
-	Model string `json:"model"`
-	Group string `json:"group,omitempty"`
+	Model  string `json:"model"`
+	Group  string `json:"group,omitempty"`
+	Stream bool   `json:"stream,omitempty"`
 }
 
 func Distribute() func(c *gin.Context) {
@@ -38,6 +39,10 @@ func Distribute() func(c *gin.Context) {
 			abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
 			return
 		}
+		if strings.Contains(c.Request.URL.Path, ":streamGenerateContent") {
+			modelRequest.Stream = true
+		}
+		common.SetContextKey(c, constant.ContextKeyIsStream, modelRequest.Stream)
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))
 			if err != nil {
@@ -112,7 +117,7 @@ func Distribute() func(c *gin.Context) {
 					affinityUsable := false
 					preferred, err := model.CacheGetChannel(preferredChannelID)
 					if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
-						channelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) {
+						channelSupportsRequest(preferred, c.Request.URL.Path, modelRequest.Model, modelRequest.Stream) {
 						if usingGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 							userId := common.GetContextKeyInt(c, constant.ContextKeyUserId)
@@ -144,11 +149,12 @@ func Distribute() func(c *gin.Context) {
 				}
 
 				if channel == nil {
-					channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
+					channel, _, selectGroup, err = service.CacheGetRandomSatisfiedChannelWithRoute(&service.RetryParam{
 						Ctx:         c,
 						ModelName:   modelRequest.Model,
 						TokenGroup:  usingGroup,
 						RequestPath: c.Request.URL.Path,
+						IsStream:    modelRequest.Stream,
 						Retry:       common.GetPointer(0),
 					})
 					if err != nil {
@@ -173,7 +179,10 @@ func Distribute() func(c *gin.Context) {
 			}
 		}
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
-		SetupContextForSelectedChannel(c, channel, modelRequest.Model)
+		if setupErr := SetupContextForSelectedChannel(c, channel, modelRequest.Model); setupErr != nil {
+			abortWithOpenAiMessage(c, http.StatusServiceUnavailable, setupErr.Error(), types.ErrorCodeModelNotFound)
+			return
+		}
 		c.Next()
 		if channel != nil && c.Writer != nil && c.Writer.Status() < http.StatusBadRequest {
 			service.RecordChannelAffinity(c, channel.Id)
@@ -193,6 +202,19 @@ func channelSupportsRequestPath(channel *model.Channel, requestPath string, requ
 	}
 	config := channel.GetOtherSettings().AdvancedCustom
 	return config != nil && config.SupportsPathForModel(requestPath, requestModel)
+}
+
+// channelSupportsRequest applies explicit Advanced Custom routing and protocol policy checks.
+func channelSupportsRequest(channel *model.Channel, requestPath string, requestModel string, stream bool) bool {
+	if !channelSupportsRequestPath(channel, requestPath, requestModel) {
+		return false
+	}
+	plan, err := service.PlanChannelProtocolRoute(channel, requestModel, requestPath, stream)
+	if err != nil {
+		return false
+	}
+	_, _, _, isTextProtocol := service.ResolveClientTextProtocol(requestPath)
+	return !isTextProtocol || plan != nil
 }
 
 // getModelFromRequest 从请求中读取模型信息
@@ -230,12 +252,16 @@ func getModelFromJSONBody(c *gin.Context) (*ModelRequest, error) {
 		return nil, errors.New("invalid JSON request body")
 	}
 
-	values := gjson.GetManyBytes(requestBody, "model", "group")
+	values := gjson.GetManyBytes(requestBody, "model", "group", "stream")
 	model, err := getJSONStringValue(values[0], "model")
 	if err != nil {
 		return nil, err
 	}
 	group, err := getJSONStringValue(values[1], "group")
+	if err != nil {
+		return nil, err
+	}
+	stream, err := getJSONBoolValue(values[2], "stream")
 	if err != nil {
 		return nil, err
 	}
@@ -246,8 +272,9 @@ func getModelFromJSONBody(c *gin.Context) (*ModelRequest, error) {
 	c.Request.Body = io.NopCloser(storage)
 
 	return &ModelRequest{
-		Model: model,
-		Group: group,
+		Model:  model,
+		Group:  group,
+		Stream: stream,
 	}, nil
 }
 
@@ -259,6 +286,16 @@ func getJSONStringValue(result gjson.Result, field string) (string, error) {
 		return "", fmt.Errorf("field %s must be a string", field)
 	}
 	return result.String(), nil
+}
+
+func getJSONBoolValue(result gjson.Result, field string) (bool, error) {
+	if !result.Exists() || result.Type == gjson.Null {
+		return false, nil
+	}
+	if result.Type != gjson.True && result.Type != gjson.False {
+		return false, fmt.Errorf("field %s must be a boolean", field)
+	}
+	return result.Bool(), nil
 }
 
 func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
@@ -459,6 +496,17 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	common.SetContextKey(c, constant.ContextKeyAttemptModel, modelName)
 	if channel == nil {
 		return types.NewError(errors.New("channel is nil"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+	}
+	common.SetContextKey(c, constant.ContextKeyChannelRoutePlan, nil)
+	plan, err := service.PlanChannelProtocolRoute(channel, modelName, c.Request.URL.Path, common.GetContextKeyBool(c, constant.ContextKeyIsStream))
+	if err != nil {
+		return types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+	}
+	if _, _, _, isTextProtocol := service.ResolveClientTextProtocol(c.Request.URL.Path); isTextProtocol && plan == nil {
+		return types.NewError(errors.New("channel has no compatible protocol route"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+	}
+	if plan != nil {
+		common.SetContextKey(c, constant.ContextKeyChannelRoutePlan, *plan)
 	}
 	common.SetContextKey(c, constant.ContextKeyChannelId, channel.Id)
 	common.SetContextKey(c, constant.ContextKeyChannelName, channel.Name)

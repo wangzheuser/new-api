@@ -954,6 +954,17 @@ func (channel *Channel) ValidateSettings() error {
 	if err := channelParams.ValidateContextFallbacks(); err != nil {
 		return err
 	}
+	if channelParams.ProtocolPolicy != nil {
+		if channel.Type != constant.ChannelTypeOpenAI {
+			return fmt.Errorf("protocol policy is only available for standard compatible channels")
+		}
+		if channelParams.PassThroughBodyEnabled && channelParams.ProtocolPolicy.AutoConvert {
+			return fmt.Errorf("protocol auto conversion conflicts with request body pass-through")
+		}
+		if err := channelParams.ProtocolPolicy.Validate(); err != nil {
+			return err
+		}
+	}
 	channelOtherSettings := &dto.ChannelOtherSettings{}
 	if channel.OtherSettings != "" {
 		err := common.UnmarshalJsonStr(channel.OtherSettings, channelOtherSettings)

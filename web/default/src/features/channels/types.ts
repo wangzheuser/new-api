@@ -88,6 +88,29 @@ export interface ChannelSettings {
   system_prompt_override?: boolean
   model_system_prompts?: Record<string, string>
   model_context_fallbacks?: Record<string, ModelContextFallback>
+  protocol_policy?: ChannelProtocolPolicy
+}
+
+export type TextEndpointType =
+  | 'openai'
+  | 'openai-response'
+  | 'anthropic'
+  | 'gemini'
+
+export interface ProtocolCapability {
+  non_stream: boolean
+  stream: boolean
+}
+
+export interface ModelProtocolProfile {
+  native: Partial<Record<TextEndpointType, ProtocolCapability>>
+}
+
+export interface ChannelProtocolPolicy {
+  native: Partial<Record<TextEndpointType, ProtocolCapability>>
+  model_overrides?: Record<string, ModelProtocolProfile>
+  auto_convert: boolean
+  max_quality: 'good' | 'fair'
 }
 
 export interface ModelContextFallback {
@@ -200,6 +223,20 @@ export interface ChannelTestResponse {
     response_time?: number
     error?: string
   }
+}
+
+export interface ChannelNativeProbeResponse extends ChannelTestResponse {
+  model: string
+  endpoint_type: TextEndpointType
+  stream: boolean
+  http_status: number
+  classification:
+    | 'confirmed'
+    | 'path_mismatch'
+    | 'auth_error'
+    | 'rate_limited'
+    | 'upstream_error'
+    | 'transport_error'
 }
 
 export interface ChannelPromptTestRequest {

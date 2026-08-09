@@ -40,6 +40,13 @@ import { parseContextFallbackValue } from './model-context-fallback'
 const MAX_MODEL_SYSTEM_PROMPT_ENTRIES = 256
 const MAX_MODEL_SYSTEM_PROMPT_BYTES = 64 * 1024
 const MAX_CHANNEL_SETTING_BYTES = 64 * 1024 - 1
+const MAX_MODEL_PROTOCOL_OVERRIDES = 256
+const TEXT_PROTOCOL_ENDPOINTS = new Set([
+  'openai',
+  'openai-response',
+  'anthropic',
+  'gemini',
+])
 
 function parseOptionalJson(value: string | undefined): unknown {
   if (!value?.trim()) return undefined
@@ -94,6 +101,64 @@ function isOptionalStatusCodeMapping(value: string | undefined): boolean {
 
 function getContextFallbacksError(value: string | undefined): string | null {
   return parseContextFallbackValue(value || '').error?.message ?? null
+}
+
+function getNativeCapabilitiesError(value: unknown): string | null {
+  if (!isJsonObjectValue(value) || Object.keys(value).length === 0) {
+    return 'At least one native protocol is required'
+  }
+  for (const [endpointType, capability] of Object.entries(value)) {
+    if (!TEXT_PROTOCOL_ENDPOINTS.has(endpointType)) {
+      return 'Protocol policy contains an unsupported endpoint type'
+    }
+    if (!isJsonObjectValue(capability)) {
+      return 'Protocol capability must be an object'
+    }
+    const nonStream = capability.non_stream === true
+    const stream = capability.stream === true
+    if (!nonStream && !stream) {
+      return 'Each native protocol must enable normal or streaming requests'
+    }
+  }
+  return null
+}
+
+function getProtocolPolicyError(value: string | undefined): string | null {
+  if (!value?.trim()) return null
+  try {
+    const policy = JSON.parse(value)
+    if (!isJsonObjectValue(policy)) return 'Protocol policy must be an object'
+    const nativeError = getNativeCapabilitiesError(policy.native)
+    if (nativeError) return nativeError
+    if (policy.max_quality !== 'good' && policy.max_quality !== 'fair') {
+      return 'Conversion quality must be good or fair'
+    }
+    if (typeof policy.auto_convert !== 'boolean') {
+      return 'Auto conversion must be explicitly enabled or disabled'
+    }
+    if (policy.model_overrides !== undefined) {
+      if (!isJsonObjectValue(policy.model_overrides)) {
+        return 'Model protocol overrides must be an object'
+      }
+      const entries = Object.entries(policy.model_overrides)
+      if (entries.length > MAX_MODEL_PROTOCOL_OVERRIDES) {
+        return 'Model protocol overrides cannot exceed 256'
+      }
+      for (const [model, profile] of entries) {
+        if (!model.trim() || model !== model.trim() || model.length > 255) {
+          return 'Model protocol override contains an invalid model name'
+        }
+        if (!isJsonObjectValue(profile)) {
+          return 'Model protocol profile must be an object'
+        }
+        const profileError = getNativeCapabilitiesError(profile.native)
+        if (profileError) return profileError
+      }
+    }
+    return null
+  } catch {
+    return 'Protocol policy must be valid JSON'
+  }
 }
 
 function isCodexCredential(value: string | undefined): boolean {
@@ -202,6 +267,7 @@ export const channelFormSchema = z
     system_prompt_override: z.boolean().optional(),
     model_system_prompts: z.record(z.string(), z.string()).optional(),
     model_context_fallbacks: z.string().optional(),
+    protocol_policy: z.string().optional(),
     // Type-specific settings (stored in settings JSON)
     is_enterprise_account: z.boolean().optional(), // OpenRouter specific
     vertex_key_type: z.enum(['json', 'api_key']).optional(), // Vertex AI specific
@@ -267,6 +333,32 @@ export const channelFormSchema = z
       addRequiredIssue(ctx, 'model_context_fallbacks', contextFallbacksError)
     }
 
+    const protocolPolicyError = getProtocolPolicyError(data.protocol_policy)
+    if (protocolPolicyError) {
+      addRequiredIssue(ctx, 'protocol_policy', protocolPolicyError)
+    }
+    if (data.protocol_policy?.trim() && data.type !== 1) {
+      addRequiredIssue(
+        ctx,
+        'protocol_policy',
+        'Protocol policy is available for standard compatible channels'
+      )
+    }
+    if (data.protocol_policy?.trim() && data.pass_through_body_enabled) {
+      try {
+        const policy = JSON.parse(data.protocol_policy)
+        if (policy.auto_convert === true) {
+          addRequiredIssue(
+            ctx,
+            'protocol_policy',
+            'Auto conversion conflicts with request body pass-through'
+          )
+        }
+      } catch {
+        // Invalid JSON is reported by the protocol policy validator.
+      }
+    }
+
     if (
       new TextEncoder().encode(buildSettingJSON(data)).length >
       MAX_CHANNEL_SETTING_BYTES
@@ -276,6 +368,8 @@ export const channelFormSchema = z
         settingErrorField = 'model_system_prompts'
       } else if (data.model_context_fallbacks?.trim()) {
         settingErrorField = 'model_context_fallbacks'
+      } else if (data.protocol_policy?.trim()) {
+        settingErrorField = 'protocol_policy'
       }
       addRequiredIssue(
         ctx,
@@ -406,6 +500,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   system_prompt_override: false,
   model_system_prompts: {},
   model_context_fallbacks: '',
+  protocol_policy: '',
   // Type-specific settings
   is_enterprise_account: false,
   vertex_key_type: 'json',
@@ -447,6 +542,7 @@ export function transformChannelToFormDefaults(
     system_prompt_override: false,
     model_system_prompts: {} as Record<string, string>,
     model_context_fallbacks: '',
+    protocol_policy: '',
   }
 
   if (channel.setting) {
@@ -470,6 +566,12 @@ export function transformChannelToFormDefaults(
           typeof parsed.model_context_fallbacks === 'object' &&
           !Array.isArray(parsed.model_context_fallbacks)
             ? JSON.stringify(parsed.model_context_fallbacks, null, 2)
+            : '',
+        protocol_policy:
+          parsed.protocol_policy &&
+          typeof parsed.protocol_policy === 'object' &&
+          !Array.isArray(parsed.protocol_policy)
+            ? JSON.stringify(parsed.protocol_policy, null, 2)
             : '',
       }
     } catch (error) {
@@ -600,6 +702,16 @@ function buildSettingJSON(formData: ChannelFormValues): string {
       const rules = JSON.parse(formData.model_context_fallbacks)
       if (isJsonObjectValue(rules) && Object.keys(rules).length > 0) {
         settingObj.model_context_fallbacks = rules
+      }
+    } catch {
+      // The form validator reports invalid drafts before submission.
+    }
+  }
+  if (formData.protocol_policy?.trim()) {
+    try {
+      const policy = JSON.parse(formData.protocol_policy)
+      if (isJsonObjectValue(policy)) {
+        settingObj.protocol_policy = policy
       }
     } catch {
       // The form validator reports invalid drafts before submission.

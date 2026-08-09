@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -14,4 +16,29 @@ func TestChannelValidateSettingsRejectsMySQLTextOverflow(t *testing.T) {
 	channel := &Channel{Setting: common.GetPointer(setting)}
 
 	require.ErrorContains(t, channel.ValidateSettings(), "channel settings cannot exceed 64 KiB")
+}
+
+func TestChannelValidateSettingsProtocolPolicyScopeAndPassThrough(t *testing.T) {
+	policy := &dto.ChannelProtocolPolicy{
+		Native: map[constant.EndpointType]dto.ProtocolCapability{
+			constant.EndpointTypeOpenAI: {NonStream: true},
+		},
+		AutoConvert: true,
+		MaxQuality:  dto.ProtocolConversionQualityFair,
+	}
+
+	valid := &Channel{Type: constant.ChannelTypeOpenAI}
+	valid.SetSetting(dto.ChannelSettings{ProtocolPolicy: policy})
+	require.NoError(t, valid.ValidateSettings())
+
+	passThrough := &Channel{Type: constant.ChannelTypeOpenAI}
+	passThrough.SetSetting(dto.ChannelSettings{
+		PassThroughBodyEnabled: true,
+		ProtocolPolicy:         policy,
+	})
+	assert.ErrorContains(t, passThrough.ValidateSettings(), "conflicts with request body pass-through")
+
+	unsupportedType := &Channel{Type: constant.ChannelTypeAnthropic}
+	unsupportedType.SetSetting(dto.ChannelSettings{ProtocolPolicy: policy})
+	assert.ErrorContains(t, unsupportedType.ValidateSettings(), "standard compatible channels")
 }

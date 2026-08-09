@@ -35,6 +35,7 @@ const (
 	ContextKeyChannelAutoBan           ContextKey = "auto_ban"
 	ContextKeyChannelModelMapping      ContextKey = "model_mapping"
 	ContextKeyChannelStatusCodeMapping ContextKey = "status_code_mapping"
+	ContextKeyChannelRoutePlan         ContextKey = "channel_route_plan"
 	ContextKeyChannelIsMultiKey        ContextKey = "channel_is_multi_key"
 	ContextKeyChannelMultiKeyIndex     ContextKey = "channel_multi_key_index"
 	ContextKeyChannelKey               ContextKey = "channel_key"

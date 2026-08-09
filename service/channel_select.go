@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -17,6 +18,9 @@ type RetryParam struct {
 	TokenGroup         string
 	ModelName          string
 	RequestPath        string
+	EndpointType       constant.EndpointType
+	RelayFormat        types.RelayFormat
+	IsStream           bool
 	Retry              *int
 	ExcludedChannelIDs map[int]struct{}
 	resetNextTry       bool
@@ -172,4 +176,38 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 		}
 	}
 	return channel, selectGroup, nil
+}
+
+// CacheGetRandomSatisfiedChannelWithRoute selects a channel and returns its protocol plan.
+func CacheGetRandomSatisfiedChannelWithRoute(param *RetryParam) (*model.Channel, *types.ChannelRoutePlan, string, error) {
+	if param == nil {
+		return nil, nil, "", errors.New("retry parameters are required")
+	}
+	endpointType, relayFormat, _, isTextProtocol := ResolveClientTextProtocol(param.RequestPath)
+	if param.EndpointType == "" {
+		param.EndpointType = endpointType
+	}
+	if param.RelayFormat == "" {
+		param.RelayFormat = relayFormat
+	}
+
+	for {
+		channel, selectGroup, err := CacheGetRandomSatisfiedChannel(param)
+		if err != nil || channel == nil || !isTextProtocol {
+			return channel, nil, selectGroup, err
+		}
+		plan, planErr := PlanChannelProtocolRoute(channel, param.ModelName, param.RequestPath, param.IsStream)
+		if planErr != nil {
+			return nil, nil, selectGroup, planErr
+		}
+		if plan != nil {
+			return channel, plan, selectGroup, nil
+		}
+
+		// Protocol-incompatible candidates are excluded only for this request.
+		if param.ExcludedChannelIDs == nil {
+			param.ExcludedChannelIDs = make(map[int]struct{})
+		}
+		param.ExcludedChannelIDs[channel.Id] = struct{}{}
+	}
 }

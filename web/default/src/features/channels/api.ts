@@ -28,6 +28,7 @@ import type {
   ChannelOpsResponse,
   ChannelPromptTestRequest,
   ChannelPromptTestResponse,
+  ChannelNativeProbeResponse,
   ChannelTestResponse,
   CopyChannelParams,
   CopyChannelResponse,
@@ -214,8 +215,32 @@ export async function batchSetChannelTag(
  */
 export async function testChannel(
   id: number,
-  params?: { model?: string; endpoint_type?: string; stream?: boolean }
+  params?: {
+    model?: string
+    endpoint_type?: string
+    stream?: boolean
+    probe_mode?: 'native'
+  }
 ): Promise<ChannelTestResponse> {
+  const res = await api.get(
+    `/api/channel/test/${id}`,
+    channelActionConfig({ params })
+  )
+  return res.data
+}
+
+/**
+ * Probe one upstream text protocol without applying the channel protocol policy.
+ */
+export async function probeChannelNativeProtocol(
+  id: number,
+  params: {
+    model: string
+    endpoint_type: string
+    stream: boolean
+    probe_mode: 'native'
+  }
+): Promise<ChannelNativeProbeResponse> {
   const res = await api.get(
     `/api/channel/test/${id}`,
     channelActionConfig({ params })

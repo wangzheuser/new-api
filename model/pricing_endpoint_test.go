@@ -190,6 +190,96 @@ func TestPricingNativeChannelEndpointTypesUnchanged(t *testing.T) {
 	assert.Equal(t, []constant.EndpointType{constant.EndpointTypeAnthropic, constant.EndpointTypeOpenAI}, byModel["claude-3-5-sonnet"])
 }
 
+func TestEffectiveProtocolEndpointTypesRespectsQualityAndPassThrough(t *testing.T) {
+	chatNative := map[constant.EndpointType]dto.ProtocolCapability{
+		constant.EndpointTypeOpenAI: {NonStream: true, Stream: true},
+	}
+	tests := []struct {
+		name        string
+		policy      dto.ChannelProtocolPolicy
+		passThrough bool
+		model       string
+		want        []constant.EndpointType
+	}{
+		{
+			name: "fair conversion exposes all supported text protocols",
+			policy: dto.ChannelProtocolPolicy{
+				Native:      chatNative,
+				AutoConvert: true,
+				MaxQuality:  dto.ProtocolConversionQualityFair,
+			},
+			model: "MODEL_X",
+			want: []constant.EndpointType{
+				constant.EndpointTypeOpenAI,
+				constant.EndpointTypeOpenAIResponse,
+				constant.EndpointTypeAnthropic,
+				constant.EndpointTypeGemini,
+			},
+		},
+		{
+			name: "good conversion exposes chat and responses",
+			policy: dto.ChannelProtocolPolicy{
+				Native:      chatNative,
+				AutoConvert: true,
+				MaxQuality:  dto.ProtocolConversionQualityGood,
+			},
+			model: "MODEL_X",
+			want: []constant.EndpointType{
+				constant.EndpointTypeOpenAI,
+				constant.EndpointTypeOpenAIResponse,
+			},
+		},
+		{
+			name: "pass through exposes native only",
+			policy: dto.ChannelProtocolPolicy{
+				Native:      chatNative,
+				AutoConvert: true,
+				MaxQuality:  dto.ProtocolConversionQualityFair,
+			},
+			passThrough: true,
+			model:       "MODEL_X",
+			want:        []constant.EndpointType{constant.EndpointTypeOpenAI},
+		},
+		{
+			name: "model override fully replaces channel native set",
+			policy: dto.ChannelProtocolPolicy{
+				Native: chatNative,
+				ModelOverrides: map[string]dto.ModelProtocolProfile{
+					"MODEL_X": {Native: map[constant.EndpointType]dto.ProtocolCapability{
+						constant.EndpointTypeOpenAIResponse: {NonStream: true, Stream: true},
+					}},
+				},
+				AutoConvert: false,
+				MaxQuality:  dto.ProtocolConversionQualityFair,
+			},
+			model: "MODEL_X",
+			want:  []constant.EndpointType{constant.EndpointTypeOpenAIResponse},
+		},
+		{
+			name: "discouraged direct route remains hidden",
+			policy: dto.ChannelProtocolPolicy{
+				Native: map[constant.EndpointType]dto.ProtocolCapability{
+					constant.EndpointTypeAnthropic: {NonStream: true, Stream: true},
+				},
+				AutoConvert: true,
+				MaxQuality:  dto.ProtocolConversionQualityFair,
+			},
+			model: "MODEL_X",
+			want: []constant.EndpointType{
+				constant.EndpointTypeOpenAI,
+				constant.EndpointTypeOpenAIResponse,
+				constant.EndpointTypeAnthropic,
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, effectiveProtocolEndpointTypes(test.policy, test.passThrough, test.model))
+		})
+	}
+}
+
 func TestInitChannelCacheInvalidatesPricingCache(t *testing.T) {
 	resetPricingEndpointTestTables(t)
 

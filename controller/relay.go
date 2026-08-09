@@ -194,6 +194,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		TokenGroup:  retryGroup,
 		ModelName:   relayInfo.GetAttemptModelName(),
 		RequestPath: c.Request.URL.Path,
+		RelayFormat: relayInfo.RelayFormat,
+		IsStream:    relayInfo.IsStream,
 		Retry:       common.GetPointer(0),
 	}
 	if relayInfo.IsContextFallbackActive() && relayInfo.ContextFallback.RouteMode == dto.ContextFallbackModeCross {
@@ -254,7 +256,19 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if relayInfo.IsContextFallbackActive() && relayInfo.ContextFallback.RouteMode == dto.ContextFallbackModeSame {
 			willRetry = false
 		}
-		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+		endpointMismatch := relayInfo.ProtocolEndpointMismatch &&
+			relayInfo.ChannelRoutePlan != nil &&
+			relayInfo.ChannelRoutePlan.RouteMode != types.ChannelRouteModeLegacy
+		if endpointMismatch {
+			if retryParam.ExcludedChannelIDs == nil {
+				retryParam.ExcludedChannelIDs = make(map[int]struct{})
+			}
+			retryParam.ExcludedChannelIDs[channel.Id] = struct{}{}
+			willRetry = common.RetryTimes-retryParam.GetRetry() > 0 &&
+				!(relayInfo.IsContextFallbackActive() && relayInfo.ContextFallback.RouteMode == dto.ContextFallbackModeSame)
+		} else {
+			processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+		}
 		if willRetry {
 			recordRelayErrorLog(c, relayInfo, newAPIError, "", nil, true)
 		}
@@ -419,18 +433,20 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	if info.IsContextFallbackActive() && info.ContextFallback.RouteMode == dto.ContextFallbackModeSame {
 		selectGroup = contextFallbackRoutingGroup(c, info)
 		channel, err = model.CacheGetChannel(info.ContextFallback.SourceChannelID)
-		if err == nil && !contextFallbackTargetEligible(channel, selectGroup, info.GetAttemptModelName(), c.Request.URL.Path) {
+		if err == nil && !contextFallbackTargetEligible(channel, selectGroup, info.GetAttemptModelName(), c.Request.URL.Path, info.IsStream) {
 			channel = nil
 		}
 	} else if info.IsContextFallbackActive() && info.ContextFallback.RouteMode == dto.ContextFallbackModeCross {
 		var channelErr *types.NewAPIError
-		channel, channelErr = selectContextFallbackTarget(c, info, retryParam.GetRetry())
+		channel, channelErr = selectContextFallbackTarget(c, info, retryParam)
 		if channelErr != nil {
 			return nil, channelErr
 		}
 		selectGroup = contextFallbackRoutingGroup(c, info)
 	} else {
-		channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(retryParam)
+		retryParam.IsStream = info.IsStream
+		retryParam.RelayFormat = info.RelayFormat
+		channel, _, selectGroup, err = service.CacheGetRandomSatisfiedChannelWithRoute(retryParam)
 		info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
 	}
 
@@ -441,9 +457,20 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		return nil, types.NewError(fmt.Errorf("分组 %s 下模型 %s 的可用渠道不存在（retry）", selectGroup, info.OriginModelName), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 
+	common.SetContextKey(c, constant.ContextKeyIsStream, info.IsStream)
 	newAPIError := middleware.SetupContextForSelectedChannel(c, channel, info.GetAttemptModelName())
 	if newAPIError != nil {
 		return nil, newAPIError
+	}
+	info.ProtocolEndpointMismatch = false
+	if routePlan, ok := common.GetContextKeyType[types.ChannelRoutePlan](c, constant.ContextKeyChannelRoutePlan); ok {
+		info.ChannelRoutePlan = &routePlan
+		info.RequestConversionChain = []types.RelayFormat{routePlan.ClientRelayFormat}
+		info.FinalRequestRelayFormat = ""
+	} else {
+		info.ChannelRoutePlan = nil
+		info.RequestConversionChain = nil
+		info.InitRequestConversionChain()
 	}
 	if info.IsContextFallbackActive() {
 		info.ContextFallback.TargetChannelID = channel.Id
@@ -717,6 +744,8 @@ func RelayTask(c *gin.Context) {
 		TokenGroup:  relayRetryGroup(relayInfo),
 		ModelName:   relayInfo.GetRoutingModelName(),
 		RequestPath: c.Request.URL.Path,
+		RelayFormat: relayInfo.RelayFormat,
+		IsStream:    relayInfo.IsStream,
 		Retry:       common.GetPointer(0),
 	}
 

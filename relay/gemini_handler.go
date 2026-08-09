@@ -118,6 +118,22 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 			request.SystemInstructions = nil
 		}
 	}
+	if isNativeProtocolRoute(info) {
+		usage, nativeErr := executeNativeTextRoute(c, info, adaptor, request, passThroughRequest)
+		if nativeErr != nil {
+			return nativeErr
+		}
+		service.PostTextConsumeQuota(c, info, usage, nil)
+		return nil
+	}
+	if isConvertedProtocolRoute(info) {
+		usage, convertedErr := executeConvertedTextRoute(c, info, adaptor, request)
+		if convertedErr != nil {
+			return convertedErr
+		}
+		service.PostTextConsumeQuota(c, info, usage, nil)
+		return nil
+	}
 
 	var requestBody io.Reader
 	if passThroughRequest {

@@ -109,7 +109,14 @@ func prepareContextFallback(c *gin.Context, info *relaycommon.RelayInfo, request
 		if _, pinned := c.Get("specific_channel_id"); pinned {
 			return nil, contextFallbackRouteError("specific channel is unavailable for this request")
 		}
-		targetChannel, channelErr := selectContextFallbackTarget(c, info, 0)
+		targetChannel, channelErr := selectContextFallbackTarget(c, info, &service.RetryParam{
+			Ctx:         c,
+			TokenGroup:  contextFallbackRoutingGroup(c, info),
+			ModelName:   rule.FallbackModel,
+			RequestPath: c.Request.URL.Path,
+			IsStream:    info.IsStream,
+			Retry:       common.GetPointer(0),
+		})
 		if channelErr != nil {
 			return nil, channelErr
 		}
@@ -192,10 +199,13 @@ func applyContextPreview(info *relaycommon.RelayInfo, preview relay.SystemPrompt
 }
 
 // selectContextFallbackTarget 从冻结分组中选择跨渠道兜底目标，源渠道始终排除。
-func selectContextFallbackTarget(c *gin.Context, info *relaycommon.RelayInfo, retry int) (*model.Channel, *types.NewAPIError) {
+func selectContextFallbackTarget(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
 	decision := info.ContextFallback
 	if decision == nil {
 		return nil, contextFallbackChannelError(fmt.Errorf("context fallback decision is missing"))
+	}
+	if retryParam == nil {
+		return nil, contextFallbackChannelError(fmt.Errorf("context fallback retry parameters are missing"))
 	}
 	group := contextFallbackRoutingGroup(c, info)
 	if len(decision.TargetChannelIDs) > 0 {
@@ -208,7 +218,7 @@ func selectContextFallbackTarget(c *gin.Context, info *relaycommon.RelayInfo, re
 				continue
 			}
 			channel, err := model.CacheGetChannel(channelID)
-			if err != nil || !contextFallbackTargetEligible(channel, group, decision.FallbackModel, c.Request.URL.Path) {
+			if err != nil || !contextFallbackTargetEligible(channel, group, decision.FallbackModel, c.Request.URL.Path, info.IsStream) {
 				continue
 			}
 			return channel, nil
@@ -216,17 +226,18 @@ func selectContextFallbackTarget(c *gin.Context, info *relaycommon.RelayInfo, re
 		return nil, contextFallbackChannelError(fmt.Errorf("no available channel for the requested model"))
 	}
 
-	for retryValue := retry; retryValue <= common.RetryTimes; retryValue++ {
-		channel, _, err := service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
-			Ctx:         c,
-			TokenGroup:  group,
-			ModelName:   decision.FallbackModel,
-			RequestPath: c.Request.URL.Path,
-			Retry:       &retryValue,
-			ExcludedChannelIDs: map[int]struct{}{
-				decision.SourceChannelID: {},
-			},
-		})
+	if retryParam.ExcludedChannelIDs == nil {
+		retryParam.ExcludedChannelIDs = make(map[int]struct{})
+	}
+	retryParam.ExcludedChannelIDs[decision.SourceChannelID] = struct{}{}
+	for retryValue := retryParam.GetRetry(); retryValue <= common.RetryTimes; retryValue++ {
+		candidateParam := *retryParam
+		candidateParam.TokenGroup = group
+		candidateParam.ModelName = decision.FallbackModel
+		candidateParam.RequestPath = c.Request.URL.Path
+		candidateParam.IsStream = info.IsStream
+		candidateParam.Retry = &retryValue
+		channel, _, _, err := service.CacheGetRandomSatisfiedChannelWithRoute(&candidateParam)
 		if err != nil {
 			return nil, contextFallbackChannelError(err)
 		}
@@ -249,18 +260,25 @@ func contextFallbackRoutingGroup(c *gin.Context, info *relaycommon.RelayInfo) st
 }
 
 // contextFallbackTargetEligible 校验显式目标渠道的启用状态、分组、模型和路径。
-func contextFallbackTargetEligible(channel *model.Channel, group, modelName, requestPath string) bool {
+func contextFallbackTargetEligible(channel *model.Channel, group, modelName, requestPath string, stream bool) bool {
 	if channel == nil || channel.Status != common.ChannelStatusEnabled {
 		return false
 	}
 	if !common.StringsContains(channel.GetGroups(), group) || !common.StringsContains(channel.GetModels(), modelName) {
 		return false
 	}
-	if channel.Type != constant.ChannelTypeAdvancedCustom {
-		return true
+	if channel.Type == constant.ChannelTypeAdvancedCustom {
+		config := channel.GetOtherSettings().AdvancedCustom
+		if config == nil || !config.SupportsPathForModel(requestPath, modelName) {
+			return false
+		}
 	}
-	config := channel.GetOtherSettings().AdvancedCustom
-	return config != nil && config.SupportsPathForModel(requestPath, modelName)
+	plan, err := service.PlanChannelProtocolRoute(channel, modelName, requestPath, stream)
+	if err != nil {
+		return false
+	}
+	_, _, _, isTextProtocol := service.ResolveClientTextProtocol(requestPath)
+	return !isTextProtocol || plan != nil
 }
 
 // usedChannelIDSet 返回已实际发送过上游请求的渠道集合。
