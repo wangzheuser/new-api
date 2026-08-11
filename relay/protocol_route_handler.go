@@ -210,7 +210,7 @@ func handleConvertedTextStream(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	scannerOptions := helper.StreamScannerOptions{
 		RequireExplicitTerminal: plan.UpstreamRelayFormat == types.RelayFormatOpenAIResponses ||
-			(plan.ClientRelayFormat == types.RelayFormatOpenAIResponses && plan.UpstreamRelayFormat == types.RelayFormatOpenAI),
+			plan.UpstreamRelayFormat == types.RelayFormatOpenAI,
 	}
 	helper.StreamScannerHandlerWithOptions(c, resp, info, scannerOptions, func(data string, sr *helper.StreamResult) {
 		if streamErr != nil {
@@ -248,17 +248,7 @@ func handleConvertedTextStream(c *gin.Context, info *relaycommon.RelayInfo, resp
 			}
 		}
 		if chatChunk, ok := chunk.(*dto.ChatCompletionsStreamResponse); ok {
-			for _, choice := range chatChunk.Choices {
-				if choice.FinishReason == nil || strings.TrimSpace(*choice.FinishReason) == "" {
-					continue
-				}
-				terminalStatus, _ := relayconvert.ResponsesStatusFromChatFinishReason(*choice.FinishReason)
-				if terminalStatus == "" {
-					terminalStatus = "completed"
-				}
-				sr.MarkTerminal("chat.finish_reason", terminalStatus)
-				break
-			}
+			markChatStreamTerminal(sr, chatChunk)
 		}
 	})
 	if streamErr != nil {
@@ -326,7 +316,9 @@ func HandleNativeTextResponse(c *gin.Context, info *relaycommon.RelayInfo, resp 
 	}
 	var streamErr *types.NewAPIError
 	var usageText strings.Builder
-	scannerOptions := helper.StreamScannerOptions{RequireExplicitTerminal: format == types.RelayFormatOpenAIResponses}
+	scannerOptions := helper.StreamScannerOptions{
+		RequireExplicitTerminal: format == types.RelayFormatOpenAIResponses || format == types.RelayFormatOpenAI,
+	}
 	helper.StreamScannerHandlerWithOptions(c, resp, info, scannerOptions, func(data string, sr *helper.StreamResult) {
 		chunk, decodeErr := decodeProtocolStreamChunk(format, data)
 		if decodeErr != nil {
@@ -364,6 +356,9 @@ func HandleNativeTextResponse(c *gin.Context, info *relaycommon.RelayInfo, resp 
 				sr.DoneWithTerminal(responseEvent.Type, terminalStatus)
 			}
 		}
+		if chatChunk, ok := chunk.(*dto.ChatCompletionsStreamResponse); ok {
+			markChatStreamTerminal(sr, chatChunk)
+		}
 	})
 	if streamErr != nil {
 		return nil, streamErr
@@ -379,6 +374,25 @@ func HandleNativeTextResponse(c *gin.Context, info *relaycommon.RelayInfo, resp 
 		text = state.UsageText()
 	}
 	return ensureConvertedUsage(c, info, state.Usage(), text), nil
+}
+
+// markChatStreamTerminal records a semantic Chat Completions terminal without
+// stopping the scanner, because a usage-only chunk or [DONE] may follow it.
+func markChatStreamTerminal(sr *helper.StreamResult, chunk *dto.ChatCompletionsStreamResponse) {
+	if sr == nil || chunk == nil {
+		return
+	}
+	for _, choice := range chunk.Choices {
+		if choice.FinishReason == nil || strings.TrimSpace(*choice.FinishReason) == "" {
+			continue
+		}
+		terminalStatus, _ := relayconvert.ResponsesStatusFromChatFinishReason(*choice.FinishReason)
+		if terminalStatus == "" {
+			terminalStatus = "completed"
+		}
+		sr.MarkTerminal("chat.finish_reason", terminalStatus)
+		return
+	}
 }
 
 func validateNativeTextResponse(format types.RelayFormat, response any) error {

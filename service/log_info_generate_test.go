@@ -26,6 +26,7 @@ func TestAppendStreamStatusIncludesProtocolTerminalAndTransportEnd(t *testing.T)
 	streamInfo, ok := other["stream_status"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, "error", streamInfo["status"])
+	assert.Equal(t, "streaming", streamInfo["phase"])
 	assert.Equal(t, "handler_stop", streamInfo["end_reason"])
 	assert.Equal(t, "mid stream aborted", streamInfo["end_error"])
 	assert.Equal(t, 7, streamInfo["received_event_count"])
@@ -46,7 +47,22 @@ func TestAppendStreamStatusMarksUnexpectedEOFWithoutTerminal(t *testing.T) {
 	streamInfo, ok := other["stream_status"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, "error", streamInfo["status"])
+	assert.Equal(t, "streaming", streamInfo["phase"])
 	assert.Equal(t, "unexpected_eof", streamInfo["end_reason"])
 	assert.Equal(t, false, streamInfo["terminal_seen"])
 	assert.NotContains(t, streamInfo, "terminal_event")
+}
+
+func TestAppendStreamStatusMarksPreStreamFailure(t *testing.T) {
+	other := map[string]interface{}{}
+
+	AppendStreamStatus(&relaycommon.RelayInfo{IsStream: true}, other)
+
+	streamInfo, ok := other["stream_status"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "error", streamInfo["status"])
+	assert.Equal(t, "pre_stream", streamInfo["phase"])
+	assert.Equal(t, "not_started", streamInfo["end_reason"])
+	assert.Equal(t, 0, streamInfo["received_event_count"])
+	assert.Equal(t, false, streamInfo["terminal_seen"])
 }

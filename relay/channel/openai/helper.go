@@ -107,22 +107,42 @@ func ProcessStreamResponse(streamResponse dto.ChatCompletionsStreamResponse, res
 	return nil
 }
 
-func processTokenData(relayMode int, data string, responseTextBuilder *strings.Builder, toolCount *int) error {
+// processTokenData accumulates usage text and returns any semantic terminal
+// carried by an OpenAI-compatible stream chunk.
+func processTokenData(relayMode int, data string, responseTextBuilder *strings.Builder, toolCount *int) (string, string, error) {
 	switch relayMode {
 	case relayconstant.RelayModeChatCompletions:
 		var streamResponse dto.ChatCompletionsStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
-			return err
+			return "", "", err
 		}
-		return ProcessStreamResponse(streamResponse, responseTextBuilder, toolCount)
+		if err := ProcessStreamResponse(streamResponse, responseTextBuilder, toolCount); err != nil {
+			return "", "", err
+		}
+		for _, choice := range streamResponse.Choices {
+			if choice.FinishReason == nil || strings.TrimSpace(*choice.FinishReason) == "" {
+				continue
+			}
+			terminalStatus, _ := relayconvert.ResponsesStatusFromChatFinishReason(*choice.FinishReason)
+			if terminalStatus == "" {
+				terminalStatus = "completed"
+			}
+			return "chat.finish_reason", terminalStatus, nil
+		}
 	case relayconstant.RelayModeCompletions:
 		var streamResponse dto.CompletionsStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
-			return err
+			return "", "", err
 		}
 		processCompletionsStreamResponse(streamResponse, responseTextBuilder)
+		for _, choice := range streamResponse.Choices {
+			if strings.TrimSpace(choice.FinishReason) == "" {
+				continue
+			}
+			return "completion.finish_reason", "completed", nil
+		}
 	}
-	return nil
+	return "", "", nil
 }
 
 func processCompletionsStreamResponse(streamResponse dto.CompletionsStreamResponse, responseTextBuilder *strings.Builder) {

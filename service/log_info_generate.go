@@ -200,7 +200,17 @@ func appendParamOverrideInfo(relayInfo *relaycommon.RelayInfo, other map[string]
 
 // AppendStreamStatus adds protocol terminal and transport end details to a log payload.
 func AppendStreamStatus(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
-	if relayInfo == nil || other == nil || !relayInfo.IsStream || relayInfo.StreamStatus == nil {
+	if relayInfo == nil || other == nil || !relayInfo.IsStream {
+		return
+	}
+	if relayInfo.StreamStatus == nil {
+		other["stream_status"] = map[string]interface{}{
+			"status":               "error",
+			"phase":                "pre_stream",
+			"end_reason":           "not_started",
+			"received_event_count": relayInfo.ReceivedResponseCount,
+			"terminal_seen":        false,
+		}
 		return
 	}
 	ss := relayInfo.StreamStatus
@@ -213,6 +223,7 @@ func AppendStreamStatus(relayInfo *relaycommon.RelayInfo, other map[string]inter
 	}
 	streamInfo := map[string]interface{}{
 		"status":               status,
+		"phase":                "streaming",
 		"end_reason":           string(reason),
 		"received_event_count": relayInfo.ReceivedResponseCount,
 		"terminal_seen":        terminalEvent != "",

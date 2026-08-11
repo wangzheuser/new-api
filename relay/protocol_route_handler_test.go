@@ -266,6 +266,74 @@ func TestHandleNativeResponsesStreamRecordsFailedTerminal(t *testing.T) {
 	assert.Equal(t, "failed", status)
 }
 
+func TestHandleNativeChatStreamRejectsEOFMissingTerminal(t *testing.T) {
+	oldStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldStreamingTimeout })
+
+	body := strings.Join([]string{
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1,"model":"MODEL_X","choices":[{"index":0,"delta":{"content":"first"},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1,"model":"MODEL_X","choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":null}]}`,
+		``,
+	}, "\n")
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	info := &relaycommon.RelayInfo{
+		IsStream:    true,
+		DisablePing: true,
+		RelayFormat: types.RelayFormatOpenAI,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "MODEL_X"},
+	}
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}
+
+	usage, apiError := HandleNativeTextResponse(c, info, resp, types.RelayFormatOpenAI, true)
+
+	assert.Nil(t, usage)
+	require.NotNil(t, apiError)
+	assert.True(t, types.IsSkipRetryError(apiError))
+	assert.NotContains(t, recorder.Body.String(), "data: [DONE]")
+	reason, endErr := info.StreamStatus.End()
+	assert.Equal(t, relaycommon.StreamEndReasonUnexpectedEOF, reason)
+	assert.EqualError(t, endErr, "stream ended before terminal event")
+}
+
+func TestHandleNativeChatStreamAcceptsFinishReasonWithoutDoneMarker(t *testing.T) {
+	oldStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldStreamingTimeout })
+
+	body := strings.Join([]string{
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1,"model":"MODEL_X","choices":[{"index":0,"delta":{"content":"complete"},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1,"model":"MODEL_X","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`,
+		``,
+	}, "\n")
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	info := &relaycommon.RelayInfo{
+		IsStream:    true,
+		DisablePing: true,
+		RelayFormat: types.RelayFormatOpenAI,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "MODEL_X"},
+	}
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}
+
+	usage, apiError := HandleNativeTextResponse(c, info, resp, types.RelayFormatOpenAI, true)
+
+	require.Nil(t, apiError)
+	require.NotNil(t, usage)
+	assert.Equal(t, 3, usage.TotalTokens)
+	assert.Contains(t, recorder.Body.String(), `"finish_reason":"stop"`)
+	assert.Contains(t, recorder.Body.String(), "data: [DONE]")
+	reason, endErr := info.StreamStatus.End()
+	assert.Equal(t, relaycommon.StreamEndReasonDone, reason)
+	assert.NoError(t, endErr)
+	event, status := info.StreamStatus.Terminal()
+	assert.Equal(t, "chat.finish_reason", event)
+	assert.Equal(t, "completed", status)
+}
+
 func TestExecuteConvertedTextRoutePreservesEndpointMismatchBeforeStatusMapping(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	service.InitHttpClient()
