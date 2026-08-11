@@ -89,14 +89,15 @@ const (
 )
 
 type NewAPIError struct {
-	Err            error
-	RelayError     any
-	skipRetry      bool
-	recordErrorLog *bool
-	errorType      ErrorType
-	errorCode      ErrorCode
-	StatusCode     int
-	Metadata       json.RawMessage
+	Err                error
+	RelayError         any
+	skipRetry          bool
+	clientErrorWritten bool
+	recordErrorLog     *bool
+	errorType          ErrorType
+	errorCode          ErrorCode
+	StatusCode         int
+	Metadata           json.RawMessage
 }
 
 // Unwrap enables errors.Is / errors.As to work with NewAPIError by exposing the underlying error.
@@ -379,9 +380,24 @@ func IsSkipRetryError(err *NewAPIError) bool {
 	return err.skipRetry
 }
 
+// IsClientErrorWritten reports whether the stream already forwarded an upstream error event.
+func IsClientErrorWritten(err *NewAPIError) bool {
+	if err == nil {
+		return false
+	}
+	return err.clientErrorWritten
+}
+
 func ErrOptionWithSkipRetry() NewAPIErrorOptions {
 	return func(e *NewAPIError) {
 		e.skipRetry = true
+	}
+}
+
+// ErrOptionWithClientErrorWritten marks an error already emitted to the downstream stream.
+func ErrOptionWithClientErrorWritten() NewAPIErrorOptions {
+	return func(e *NewAPIError) {
+		e.clientErrorWritten = true
 	}
 }
 

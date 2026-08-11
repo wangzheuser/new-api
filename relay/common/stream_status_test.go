@@ -140,6 +140,7 @@ func TestStreamStatus_IsNormalEnd(t *testing.T) {
 		{StreamEndReasonTimeout, false},
 		{StreamEndReasonClientGone, false},
 		{StreamEndReasonScannerErr, false},
+		{StreamEndReasonUnexpectedEOF, false},
 		{StreamEndReasonPanic, false},
 		{StreamEndReasonPingFail, false},
 		{StreamEndReasonNone, false},
@@ -173,6 +174,19 @@ func TestStreamStatus_Summary(t *testing.T) {
 	summary2 := s2.Summary()
 	assert.Contains(t, summary2, "reason=timeout")
 	assert.Contains(t, summary2, "soft_errors=2")
+}
+
+func TestStreamStatus_Terminal(t *testing.T) {
+	t.Parallel()
+	s := NewStreamStatus()
+
+	s.SetTerminal("response.incomplete", "incomplete")
+	event, status := s.Terminal()
+
+	assert.Equal(t, "response.incomplete", event)
+	assert.Equal(t, "incomplete", status)
+	assert.Contains(t, s.Summary(), `terminal_event="response.incomplete"`)
+	assert.Contains(t, s.Summary(), `terminal_status="incomplete"`)
 }
 
 func TestStreamStatus_Summary_NilSafe(t *testing.T) {

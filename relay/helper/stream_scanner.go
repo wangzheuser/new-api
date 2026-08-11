@@ -33,6 +33,11 @@ const (
 	streamWriteTimeout = 30 * time.Second
 )
 
+// StreamScannerOptions controls how a stream without an explicit terminal marker is classified.
+type StreamScannerOptions struct {
+	RequireExplicitTerminal bool
+}
+
 func getScannerBufferSize() int {
 	if constant.StreamScannerMaxBufferMB > 0 {
 		return constant.StreamScannerMaxBufferMB << 20
@@ -74,7 +79,13 @@ func ExtendWriteDeadline(c *gin.Context) {
 	_ = http.NewResponseController(c.Writer).SetWriteDeadline(time.Now().Add(streamWriteTimeout))
 }
 
+// StreamScannerHandler scans an SSE response with legacy EOF-compatible semantics.
 func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo, dataHandler func(data string, sr *StreamResult)) {
+	StreamScannerHandlerWithOptions(c, resp, info, StreamScannerOptions{}, dataHandler)
+}
+
+// StreamScannerHandlerWithOptions scans an SSE response and applies the requested terminal policy.
+func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo, options StreamScannerOptions, dataHandler func(data string, sr *StreamResult)) {
 
 	if resp == nil || dataHandler == nil {
 		return
@@ -96,6 +107,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		wg          sync.WaitGroup // 用于等待所有 goroutine 退出
 		cleanupOnce sync.Once
 		stopOnce    sync.Once
+		scanErr     error
 	)
 
 	stop := func() {
@@ -274,6 +286,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 					return
 				}
 			} else {
+				info.StreamStatus.SetTerminal("[DONE]", "completed")
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
 				logger.LogDebug(c, "received [DONE], stopping scanner")
 				return
@@ -282,11 +295,9 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 
 		if err := scanner.Err(); err != nil {
 			if err != io.EOF {
-				logger.LogError(c, "scanner error: "+err.Error())
-				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, err)
+				scanErr = err
 			}
 		}
-		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonEOF, nil)
 	})
 
 	// 主循环等待完成或超时
@@ -302,6 +313,25 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	}
 
 	cleanup()
+	// Wait for the data handler to drain buffered events before classifying EOF.
+	// A terminal event can be queued immediately before the upstream closes.
+	if !info.StreamStatus.HasEnded() {
+		switch {
+		case scanErr != nil:
+			logger.LogError(c, "scanner error: "+scanErr.Error())
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, scanErr)
+		case options.RequireExplicitTerminal:
+			terminalEvent, _ := info.StreamStatus.Terminal()
+			if terminalEvent != "" {
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
+			} else {
+				err := fmt.Errorf("stream ended before terminal event")
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonUnexpectedEOF, err)
+			}
+		default:
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonEOF, nil)
+		}
+	}
 	if info.StreamStatus.IsNormalEnd() && !info.StreamStatus.HasErrors() {
 		logger.LogInfo(c, fmt.Sprintf("stream ended: %s", info.StreamStatus.Summary()))
 	} else {

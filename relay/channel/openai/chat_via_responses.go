@@ -121,14 +121,12 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 					finalResponse.Status = []byte(`"incomplete"`)
 				}
 			}
-		case "response.failed", "response.error":
-			if streamResp.Response != nil {
-				if oaiErr := streamResp.Response.GetOpenAIError(); oaiErr != nil && oaiErr.Type != "" {
-					streamErr = types.WithOpenAIError(*oaiErr, http.StatusInternalServerError)
-					break
-				}
+		case "error", "response.failed", "response.error", "response.cancelled":
+			if oaiErr := streamResp.GetOpenAIError(); oaiErr != nil {
+				streamErr = types.WithOpenAIError(*oaiErr, http.StatusBadGateway)
+				break
 			}
-			streamErr = types.NewOpenAIError(fmt.Errorf("responses stream error: %s", streamResp.Type), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			streamErr = types.NewOpenAIError(fmt.Errorf("responses stream error: %s", streamResp.Type), types.ErrorCodeBadResponse, http.StatusBadGateway)
 		}
 		if streamErr != nil || finalResponse != nil {
 			break
@@ -141,12 +139,11 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	if finalResponse == nil {
-		finalResponse = &dto.OpenAIResponsesResponse{
-			ID:        helper.GetResponseID(c),
-			CreatedAt: int(time.Now().Unix()),
-			Model:     info.UpstreamModelName,
-			Status:    []byte(`"completed"`),
-		}
+		return nil, types.NewOpenAIError(
+			fmt.Errorf("responses stream ended before terminal event"),
+			types.ErrorCodeBadResponse,
+			http.StatusBadGateway,
+		)
 	}
 	accumulator.SupplementResponseOutput(finalResponse)
 
@@ -267,7 +264,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 	}
 
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+	helper.StreamScannerHandlerWithOptions(c, resp, info, helper.StreamScannerOptions{RequireExplicitTerminal: true}, func(data string, sr *helper.StreamResult) {
 		if streamErr != nil {
 			sr.Stop(streamErr)
 			return
@@ -276,20 +273,19 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		var streamResp dto.ResponsesStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResp); err != nil {
 			logger.LogError(c, "failed to unmarshal responses stream event: "+err.Error())
-			sr.Error(err)
+			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+			sr.Stop(streamErr)
 			return
 		}
 
-		if streamResp.Type == "response.error" || streamResp.Type == "response.failed" {
-			if streamResp.Response != nil {
-				if oaiErr := streamResp.Response.GetOpenAIError(); oaiErr != nil && oaiErr.Type != "" {
-					streamErr = types.WithOpenAIError(*oaiErr, http.StatusInternalServerError)
-					sr.Stop(streamErr)
-					return
-				}
+		if streamResp.Type == "error" || streamResp.Type == "response.error" || streamResp.Type == "response.failed" || streamResp.Type == "response.cancelled" {
+			if oaiErr := streamResp.GetOpenAIError(); oaiErr != nil {
+				streamErr = types.WithOpenAIError(*oaiErr, http.StatusBadGateway)
+				sr.StopWithTerminal(streamResp.Type, "failed", streamErr)
+				return
 			}
-			streamErr = types.NewOpenAIError(fmt.Errorf("responses stream error: %s", streamResp.Type), types.ErrorCodeBadResponse, http.StatusInternalServerError)
-			sr.Stop(streamErr)
+			streamErr = types.NewOpenAIError(fmt.Errorf("responses stream error: %s", streamResp.Type), types.ErrorCodeBadResponse, http.StatusBadGateway)
+			sr.StopWithTerminal(streamResp.Type, "failed", streamErr)
 			return
 		}
 
@@ -305,10 +301,19 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				return
 			}
 		}
+		switch streamResp.Type {
+		case "response.completed", "response.done":
+			sr.DoneWithTerminal(streamResp.Type, "completed")
+		case "response.incomplete":
+			sr.DoneWithTerminal(streamResp.Type, "incomplete")
+		}
 	})
 
 	if streamErr != nil {
 		return nil, streamErr
+	}
+	if statusErr := helper.StreamStatusError(c, info); statusErr != nil {
+		return nil, statusErr
 	}
 
 	usage := state.Usage()

@@ -51,6 +51,42 @@ func TestWriteRelayErrorResponse_ClaudeCommittedStreamUsesSSEEvent(t *testing.T)
 	assert.Contains(t, recorder.Body.String(), `"message":"upstream timeout"`)
 }
 
+func TestWriteRelayErrorResponse_ResponsesCommittedStreamUsesTypedErrorEvent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	helper.SetEventStreamHeaders(ctx)
+	require.NoError(t, helper.FlushWriter(ctx))
+
+	relayErr := types.NewErrorWithStatusCode(errors.New("stream ended before terminal event"), types.ErrorCodeBadResponse, http.StatusBadGateway)
+	writeRelayErrorResponse(ctx, types.RelayFormatOpenAIResponses, nil, &relaycommon.RelayInfo{IsStream: true}, relayErr)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "event: error\n")
+	assert.Contains(t, recorder.Body.String(), `"type":"error"`)
+	assert.Contains(t, recorder.Body.String(), `"code":"bad_response"`)
+	assert.Contains(t, recorder.Body.String(), `"message":"stream ended before terminal event"`)
+}
+
+func TestWriteRelayErrorResponse_SkipsAlreadyForwardedStreamError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	relayErr := types.NewErrorWithStatusCode(
+		errors.New("already forwarded"),
+		types.ErrorCodeBadResponse,
+		http.StatusBadGateway,
+		types.ErrOptionWithClientErrorWritten(),
+	)
+	writeRelayErrorResponse(ctx, types.RelayFormatOpenAIResponses, nil, &relaycommon.RelayInfo{IsStream: true}, relayErr)
+
+	assert.Empty(t, recorder.Body.String())
+	assert.NotEqual(t, "text/event-stream", recorder.Header().Get("Content-Type"))
+}
+
 func TestWriteRelayErrorResponse_UncommittedResponseKeepsHTTPStatus(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
@@ -78,4 +114,17 @@ func TestWriteRelayErrorResponse_CommittedStreamSkipsWriteAfterClientCancellatio
 	writeRelayErrorResponse(ctx, types.RelayFormatOpenAI, nil, &relaycommon.RelayInfo{IsStream: true}, relayErr)
 
 	assert.Empty(t, recorder.Body.String())
+}
+
+func TestShouldRetryRejectsCommittedStreamEvenForChannelError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	helper.SetEventStreamHeaders(ctx)
+	require.NoError(t, helper.StringData(ctx, `{"type":"response.output_text.delta"}`))
+
+	relayErr := types.NewErrorWithStatusCode(errors.New("channel failed"), types.ErrorCode("channel:test"), http.StatusBadGateway)
+
+	assert.False(t, shouldRetry(ctx, relayErr, 2))
 }

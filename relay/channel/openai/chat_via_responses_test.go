@@ -168,6 +168,44 @@ func TestOaiChatToResponsesStreamHandlerConvertsSSEOrderAndUsage(t *testing.T) {
 	)
 }
 
+func TestOaiChatToResponsesStreamHandlerRejectsMissingDoneMarker(t *testing.T) {
+	body := `data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1710000000,"model":"gpt-test","choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":null}]}` + "\n"
+	c, recorder, resp, info := newResponsesChatTestContext(t, body, true)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	usage, apiError := OaiChatToResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, apiError)
+	require.True(t, types.IsSkipRetryError(apiError))
+	require.Contains(t, recorder.Body.String(), "partial")
+	require.NotContains(t, recorder.Body.String(), "event: response.completed")
+}
+
+func TestOaiResponsesToChatStreamHandlerRejectsMissingTypedTerminal(t *testing.T) {
+	body := `data: {"type":"response.output_text.delta","delta":"partial"}` + "\n"
+	c, recorder, resp, info := newResponsesChatTestContext(t, body, true)
+
+	usage, apiError := OaiResponsesToChatStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, apiError)
+	require.True(t, types.IsSkipRetryError(apiError))
+	require.Contains(t, recorder.Body.String(), "partial")
+}
+
+func TestOaiResponsesToChatBufferedStreamHandlerRejectsMissingTypedTerminal(t *testing.T) {
+	body := `data: {"type":"response.output_text.delta","delta":"partial"}` + "\n"
+	c, recorder, resp, info := newResponsesChatTestContext(t, body, false)
+
+	usage, apiError := OaiResponsesToChatBufferedStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, apiError)
+	require.Equal(t, types.ErrorCodeBadResponse, apiError.GetErrorCode())
+	require.Empty(t, recorder.Body.String())
+}
+
 func requireOrderedSubstrings(t *testing.T, s string, parts ...string) {
 	t.Helper()
 

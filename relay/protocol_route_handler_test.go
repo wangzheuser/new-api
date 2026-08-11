@@ -144,6 +144,128 @@ func TestExecuteConvertedTextRouteResponsesViaChatStream(t *testing.T) {
 	assert.True(t, strings.Contains(body, "event: response.completed"), body)
 }
 
+func TestExecuteConvertedTextRouteResponsesViaChatRejectsMissingDoneMarker(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service.InitHttpClient()
+	oldStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldStreamingTimeout })
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"id\":\"chatcmpl_1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"MODEL_X\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n")
+	}))
+	defer upstream.Close()
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := convertedResponsesViaChatTestInfo(upstream.URL, true)
+	request := &dto.OpenAIResponsesRequest{
+		Model:  "MODEL_X",
+		Input:  json.RawMessage(`[{"role":"user","content":"hello"}]`),
+		Stream: common.GetPointer(true),
+	}
+	adaptor := GetAdaptor(constant.APITypeOpenAI)
+	adaptor.Init(info)
+
+	usage, apiError := executeConvertedTextRoute(c, info, adaptor, request)
+
+	assert.Nil(t, usage)
+	require.NotNil(t, apiError)
+	assert.Equal(t, types.ErrorCodeBadResponse, apiError.GetErrorCode())
+	assert.True(t, types.IsSkipRetryError(apiError))
+	assert.Contains(t, recorder.Body.String(), "partial")
+	assert.NotContains(t, recorder.Body.String(), "event: response.completed")
+	reason, _ := info.StreamStatus.End()
+	assert.Equal(t, relaycommon.StreamEndReasonUnexpectedEOF, reason)
+}
+
+func TestHandleNativeResponsesStreamUsesTypedTerminalWithoutDoneMarker(t *testing.T) {
+	oldStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldStreamingTimeout })
+
+	body := strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"hello"}`,
+		`data: {"type":"response.incomplete","response":{"status":"incomplete","usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}}`,
+		``,
+	}, "\n")
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		IsStream:    true,
+		DisablePing: true,
+		RelayFormat: types.RelayFormatOpenAIResponses,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "MODEL_X"},
+	}
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}
+
+	usage, apiError := HandleNativeTextResponse(c, info, resp, types.RelayFormatOpenAIResponses, true)
+
+	require.Nil(t, apiError)
+	require.NotNil(t, usage)
+	assert.Equal(t, 5, usage.TotalTokens)
+	assert.Contains(t, recorder.Body.String(), "event: response.incomplete")
+	event, status := info.StreamStatus.Terminal()
+	assert.Equal(t, "response.incomplete", event)
+	assert.Equal(t, "incomplete", status)
+}
+
+func TestHandleNativeResponsesStreamRejectsUnexpectedEOF(t *testing.T) {
+	oldStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldStreamingTimeout })
+
+	body := `data: {"type":"response.output_text.delta","delta":"partial"}` + "\n"
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		IsStream:    true,
+		DisablePing: true,
+		RelayFormat: types.RelayFormatOpenAIResponses,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "MODEL_X"},
+	}
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}
+
+	usage, apiError := HandleNativeTextResponse(c, info, resp, types.RelayFormatOpenAIResponses, true)
+
+	assert.Nil(t, usage)
+	require.NotNil(t, apiError)
+	assert.True(t, types.IsSkipRetryError(apiError))
+	reason, _ := info.StreamStatus.End()
+	assert.Equal(t, relaycommon.StreamEndReasonUnexpectedEOF, reason)
+}
+
+func TestHandleNativeResponsesStreamRecordsFailedTerminal(t *testing.T) {
+	oldStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldStreamingTimeout })
+
+	body := `data: {"type":"response.failed","response":{"status":"failed","error":{"type":"server_error","code":"stream_aborted","message":"mid stream aborted"}}}` + "\n"
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		IsStream:    true,
+		DisablePing: true,
+		RelayFormat: types.RelayFormatOpenAIResponses,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "MODEL_X"},
+	}
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}
+
+	usage, apiError := HandleNativeTextResponse(c, info, resp, types.RelayFormatOpenAIResponses, true)
+
+	assert.Nil(t, usage)
+	require.NotNil(t, apiError)
+	assert.ErrorContains(t, apiError, "mid stream aborted")
+	event, status := info.StreamStatus.Terminal()
+	assert.Equal(t, "response.failed", event)
+	assert.Equal(t, "failed", status)
+}
+
 func TestExecuteConvertedTextRoutePreservesEndpointMismatchBeforeStatusMapping(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	service.InitHttpClient()

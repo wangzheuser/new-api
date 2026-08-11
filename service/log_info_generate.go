@@ -124,7 +124,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	appendFinalRequestFormat(relayInfo, other)
 	appendBillingInfo(relayInfo, other)
 	appendParamOverrideInfo(relayInfo, other)
-	appendStreamStatus(relayInfo, other)
+	AppendStreamStatus(relayInfo, other)
 	return other
 }
 
@@ -198,29 +198,37 @@ func appendParamOverrideInfo(relayInfo *relaycommon.RelayInfo, other map[string]
 	other["po"] = relayInfo.ParamOverrideAudit
 }
 
-func appendStreamStatus(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+// AppendStreamStatus adds protocol terminal and transport end details to a log payload.
+func AppendStreamStatus(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
 	if relayInfo == nil || other == nil || !relayInfo.IsStream || relayInfo.StreamStatus == nil {
 		return
 	}
 	ss := relayInfo.StreamStatus
+	reason, endErr := ss.End()
+	terminalEvent, terminalStatus := ss.Terminal()
+	errorCount, errorMessages := ss.ErrorMessages()
 	status := "ok"
-	if !ss.IsNormalEnd() || ss.HasErrors() {
+	if !ss.IsNormalEnd() || ss.HasErrors() || terminalStatus == "failed" {
 		status = "error"
 	}
 	streamInfo := map[string]interface{}{
-		"status":     status,
-		"end_reason": string(ss.EndReason),
+		"status":               status,
+		"end_reason":           string(reason),
+		"received_event_count": relayInfo.ReceivedResponseCount,
+		"terminal_seen":        terminalEvent != "",
 	}
-	if ss.EndError != nil {
-		streamInfo["end_error"] = ss.EndError.Error()
+	if endErr != nil {
+		streamInfo["end_error"] = endErr.Error()
 	}
-	if ss.ErrorCount > 0 {
-		streamInfo["error_count"] = ss.ErrorCount
-		messages := make([]string, 0, len(ss.Errors))
-		for _, e := range ss.Errors {
-			messages = append(messages, e.Message)
-		}
-		streamInfo["errors"] = messages
+	if terminalEvent != "" {
+		streamInfo["terminal_event"] = terminalEvent
+	}
+	if terminalStatus != "" {
+		streamInfo["terminal_status"] = terminalStatus
+	}
+	if errorCount > 0 {
+		streamInfo["error_count"] = errorCount
+		streamInfo["errors"] = errorMessages
 	}
 	other["stream_status"] = streamInfo
 }

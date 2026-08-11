@@ -79,30 +79,45 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	var usage = &dto.Usage{}
 	var responseTextBuilder strings.Builder
+	var streamErr *types.NewAPIError
 
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
-
-		// 检查当前数据是否包含 completed 状态和 usage 信息
+	helper.StreamScannerHandlerWithOptions(c, resp, info, helper.StreamScannerOptions{RequireExplicitTerminal: true}, func(data string, sr *helper.StreamResult) {
+		// 每个事件都必须先完成协议解析，避免把损坏的 SSE 继续下发。
 		var streamResponse dto.ResponsesStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
 			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
-			sr.Error(err)
+			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+			sr.Stop(err)
 			return
 		}
-		sendResponsesStreamData(c, streamResponse, data)
+		if err := sendResponsesStreamData(c, streamResponse, data); err != nil {
+			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+			sr.Stop(err)
+			return
+		}
 		switch streamResponse.Type {
-		case "response.completed":
+		case "error", "response.error", "response.failed", "response.cancelled":
+			oaiError := streamResponse.GetOpenAIError()
+			if oaiError == nil {
+				oaiError = &types.OpenAIError{
+					Message: fmt.Sprintf("responses stream ended with %s", streamResponse.Type),
+					Type:    "upstream_error",
+					Code:    types.ErrorCodeBadResponse,
+				}
+			}
+			streamErr = types.WithOpenAIError(
+				*oaiError,
+				http.StatusBadGateway,
+				types.ErrOptionWithSkipRetry(),
+				types.ErrOptionWithClientErrorWritten(),
+			)
+			sr.StopWithTerminal(streamResponse.Type, "failed", streamErr)
+		case "response.completed", "response.incomplete", "response.done":
 			if streamResponse.Response != nil {
 				if streamResponse.Response.Usage != nil {
-					if streamResponse.Response.Usage.InputTokens != 0 {
-						usage.PromptTokens = streamResponse.Response.Usage.InputTokens
-					}
-					if streamResponse.Response.Usage.OutputTokens != 0 {
-						usage.CompletionTokens = streamResponse.Response.Usage.OutputTokens
-					}
-					if streamResponse.Response.Usage.TotalTokens != 0 {
-						usage.TotalTokens = streamResponse.Response.Usage.TotalTokens
-					}
+					usage.PromptTokens = streamResponse.Response.Usage.InputTokens
+					usage.CompletionTokens = streamResponse.Response.Usage.OutputTokens
+					usage.TotalTokens = streamResponse.Response.Usage.TotalTokens
 					if streamResponse.Response.Usage.InputTokensDetails != nil {
 						usage.PromptTokensDetails.CachedTokens = streamResponse.Response.Usage.InputTokensDetails.CachedTokens
 						usage.PromptTokensDetails.CacheWriteTokens = streamResponse.Response.Usage.InputTokensDetails.CacheWriteTokens
@@ -114,6 +129,11 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					c.Set("image_generation_call_size", streamResponse.Response.GetSize())
 				}
 			}
+			status := "completed"
+			if streamResponse.Type == "response.incomplete" {
+				status = "incomplete"
+			}
+			sr.DoneWithTerminal(streamResponse.Type, status)
 		case "response.output_text.delta":
 			// 处理输出文本
 			responseTextBuilder.WriteString(streamResponse.Delta)
@@ -131,6 +151,13 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			}
 		}
 	})
+
+	if streamErr != nil {
+		return nil, streamErr
+	}
+	if statusErr := helper.StreamStatusError(c, info); statusErr != nil {
+		return nil, statusErr
+	}
 
 	if usage.CompletionTokens == 0 {
 		// 计算输出文本的 token 数量

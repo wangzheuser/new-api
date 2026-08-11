@@ -269,6 +269,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		} else {
 			processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 		}
+		// 流一旦向客户端提交任何字节，切换渠道会拼接两个不相关的响应。
+		if relayInfo.IsStream && c.Writer.Written() {
+			willRetry = false
+		}
 		if willRetry {
 			recordRelayErrorLog(c, relayInfo, newAPIError, "", nil, true)
 		}
@@ -290,12 +294,17 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if relayInfo.LastError == nil {
 			relayInfo.LastError = newAPIError
 		}
-		newAPIError = resolveConfiguredFinalRelayError(c, relayInfo)
+		if !types.IsClientErrorWritten(newAPIError) {
+			newAPIError = resolveConfiguredFinalRelayError(c, relayInfo)
+		}
 	}
 }
 
 // writeRelayErrorResponse 按客户端协议输出错误，已提交的流式响应继续使用 SSE 帧。
 func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, ws *websocket.Conn, relayInfo *relaycommon.RelayInfo, newAPIError *types.NewAPIError) {
+	if newAPIError == nil || types.IsClientErrorWritten(newAPIError) {
+		return
+	}
 	if relayFormat == types.RelayFormatOpenAIRealtime {
 		helper.WssError(c, ws, newAPIError.ToOpenAIError())
 		return
@@ -312,6 +321,24 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, ws *
 				Type:  "error",
 				Error: newAPIError.ToClaudeError(),
 			})
+			return
+		}
+		if relayFormat == types.RelayFormatOpenAIResponses {
+			openAIError := newAPIError.ToOpenAIError()
+			streamError := dto.ResponsesStreamResponse{
+				Type:    "error",
+				Code:    openAIError.Code,
+				Message: openAIError.Message,
+				Param:   openAIError.Param,
+			}
+			data, err := common.Marshal(streamError)
+			if err != nil {
+				logger.LogError(c, "marshal responses stream error failed: "+err.Error())
+				return
+			}
+			if err = helper.ResponseChunkData(c, streamError, string(data)); err != nil {
+				logger.LogError(c, "write responses stream error failed: "+err.Error())
+			}
 			return
 		}
 		if err := helper.ObjectData(c, gin.H{"error": newAPIError.ToOpenAIError()}); err != nil {
@@ -496,6 +523,9 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 	if openaiErr == nil {
 		return false
 	}
+	if c != nil && c.Writer != nil && c.Writer.Written() {
+		return false
+	}
 	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
 		return false
 	}
@@ -609,6 +639,7 @@ func recordRelayErrorLog(c *gin.Context, relayInfo *relaycommon.RelayInfo, err *
 	}
 	service.AppendChannelAffinityAdminInfo(c, adminInfo)
 	service.AppendContextFallbackAdminInfo(relayInfo, adminInfo)
+	service.AppendStreamStatus(relayInfo, other)
 	if rawError != nil {
 		adminInfo["upstream_error"] = common.LocalLogPreview(rawError.MaskSensitiveErrorWithStatusCode())
 	}

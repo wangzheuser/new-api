@@ -208,14 +208,24 @@ func handleConvertedTextStream(c *gin.Context, info *relaycommon.RelayInfo, resp
 		return true
 	}
 
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+	scannerOptions := helper.StreamScannerOptions{
+		RequireExplicitTerminal: plan.UpstreamRelayFormat == types.RelayFormatOpenAIResponses ||
+			(plan.ClientRelayFormat == types.RelayFormatOpenAIResponses && plan.UpstreamRelayFormat == types.RelayFormatOpenAI),
+	}
+	helper.StreamScannerHandlerWithOptions(c, resp, info, scannerOptions, func(data string, sr *helper.StreamResult) {
 		if streamErr != nil {
 			sr.Stop(streamErr)
 			return
 		}
 		chunk, decodeErr := decodeProtocolStreamChunk(plan.UpstreamRelayFormat, data)
 		if decodeErr != nil {
-			streamErr = types.NewOpenAIError(decodeErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			streamErr = types.NewOpenAIError(decodeErr, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+			if responseEvent, ok := chunk.(*dto.ResponsesStreamResponse); ok {
+				if terminalStatus, terminal := responsesStreamTerminal(responseEvent); terminal {
+					sr.StopWithTerminal(responseEvent.Type, terminalStatus, streamErr)
+					return
+				}
+			}
 			sr.Stop(streamErr)
 			return
 		}
@@ -232,9 +242,30 @@ func handleConvertedTextStream(c *gin.Context, info *relaycommon.RelayInfo, resp
 				return
 			}
 		}
+		if responseEvent, ok := chunk.(*dto.ResponsesStreamResponse); ok {
+			if terminalStatus, terminal := responsesStreamTerminal(responseEvent); terminal {
+				sr.DoneWithTerminal(responseEvent.Type, terminalStatus)
+			}
+		}
+		if chatChunk, ok := chunk.(*dto.ChatCompletionsStreamResponse); ok {
+			for _, choice := range chatChunk.Choices {
+				if choice.FinishReason == nil || strings.TrimSpace(*choice.FinishReason) == "" {
+					continue
+				}
+				terminalStatus, _ := relayconvert.ResponsesStatusFromChatFinishReason(*choice.FinishReason)
+				if terminalStatus == "" {
+					terminalStatus = "completed"
+				}
+				sr.MarkTerminal("chat.finish_reason", terminalStatus)
+				break
+			}
+		}
 	})
 	if streamErr != nil {
 		return nil, streamErr
+	}
+	if statusErr := helper.StreamStatusError(c, info); statusErr != nil {
+		return nil, statusErr
 	}
 
 	text := usageText.String()
@@ -295,10 +326,17 @@ func HandleNativeTextResponse(c *gin.Context, info *relaycommon.RelayInfo, resp 
 	}
 	var streamErr *types.NewAPIError
 	var usageText strings.Builder
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+	scannerOptions := helper.StreamScannerOptions{RequireExplicitTerminal: format == types.RelayFormatOpenAIResponses}
+	helper.StreamScannerHandlerWithOptions(c, resp, info, scannerOptions, func(data string, sr *helper.StreamResult) {
 		chunk, decodeErr := decodeProtocolStreamChunk(format, data)
 		if decodeErr != nil {
-			streamErr = types.NewOpenAIError(decodeErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			streamErr = types.NewOpenAIError(decodeErr, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+			if responseEvent, ok := chunk.(*dto.ResponsesStreamResponse); ok {
+				if terminalStatus, terminal := responsesStreamTerminal(responseEvent); terminal {
+					sr.StopWithTerminal(responseEvent.Type, terminalStatus, streamErr)
+					return
+				}
+			}
 			sr.Stop(streamErr)
 			return
 		}
@@ -321,9 +359,17 @@ func HandleNativeTextResponse(c *gin.Context, info *relaycommon.RelayInfo, resp 
 				return
 			}
 		}
+		if responseEvent, ok := chunk.(*dto.ResponsesStreamResponse); ok {
+			if terminalStatus, terminal := responsesStreamTerminal(responseEvent); terminal {
+				sr.DoneWithTerminal(responseEvent.Type, terminalStatus)
+			}
+		}
 	})
 	if streamErr != nil {
 		return nil, streamErr
+	}
+	if statusErr := helper.StreamStatusError(c, info); statusErr != nil {
+		return nil, statusErr
 	}
 	if format == types.RelayFormatOpenAI {
 		helper.Done(c)
@@ -439,25 +485,30 @@ func decodeProtocolResponse(format types.RelayFormat, data []byte, statusCode in
 }
 
 func decodeProtocolStreamChunk(format types.RelayFormat, data string) (any, error) {
-	if payloadErr := decodeProtocolPayloadError([]byte(data)); payloadErr != nil {
-		return nil, payloadErr
+	if format != types.RelayFormatOpenAIResponses {
+		if payloadErr := decodeProtocolPayloadError([]byte(data)); payloadErr != nil {
+			return nil, payloadErr
+		}
+	}
+	switch format {
+	case types.RelayFormatOpenAIResponses:
+		var response dto.ResponsesStreamResponse
+		if err := common.UnmarshalJsonStr(data, &response); err != nil {
+			return nil, err
+		}
+		if terminalStatus, terminal := responsesStreamTerminal(&response); terminal && terminalStatus == "failed" {
+			if openAIError := response.GetOpenAIError(); openAIError != nil && strings.TrimSpace(openAIError.Message) != "" {
+				return &response, fmt.Errorf("responses stream error: %s", openAIError.Message)
+			}
+			return &response, fmt.Errorf("responses stream error: %s", response.Type)
+		}
+		return &response, nil
 	}
 	switch format {
 	case types.RelayFormatOpenAI:
 		var response dto.ChatCompletionsStreamResponse
 		if err := common.UnmarshalJsonStr(data, &response); err != nil {
 			return nil, err
-		}
-		return &response, nil
-	case types.RelayFormatOpenAIResponses:
-		var response dto.ResponsesStreamResponse
-		if err := common.UnmarshalJsonStr(data, &response); err != nil {
-			return nil, err
-		}
-		if (response.Type == "response.error" || response.Type == "response.failed") && response.Response != nil {
-			if openAIError := response.Response.GetOpenAIError(); openAIError != nil {
-				return nil, fmt.Errorf("responses stream error: %s", openAIError.Message)
-			}
 		}
 		return &response, nil
 	case types.RelayFormatClaude:
@@ -477,6 +528,23 @@ func decodeProtocolStreamChunk(format types.RelayFormat, data string) (any, erro
 		return &response, nil
 	default:
 		return nil, fmt.Errorf("unsupported upstream stream format: %s", format)
+	}
+}
+
+// responsesStreamTerminal classifies OpenAI Responses terminal events.
+func responsesStreamTerminal(response *dto.ResponsesStreamResponse) (string, bool) {
+	if response == nil {
+		return "", false
+	}
+	switch response.Type {
+	case "response.completed", "response.done":
+		return "completed", true
+	case "response.incomplete":
+		return "incomplete", true
+	case "error", "response.error", "response.failed", "response.cancelled":
+		return "failed", true
+	default:
+		return "", false
 	}
 }
 

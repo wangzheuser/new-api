@@ -412,6 +412,54 @@ func TestStreamScannerHandler_StreamStatus_EOFWithoutDone(t *testing.T) {
 	assert.True(t, info.StreamStatus.IsNormalEnd())
 }
 
+func TestStreamScannerHandler_StrictModeRejectsEOFWithoutTerminal(t *testing.T) {
+	t.Parallel()
+
+	c, resp, info := setupStreamTest(t, strings.NewReader("data: {\"id\":1}\n"))
+
+	StreamScannerHandlerWithOptions(c, resp, info, StreamScannerOptions{RequireExplicitTerminal: true}, func(data string, sr *StreamResult) {})
+
+	reason, endErr := info.StreamStatus.End()
+	assert.Equal(t, relaycommon.StreamEndReasonUnexpectedEOF, reason)
+	assert.EqualError(t, endErr, "stream ended before terminal event")
+	assert.False(t, info.StreamStatus.IsNormalEnd())
+}
+
+func TestStreamScannerHandler_StrictModeDrainsQueuedTerminalBeforeEOF(t *testing.T) {
+	t.Parallel()
+
+	body := "data: {\"type\":\"response.completed\"}\n"
+	c, resp, info := setupStreamTest(t, strings.NewReader(body))
+
+	StreamScannerHandlerWithOptions(c, resp, info, StreamScannerOptions{RequireExplicitTerminal: true}, func(data string, sr *StreamResult) {
+		sr.DoneWithTerminal("response.completed", "completed")
+	})
+
+	reason, endErr := info.StreamStatus.End()
+	assert.Equal(t, relaycommon.StreamEndReasonDone, reason)
+	assert.NoError(t, endErr)
+	event, status := info.StreamStatus.Terminal()
+	assert.Equal(t, "response.completed", event)
+	assert.Equal(t, "completed", status)
+}
+
+func TestStreamScannerHandler_StrictModeAcceptsMarkedTerminalBeforeEOF(t *testing.T) {
+	t.Parallel()
+
+	c, resp, info := setupStreamTest(t, strings.NewReader("data: {\"finish_reason\":\"stop\"}\n"))
+
+	StreamScannerHandlerWithOptions(c, resp, info, StreamScannerOptions{RequireExplicitTerminal: true}, func(data string, sr *StreamResult) {
+		sr.MarkTerminal("chat.finish_reason", "completed")
+	})
+
+	reason, endErr := info.StreamStatus.End()
+	assert.Equal(t, relaycommon.StreamEndReasonDone, reason)
+	assert.NoError(t, endErr)
+	event, status := info.StreamStatus.Terminal()
+	assert.Equal(t, "chat.finish_reason", event)
+	assert.Equal(t, "completed", status)
+}
+
 func TestStreamScannerHandler_StreamStatus_HandlerStop(t *testing.T) {
 	t.Parallel()
 
