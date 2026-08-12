@@ -9,6 +9,19 @@ function stableStringify(obj) {
 
 const newKeys = {
   en: {
+    'Copy Details': 'Copy Details',
+    'Error Code': 'Error Code',
+    'Failure Information': 'Failure Information',
+    'Full Response': 'Full Response',
+    'Non-streaming': 'Non-streaming',
+    'Reasoning Content': 'Reasoning Content',
+    'Response Content': 'Response Content',
+    'The full response was truncated to 64 KiB.':
+      'The full response was truncated to 64 KiB.',
+    'The model did not return displayable response content.':
+      'The model did not return displayable response content.',
+    'The model did not return separate reasoning content.':
+      'The model did not return separate reasoning content.',
     '{{count}} registration code(s) deleted':
       '{{count}} registration code(s) deleted',
     '{{count}} registration code(s) updated':
@@ -39,6 +52,18 @@ const newKeys = {
     'registration code': 'registration code',
   },
   zh: {
+    'Copy Details': '复制详情',
+    'Error Code': '错误代码',
+    'Failure Information': '失败信息',
+    'Full Response': '完整响应',
+    'Non-streaming': '非流式',
+    'Reasoning Content': '推理内容',
+    'Response Content': '回答内容',
+    'The full response was truncated to 64 KiB.': '完整响应已截断至 64 KiB。',
+    'The model did not return displayable response content.':
+      '模型未返回可显示的回答内容。',
+    'The model did not return separate reasoning content.':
+      '模型未返回单独的推理内容。',
     '{{count}} registration code(s) deleted': '已删除 {{count}} 个注册码',
     '{{count}} registration code(s) updated': '已更新 {{count}} 个注册码',
     'Copy selected registration codes': '复制选中的注册码',
@@ -63,6 +88,18 @@ const newKeys = {
     'registration code': '注册码',
   },
   'zh-TW': {
+    'Copy Details': '複製詳情',
+    'Error Code': '錯誤代碼',
+    'Failure Information': '失敗資訊',
+    'Full Response': '完整回應',
+    'Non-streaming': '非串流',
+    'Reasoning Content': '推理內容',
+    'Response Content': '回答內容',
+    'The full response was truncated to 64 KiB.': '完整回應已截斷至 64 KiB。',
+    'The model did not return displayable response content.':
+      '模型未傳回可顯示的回答內容。',
+    'The model did not return separate reasoning content.':
+      '模型未傳回獨立的推理內容。',
     '{{count}} registration code(s) deleted': '已刪除 {{count}} 個註冊碼',
     '{{count}} registration code(s) updated': '已更新 {{count}} 個註冊碼',
     'Copy selected registration codes': '複製選取的註冊碼',
@@ -87,6 +124,19 @@ const newKeys = {
     'registration code': '註冊碼',
   },
   fr: {
+    'Copy Details': 'Copier les détails',
+    'Error Code': 'Code d’erreur',
+    'Failure Information': 'Informations sur l’échec',
+    'Full Response': 'Réponse complète',
+    'Non-streaming': 'Sans streaming',
+    'Reasoning Content': 'Contenu du raisonnement',
+    'Response Content': 'Contenu de la réponse',
+    'The full response was truncated to 64 KiB.':
+      'La réponse complète a été tronquée à 64 Kio.',
+    'The model did not return displayable response content.':
+      'Le modèle n’a pas renvoyé de contenu de réponse affichable.',
+    'The model did not return separate reasoning content.':
+      'Le modèle n’a pas renvoyé de contenu de raisonnement distinct.',
     '{{count}} registration code(s) deleted':
       '{{count}} code(s) d’inscription supprimé(s)',
     '{{count}} registration code(s) updated':
@@ -120,6 +170,19 @@ const newKeys = {
     'registration code': 'code d’inscription',
   },
   ja: {
+    'Copy Details': '詳細をコピー',
+    'Error Code': 'エラーコード',
+    'Failure Information': '失敗情報',
+    'Full Response': '完全なレスポンス',
+    'Non-streaming': '非ストリーミング',
+    'Reasoning Content': '推論内容',
+    'Response Content': '応答内容',
+    'The full response was truncated to 64 KiB.':
+      '完全なレスポンスは 64 KiB に切り詰められました。',
+    'The model did not return displayable response content.':
+      'モデルは表示可能な応答内容を返しませんでした。',
+    'The model did not return separate reasoning content.':
+      'モデルは個別の推論内容を返しませんでした。',
     '{{count}} registration code(s) deleted':
       '{{count}} 個の登録コードを削除しました',
     '{{count}} registration code(s) updated':
@@ -148,6 +211,19 @@ const newKeys = {
     'registration code': '登録コード',
   },
   ru: {
+    'Copy Details': 'Копировать сведения',
+    'Error Code': 'Код ошибки',
+    'Failure Information': 'Сведения об ошибке',
+    'Full Response': 'Полный ответ',
+    'Non-streaming': 'Непотоковый',
+    'Reasoning Content': 'Содержимое рассуждения',
+    'Response Content': 'Содержимое ответа',
+    'The full response was truncated to 64 KiB.':
+      'Полный ответ был обрезан до 64 КиБ.',
+    'The model did not return displayable response content.':
+      'Модель не вернула отображаемое содержимое ответа.',
+    'The model did not return separate reasoning content.':
+      'Модель не вернула отдельное содержимое рассуждения.',
     '{{count}} registration code(s) deleted':
       'Удалено кодов регистрации: {{count}}',
     '{{count}} registration code(s) updated':
@@ -178,6 +254,19 @@ const newKeys = {
     'registration code': 'код регистрации',
   },
   vi: {
+    'Copy Details': 'Sao chép chi tiết',
+    'Error Code': 'Mã lỗi',
+    'Failure Information': 'Thông tin lỗi',
+    'Full Response': 'Phản hồi đầy đủ',
+    'Non-streaming': 'Không phát trực tuyến',
+    'Reasoning Content': 'Nội dung suy luận',
+    'Response Content': 'Nội dung phản hồi',
+    'The full response was truncated to 64 KiB.':
+      'Phản hồi đầy đủ đã được cắt còn 64 KiB.',
+    'The model did not return displayable response content.':
+      'Mô hình không trả về nội dung phản hồi có thể hiển thị.',
+    'The model did not return separate reasoning content.':
+      'Mô hình không trả về nội dung suy luận riêng.',
     '{{count}} registration code(s) deleted': 'Đã xóa {{count}} mã đăng ký',
     '{{count}} registration code(s) updated':
       'Đã cập nhật {{count}} mã đăng ký',

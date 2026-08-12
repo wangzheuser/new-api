@@ -27,10 +27,10 @@ func RecordConversationLog(c *gin.Context, info *relaycommon.RelayInfo, relayErr
 	if len(snapshot.ClientRequestBody) == 0 && len(snapshot.ClientResponseBody) == 0 {
 		return
 	}
-	clientRequestBody, clientRequestOmitted := sanitizeConversationBody(snapshot.ClientRequestBody)
-	upstreamRequestBody, upstreamRequestOmitted := sanitizeConversationBody(snapshot.UpstreamRequestBody)
-	upstreamResponseBody, upstreamResponseOmitted := sanitizeConversationBody(snapshot.UpstreamResponseBody)
-	clientResponseBody, clientResponseOmitted := sanitizeConversationBody(snapshot.ClientResponseBody)
+	clientRequestBody, clientRequestOmitted := SanitizeConversationBody(snapshot.ClientRequestBody)
+	upstreamRequestBody, upstreamRequestOmitted := SanitizeConversationBody(snapshot.UpstreamRequestBody)
+	upstreamResponseBody, upstreamResponseOmitted := SanitizeConversationBody(snapshot.UpstreamResponseBody)
+	clientResponseBody, clientResponseOmitted := SanitizeConversationBody(snapshot.ClientResponseBody)
 	metadata := map[string]interface{}{
 		"retry_index":                info.RetryIndex,
 		"attempted_channel_ids":      c.GetStringSlice("use_channel"),
@@ -89,8 +89,8 @@ func RecordConversationLog(c *gin.Context, info *relaycommon.RelayInfo, relayErr
 	}
 }
 
-// sanitizeConversationBody normalizes text and removes encoded binary payloads from JSON and SSE bodies.
-func sanitizeConversationBody(body []byte) ([]byte, bool) {
+// SanitizeConversationBody normalizes text and removes encoded binary payloads from JSON and SSE bodies.
+func SanitizeConversationBody(body []byte) ([]byte, bool) {
 	if len(body) == 0 {
 		return body, false
 	}

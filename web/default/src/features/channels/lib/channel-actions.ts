@@ -42,7 +42,11 @@ import {
   updateChannelBalance,
 } from '../api'
 import { CHANNEL_STATUS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../constants'
-import type { ChannelTestResponse, CopyChannelParams } from '../types'
+import type {
+  ChannelTestOutcome,
+  ChannelTestResponse,
+  CopyChannelParams,
+} from '../types'
 
 // ============================================================================
 // Query Keys
@@ -278,14 +282,8 @@ export async function handleTestChannel(
     stream?: boolean
     userPrompt?: string
     silent?: boolean
-  },
-  onTestComplete?: (
-    success: boolean,
-    responseTime?: number,
-    error?: string,
-    errorCode?: string
-  ) => void
-): Promise<void> {
+  }
+): Promise<ChannelTestOutcome> {
   const payload =
     options && (options.testModel || options.endpointType || options.stream)
       ? {
@@ -325,7 +323,11 @@ export async function handleTestChannel(
             : undefined
         )
       }
-      onTestComplete?.(true, responseTime)
+      return {
+        success: true,
+        responseTime,
+        details: response.data,
+      }
     } else {
       const errorMsg = response.message || i18next.t(ERROR_MESSAGES.TEST_FAILED)
       if (!options?.silent) {
@@ -335,7 +337,13 @@ export async function handleTestChannel(
             : errorMsg,
         })
       }
-      onTestComplete?.(false, responseTime, errorMsg, response.error_code)
+      return {
+        success: false,
+        responseTime,
+        error: errorMsg,
+        errorCode: response.error_code,
+        details: response.data,
+      }
     }
   } catch (_error: unknown) {
     const err = _error as { response?: { data?: { message?: string } } }
@@ -347,7 +355,10 @@ export async function handleTestChannel(
         description: errorMsg,
       })
     }
-    onTestComplete?.(false, undefined, errorMsg)
+    return {
+      success: false,
+      error: errorMsg,
+    }
   }
 }
 

@@ -25,9 +25,10 @@ import type {
 import {
   Check,
   CheckCircle2,
+  ChevronDown,
   Copy,
+  Eye,
   Gauge,
-  Info,
   Loader2,
   Settings,
   Trash2,
@@ -60,6 +61,11 @@ import {
 import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -87,6 +93,7 @@ import {
 } from '@/components/ui/tooltip'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { useIsMobile } from '@/hooks/use-mobile'
+import { tryPrettyJson } from '@/lib/utils'
 
 import { updateChannel } from '../../api'
 import {
@@ -96,6 +103,7 @@ import {
 } from '../../lib'
 import type {
   Channel,
+  ChannelTestResponseDetails,
   GetChannelsResponse,
   SearchChannelsResponse,
 } from '../../types'
@@ -122,6 +130,9 @@ type TestResult = {
   completedAt?: number
   error?: string
   errorCode?: string
+  endpointType?: string
+  isStream?: boolean
+  details?: ChannelTestResponseDetails
 }
 
 type BatchProgress = {
@@ -257,12 +268,6 @@ type FailureStatusDisplay = {
   details?: string
 }
 
-type FailureDetailsState = {
-  model: string
-  summary: string
-  details: string
-}
-
 function sleep(ms: number) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, ms))
 }
@@ -330,6 +335,8 @@ function getTestTableColumnClass(columnId: string) {
       return 'w-28 min-w-28 whitespace-nowrap'
     case 'result':
       return 'w-80 min-w-80 max-w-80 whitespace-normal'
+    case 'details':
+      return 'w-24 min-w-24 whitespace-nowrap'
     case 'actions':
       return 'bg-popover w-px whitespace-nowrap'
     default:
@@ -389,8 +396,7 @@ function ChannelTestDialogContent({
   const [isDeleteFailedDialogOpen, setIsDeleteFailedDialogOpen] =
     useState(false)
   const [isDeletingFailed, setIsDeletingFailed] = useState(false)
-  const [failureDetails, setFailureDetails] =
-    useState<FailureDetailsState | null>(null)
+  const [detailsModel, setDetailsModel] = useState<string | null>(null)
   const [pagination, setPagination] = useState({
     pageIndex: 0,
     pageSize: 30,
@@ -451,7 +457,7 @@ function ChannelTestDialogContent({
     setRemovedModels(() => new Set())
     setIsDeleteFailedDialogOpen(false)
     setIsDeletingFailed(false)
-    setFailureDetails(null)
+    setDetailsModel(null)
     setPagination({ pageIndex: 0, pageSize: 30 })
   }, [])
 
@@ -550,7 +556,7 @@ function ChannelTestDialogContent({
   }, [])
 
   const updateTestResult = useCallback((key: string, result: TestResult) => {
-    setFailureDetails((current) => (current?.model === key ? null : current))
+    setDetailsModel((current) => (current === key ? null : current))
     setTestResults((prev) => ({
       ...prev,
       [key]: result,
@@ -623,35 +629,36 @@ function ChannelTestDialogContent({
       markModelTesting(model, true)
       updateTestResult(model, { status: 'testing' })
       let finalResult: TestResult | undefined
+      const resultEndpointType = endpointType
+      const resultIsStream = effectiveStreamTest
 
       try {
-        await handleTestChannel(
-          currentRow.id,
-          {
-            channelName: currentRow.name,
-            testModel: model,
-            endpointType: endpointType === 'auto' ? undefined : endpointType,
-            stream: effectiveStreamTest || undefined,
-            userPrompt: prompt,
-            silent,
-          },
-          (success, responseTime, error, errorCode) => {
-            const completedAt = Date.now()
-            finalResult = {
-              status: success ? 'success' : 'error',
-              responseTime,
-              completedAt,
-              error,
-              errorCode,
-            }
-            updateTestResult(model, finalResult)
-          }
-        )
+        const outcome = await handleTestChannel(currentRow.id, {
+          channelName: currentRow.name,
+          testModel: model,
+          endpointType: endpointType === 'auto' ? undefined : endpointType,
+          stream: effectiveStreamTest || undefined,
+          userPrompt: prompt,
+          silent,
+        })
+        finalResult = {
+          status: outcome.success ? 'success' : 'error',
+          responseTime: outcome.responseTime,
+          completedAt: Date.now(),
+          error: outcome.error,
+          errorCode: outcome.errorCode,
+          endpointType: resultEndpointType,
+          isStream: resultIsStream,
+          details: outcome.details,
+        }
+        updateTestResult(model, finalResult)
       } catch (error: unknown) {
         finalResult = {
           status: 'error',
           completedAt: Date.now(),
           error: error instanceof Error ? error.message : t('Test failed'),
+          endpointType: resultEndpointType,
+          isStream: resultIsStream,
         }
         updateTestResult(model, finalResult)
       } finally {
@@ -722,6 +729,8 @@ function ChannelTestDialogContent({
           status: 'error',
           completedAt: Date.now(),
           error: error instanceof Error ? error.message : t('Test failed'),
+          endpointType,
+          isStream: effectiveStreamTest,
         })
 
         const recordBatchResult = (result: TestResult) => {
@@ -832,6 +841,8 @@ function ChannelTestDialogContent({
     },
     [
       dismissBatchProgressToast,
+      effectiveStreamTest,
+      endpointType,
       refreshChannelLists,
       t,
       testPrompt,
@@ -990,16 +1001,25 @@ function ChannelTestDialogContent({
         cell: ({ row }) => {
           const model = row.original.model
           const result = testResults[model]
+          return <TestResultCell result={result} />
+        },
+        enableSorting: false,
+        size: 320,
+      },
+      {
+        id: 'details',
+        header: t('Details'),
+        cell: ({ row }) => {
+          const model = row.original.model
           return (
-            <TestResultCell
-              result={result}
-              model={model}
-              onOpenDetails={setFailureDetails}
+            <TestDetailsCell
+              result={testResults[model]}
+              onOpen={() => setDetailsModel(model)}
             />
           )
         },
         enableSorting: false,
-        size: 320,
+        size: 96,
       },
       {
         id: 'actions',
@@ -1072,7 +1092,7 @@ function ChannelTestDialogContent({
             <span className='min-w-0 truncate'>{currentRow.name}</span>
           </span>
         }
-        contentClassName='max-h-[90vh] overflow-hidden sm:max-w-4xl'
+        contentClassName='max-h-[90vh] overflow-hidden sm:max-w-5xl'
         contentHeight='auto'
         bodyClassName='space-y-4'
         footer={
@@ -1255,6 +1275,7 @@ function ChannelTestDialogContent({
                     <col className='w-auto' />
                     <col className='w-28' />
                     <col className='w-80' />
+                    <col className='w-24' />
                     <col className='w-px' />
                   </colgroup>
                 }
@@ -1289,11 +1310,12 @@ function ChannelTestDialogContent({
         confirmText={t('Delete')}
         handleConfirm={handleDeleteFailedModels}
       />
-      <FailureDetailsSheet
-        details={failureDetails}
+      <TestDetailsSheet
+        model={detailsModel}
+        result={detailsModel ? testResults[detailsModel] : undefined}
         onOpenChange={(sheetOpen) => {
           if (!sheetOpen) {
-            setFailureDetails(null)
+            setDetailsModel(null)
           }
         }}
       />
@@ -1330,15 +1352,7 @@ function TestStatusCell({ result }: { result?: TestResult }) {
   return <StatusBadge label={t('Failed')} variant='danger' copyable={false} />
 }
 
-function TestResultCell({
-  result,
-  model,
-  onOpenDetails,
-}: {
-  result?: TestResult
-  model: string
-  onOpenDetails: (details: FailureDetailsState) => void
-}) {
+function TestResultCell({ result }: { result?: TestResult }) {
   const { t } = useTranslation()
 
   if (!result || result.status === 'idle') {
@@ -1364,31 +1378,17 @@ function TestResultCell({
     )
   }
 
-  return (
-    <FailureResultContent
-      result={result}
-      model={model}
-      onOpenDetails={onOpenDetails}
-    />
-  )
+  return <FailureResultContent result={result} />
 }
 
-function FailureResultContent({
-  result,
-  model,
-  onOpenDetails,
-}: {
-  result: TestResult
-  model: string
-  onOpenDetails: (details: FailureDetailsState) => void
-}) {
+function FailureResultContent({ result }: { result: TestResult }) {
   const { t } = useTranslation()
   const errorText = result.error?.trim()
   const isModelPriceError = result.errorCode === MODEL_PRICE_ERROR_CODE
   const modelPriceSummary = t(
     'Model price is not configured. Please complete model pricing in settings.'
   )
-  const { summary, details } = getFailureStatusDisplay({
+  const { summary } = getFailureStatusDisplay({
     errorText,
     fallbackSummary: t('Test failed'),
     isModelPriceError,
@@ -1414,88 +1414,264 @@ function FailureResultContent({
             {t('Go to Settings')}
           </Button>
         )}
-        {details && (
-          <Button
-            variant='ghost'
-            size='sm'
-            className='h-7 w-fit px-2 text-xs'
-            aria-haspopup='dialog'
-            onClick={() => onOpenDetails({ model, summary, details })}
-          >
-            <Info className='mr-1 h-3 w-3 shrink-0' />
-            {t('Details')}
-          </Button>
-        )}
       </div>
     </div>
   )
 }
 
-function FailureDetailsSheet({
-  details,
+function TestDetailsCell({
+  result,
+  onOpen,
+}: {
+  result?: TestResult
+  onOpen: () => void
+}) {
+  const { t } = useTranslation()
+  if (!result || result.status === 'idle' || result.status === 'testing') {
+    return <span className='text-muted-foreground text-sm'>-</span>
+  }
+
+  return (
+    <Button
+      variant='ghost'
+      size='sm'
+      className='h-7 w-fit px-2 text-xs'
+      aria-haspopup='dialog'
+      onClick={onOpen}
+    >
+      <Eye className='mr-1 h-3.5 w-3.5 shrink-0' />
+      {t('View')}
+    </Button>
+  )
+}
+
+function TestDetailsSheet({
+  model,
+  result,
   onOpenChange,
 }: {
-  details: FailureDetailsState | null
+  model: string | null
+  result?: TestResult
   onOpenChange: (open: boolean) => void
 }) {
   const { t } = useTranslation()
   const isMobile = useIsMobile()
   const { copiedText, copyToClipboard } = useCopyToClipboard({ notify: false })
+  const isCompleted = result?.status === 'success' || result?.status === 'error'
+  const endpointOption = endpointTypeOptions.find(
+    (option) => option.value === (result?.endpointType ?? 'auto')
+  )
+  const endpointLabel = endpointOption
+    ? t(endpointOption.label)
+    : (result?.endpointType ?? t('Auto detect (default)'))
+  const statusLabel = result?.status === 'success' ? t('Success') : t('Failed')
+  const responseTime =
+    typeof result?.responseTime === 'number'
+      ? formatResponseTime(result.responseTime, t)
+      : '-'
+  const content = result?.details?.content ?? ''
+  const reasoningContent = result?.details?.reasoning_content ?? ''
+  const rawResponse = result?.details?.raw_response ?? ''
+  const failureDisplay = getFailureStatusDisplay({
+    errorText: result?.error?.trim(),
+    fallbackSummary: t('Test failed'),
+    isModelPriceError: result?.errorCode === MODEL_PRICE_ERROR_CODE,
+    modelPriceSummary: t(
+      'Model price is not configured. Please complete model pricing in settings.'
+    ),
+  })
+  const formattedRawResponse = useMemo(
+    () => tryPrettyJson(rawResponse),
+    [rawResponse]
+  )
+  const copyText = useMemo(() => {
+    if (!model || !result) return ''
+
+    const sections = [
+      `${t('Model')}: ${model}`,
+      `${t('Status')}: ${statusLabel}`,
+      `${t('Response Time')}: ${responseTime}`,
+      `${t('Endpoint Type')}: ${endpointLabel}`,
+      `${t('Stream Mode')}: ${result.isStream ? t('Streaming') : t('Non-streaming')}`,
+    ]
+    if (result.error) {
+      sections.push(`${t('Error')}:\n${result.error}`)
+    }
+    if (result.errorCode) {
+      sections.push(`${t('Error Code')}: ${result.errorCode}`)
+    }
+    if (reasoningContent) {
+      sections.push(`${t('Reasoning Content')}:\n${reasoningContent}`)
+    }
+    if (content) {
+      sections.push(`${t('Response Content')}:\n${content}`)
+    }
+    if (rawResponse) {
+      sections.push(`${t('Full Response')}:\n${rawResponse}`)
+    }
+    return sections.join('\n\n')
+  }, [
+    content,
+    endpointLabel,
+    model,
+    rawResponse,
+    reasoningContent,
+    responseTime,
+    result,
+    statusLabel,
+    t,
+  ])
 
   return (
-    <Sheet open={Boolean(details)} onOpenChange={onOpenChange}>
+    <Sheet open={Boolean(model && isCompleted)} onOpenChange={onOpenChange}>
       <SheetContent
         side={isMobile ? 'bottom' : 'right'}
         className={
           isMobile
             ? sideDrawerContentClassName('h-auto max-h-[85dvh] rounded-t-xl')
-            : sideDrawerContentClassName('sm:max-w-lg')
+            : sideDrawerContentClassName('sm:max-w-xl')
         }
       >
-        {details && (
+        {model && result && isCompleted && (
           <>
             <SheetHeader className={sideDrawerHeaderClassName('sm:px-5')}>
               <SheetTitle className='pr-10'>{t('Details')}</SheetTitle>
               <SheetDescription className='pr-10 wrap-break-word'>
-                {details.model}
+                {model}
               </SheetDescription>
             </SheetHeader>
             <div className={sideDrawerFormClassName('gap-4 sm:px-5')}>
-              <section className='space-y-1'>
-                <div className='text-muted-foreground text-xs font-medium'>
-                  {t('Model')}
+              <section className='grid grid-cols-2 gap-3 rounded-lg border p-3'>
+                <div className='col-span-2 space-y-1'>
+                  <div className='text-muted-foreground text-xs font-medium'>
+                    {t('Model')}
+                  </div>
+                  <p className='text-sm font-medium break-all'>{model}</p>
                 </div>
-                <p className='text-sm font-medium break-all'>{details.model}</p>
-              </section>
-              <section className='space-y-1'>
-                <div className='text-muted-foreground text-xs font-medium'>
-                  {t('Failed')}
+                <div className='space-y-1'>
+                  <div className='text-muted-foreground text-xs font-medium'>
+                    {t('Status')}
+                  </div>
+                  <StatusBadge
+                    label={statusLabel}
+                    variant={result.status === 'success' ? 'success' : 'danger'}
+                    copyable={false}
+                  />
                 </div>
-                <p className='text-muted-foreground text-sm leading-relaxed wrap-break-word'>
-                  {details.summary}
-                </p>
-              </section>
-              <section className='space-y-2'>
-                <div className='text-muted-foreground text-xs font-medium'>
-                  {t('Details')}
+                <div className='space-y-1'>
+                  <div className='text-muted-foreground text-xs font-medium'>
+                    {t('Response Time')}
+                  </div>
+                  <p className='text-sm'>{responseTime}</p>
                 </div>
-                <pre className='bg-muted/30 text-muted-foreground m-0 max-w-full rounded-md border p-3 text-xs leading-relaxed wrap-break-word whitespace-pre-wrap'>
-                  {details.details}
-                </pre>
+                <div className='space-y-1'>
+                  <div className='text-muted-foreground text-xs font-medium'>
+                    {t('Endpoint Type')}
+                  </div>
+                  <p className='text-sm leading-snug wrap-break-word'>
+                    {endpointLabel}
+                  </p>
+                </div>
+                <div className='space-y-1'>
+                  <div className='text-muted-foreground text-xs font-medium'>
+                    {t('Stream Mode')}
+                  </div>
+                  <p className='text-sm'>
+                    {result.isStream ? t('Streaming') : t('Non-streaming')}
+                  </p>
+                </div>
               </section>
+
+              {result.status === 'error' && (
+                <section className='space-y-2'>
+                  <div className='text-muted-foreground text-xs font-medium'>
+                    {t('Failure Information')}
+                  </div>
+                  <p className='text-destructive text-sm leading-relaxed wrap-break-word'>
+                    {failureDisplay.summary}
+                  </p>
+                  {failureDisplay.details && (
+                    <pre className='bg-destructive/5 text-destructive m-0 max-w-full rounded-md border p-3 text-xs leading-relaxed wrap-break-word whitespace-pre-wrap'>
+                      {failureDisplay.details}
+                    </pre>
+                  )}
+                  {result.errorCode && (
+                    <p className='text-muted-foreground text-xs break-all'>
+                      {t('Error Code')}: {result.errorCode}
+                    </p>
+                  )}
+                </section>
+              )}
+
+              {result.status === 'success' && (
+                <>
+                  <section className='space-y-2'>
+                    <div className='text-muted-foreground text-xs font-medium'>
+                      {t('Reasoning Content')}
+                    </div>
+                    {reasoningContent ? (
+                      <pre className='bg-muted/30 text-muted-foreground m-0 max-h-64 max-w-full overflow-auto rounded-md border p-3 text-xs leading-relaxed wrap-break-word whitespace-pre-wrap'>
+                        {reasoningContent}
+                      </pre>
+                    ) : (
+                      <p className='text-muted-foreground rounded-md border border-dashed p-3 text-sm'>
+                        {t(
+                          'The model did not return separate reasoning content.'
+                        )}
+                      </p>
+                    )}
+                  </section>
+
+                  <section className='space-y-2'>
+                    <div className='text-muted-foreground text-xs font-medium'>
+                      {t('Response Content')}
+                    </div>
+                    {content ? (
+                      <pre className='bg-muted/30 text-foreground m-0 max-h-64 max-w-full overflow-auto rounded-md border p-3 text-sm leading-relaxed wrap-break-word whitespace-pre-wrap'>
+                        {content}
+                      </pre>
+                    ) : (
+                      <p className='text-muted-foreground rounded-md border border-dashed p-3 text-sm'>
+                        {t(
+                          'The model did not return displayable response content.'
+                        )}
+                      </p>
+                    )}
+                  </section>
+                </>
+              )}
+
+              {rawResponse && (
+                <Collapsible className='rounded-lg border'>
+                  <CollapsibleTrigger className='flex w-full cursor-pointer items-center justify-between gap-3 px-3 py-2.5 text-left text-sm font-medium'>
+                    <span>{t('Full Response')}</span>
+                    <ChevronDown className='text-muted-foreground size-4 shrink-0' />
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className='border-t p-3'>
+                    {result.details?.raw_response_truncated && (
+                      <p className='mb-2 text-xs text-amber-600 dark:text-amber-400'>
+                        {t('The full response was truncated to 64 KiB.')}
+                      </p>
+                    )}
+                    <pre className='bg-muted/30 text-muted-foreground m-0 max-h-96 max-w-full overflow-auto rounded-md p-3 font-mono text-xs leading-relaxed whitespace-pre'>
+                      {formattedRawResponse}
+                    </pre>
+                  </CollapsibleContent>
+                </Collapsible>
+              )}
             </div>
             <SheetFooter className={sideDrawerFooterClassName('sm:px-5')}>
               <Button
                 variant='outline'
                 className='w-full sm:w-auto'
-                onClick={() => copyToClipboard(details.details)}
+                onClick={() => copyToClipboard(copyText)}
               >
-                {copiedText === details.details ? (
+                {copiedText === copyText ? (
                   <Check className='mr-2 h-4 w-4 text-green-600' />
                 ) : (
                   <Copy className='mr-2 h-4 w-4' />
                 )}
-                {t('Copy')}
+                {t('Copy Details')}
               </Button>
             </SheetFooter>
           </>

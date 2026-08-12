@@ -25,7 +25,7 @@ func TestSanitizeConversationBody(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			sanitized, changed := sanitizeConversationBody([]byte(test.body))
+			sanitized, changed := SanitizeConversationBody([]byte(test.body))
 			assert.Equal(t, test.changed, changed)
 			assert.Contains(t, string(sanitized), test.contains)
 			if test.notContains != "" {
@@ -37,7 +37,7 @@ func TestSanitizeConversationBody(t *testing.T) {
 
 // TestSanitizeConversationBodyRepairsInvalidUTF8 protects conversation log persistence on PostgreSQL.
 func TestSanitizeConversationBodyRepairsInvalidUTF8(t *testing.T) {
-	sanitized, changed := sanitizeConversationBody([]byte{'h', 'i', 0xe4})
+	sanitized, changed := SanitizeConversationBody([]byte{'h', 'i', 0xe4})
 
 	assert.False(t, changed)
 	assert.True(t, utf8.Valid(sanitized))

@@ -219,10 +219,24 @@ export interface ChannelTestResponse {
   message?: string
   error_code?: string
   time?: number
-  data?: {
-    response_time?: number
-    error?: string
-  }
+  data?: ChannelTestResponseDetails
+}
+
+export interface ChannelTestResponseDetails {
+  response_time?: number
+  error?: string
+  content?: string
+  reasoning_content?: string
+  raw_response?: string
+  raw_response_truncated?: boolean
+}
+
+export interface ChannelTestOutcome {
+  success: boolean
+  responseTime?: number
+  error?: string
+  errorCode?: string
+  details?: ChannelTestResponseDetails
 }
 
 export interface ChannelConnectionTestRequest {

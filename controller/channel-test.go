@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -37,11 +38,19 @@ import (
 )
 
 type testResult struct {
-	context        *gin.Context
-	localErr       error
-	newAPIError    *types.NewAPIError
-	responseBody   []byte
-	upstreamStatus int
+	context               *gin.Context
+	localErr              error
+	newAPIError           *types.NewAPIError
+	responseBody          []byte
+	responseBodyTruncated bool
+	upstreamStatus        int
+}
+
+type channelTestResponseDetails struct {
+	Content              string `json:"content,omitempty"`
+	ReasoningContent     string `json:"reasoning_content,omitempty"`
+	RawResponse          string `json:"raw_response"`
+	RawResponseTruncated bool   `json:"raw_response_truncated"`
 }
 
 type channelTestOptions struct {
@@ -69,6 +78,7 @@ type channelConnectionTestRequest struct {
 
 const maxChannelPromptTestUserPromptBytes = 16 * 1024
 const customChannelTestMaxOutputTokens = 1024
+const maxChannelTestResponseDetailBytes = 64 * 1024
 
 // getChannelConnectionTestMaxOutputTokens returns the expanded output limit for a custom prompt.
 func getChannelConnectionTestMaxOutputTokens(userPrompt string) uint {
@@ -575,7 +585,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, op
 		}
 	}
 	result := w.Result()
-	respBody, err := readTestResponseBody(result.Body, options.isStream)
+	respBody, responseBodyTruncated, err := readTestResponseBody(result.Body, options.isStream)
 	if err != nil {
 		return testResult{
 			context:        c,
@@ -614,11 +624,12 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, op
 	})
 	common.SysLog(fmt.Sprintf("testing channel #%d completed, response_bytes=%d", channel.Id, len(respBody)))
 	return testResult{
-		context:        c,
-		localErr:       nil,
-		newAPIError:    nil,
-		responseBody:   respBody,
-		upstreamStatus: http.StatusOK,
+		context:               c,
+		localErr:              nil,
+		newAPIError:           nil,
+		responseBody:          respBody,
+		responseBodyTruncated: responseBodyTruncated,
+		upstreamStatus:        http.StatusOK,
 	}
 }
 
@@ -693,13 +704,21 @@ func coerceTestUsage(usageAny any, isStream bool, estimatePromptTokens int) (*dt
 	}
 }
 
-func readTestResponseBody(body io.ReadCloser, isStream bool) ([]byte, error) {
+func readTestResponseBody(body io.ReadCloser, isStream bool) ([]byte, bool, error) {
 	defer func() { _ = body.Close() }()
-	const maxStreamLogBytes = 8 << 10
-	if isStream {
-		return io.ReadAll(io.LimitReader(body, maxStreamLogBytes))
+	if !isStream {
+		responseBody, err := io.ReadAll(body)
+		return responseBody, false, err
 	}
-	return io.ReadAll(body)
+
+	responseBody, err := io.ReadAll(io.LimitReader(body, maxChannelTestResponseDetailBytes+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if len(responseBody) <= maxChannelTestResponseDetailBytes {
+		return responseBody, false, nil
+	}
+	return responseBody[:maxChannelTestResponseDetailBytes], true, nil
 }
 
 func detectErrorFromTestResponseBody(respBody []byte) error {
@@ -1062,7 +1081,7 @@ func TestChannel(c *gin.Context) {
 		})
 		return
 	}
-	respondChannelConnectionTest(c, channel, tik, result)
+	respondChannelConnectionTest(c, channel, tik, result, false, isStream)
 }
 
 // TestChannelConnectionPrompt uses the supplied prompt for one real channel connection test.
@@ -1125,11 +1144,11 @@ func TestChannelConnectionPrompt(c *gin.Context) {
 		userPrompt:      request.UserPrompt,
 		maxOutputTokens: getChannelConnectionTestMaxOutputTokens(request.UserPrompt),
 	})
-	respondChannelConnectionTest(c, channel, tik, result)
+	respondChannelConnectionTest(c, channel, tik, result, true, request.Stream)
 }
 
 // respondChannelConnectionTest writes the shared success and failure response for connection tests.
-func respondChannelConnectionTest(c *gin.Context, channel *model.Channel, tik time.Time, result testResult) {
+func respondChannelConnectionTest(c *gin.Context, channel *model.Channel, tik time.Time, result testResult, includeDetails bool, isStream bool) {
 	if result.localErr != nil {
 		resp := gin.H{
 			"success": false,
@@ -1155,11 +1174,15 @@ func respondChannelConnectionTest(c *gin.Context, channel *model.Channel, tik ti
 		})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
+	response := gin.H{
 		"success": true,
 		"message": "",
 		"time":    consumedTime,
-	})
+	}
+	if includeDetails {
+		response["data"] = buildChannelTestResponseDetails(result, isStream)
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 func classifyNativeProbeResult(result testResult) string {
@@ -1281,48 +1304,213 @@ func TestChannelPromptEffect(c *gin.Context) {
 	})
 }
 
-// extractChannelTestResponseText 从常见非流式响应格式中提取可展示文本。
+// buildChannelTestResponseDetails builds the bounded display payload returned by the custom connection test.
+func buildChannelTestResponseDetails(result testResult, isStream bool) channelTestResponseDetails {
+	content, reasoningContent := extractChannelTestResponseContent(result.responseBody, isStream)
+	sanitizedBody, _ := service.SanitizeConversationBody(result.responseBody)
+	sanitizedBody, truncated := truncateChannelTestResponseDetail(sanitizedBody)
+
+	return channelTestResponseDetails{
+		Content:              content,
+		ReasoningContent:     reasoningContent,
+		RawResponse:          string(sanitizedBody),
+		RawResponseTruncated: result.responseBodyTruncated || truncated,
+	}
+}
+
+// truncateChannelTestResponseDetail limits a display response without splitting a UTF-8 sequence.
+func truncateChannelTestResponseDetail(body []byte) ([]byte, bool) {
+	if len(body) <= maxChannelTestResponseDetailBytes {
+		return body, false
+	}
+
+	end := maxChannelTestResponseDetailBytes
+	for end > 0 && !utf8.Valid(body[:end]) {
+		end--
+	}
+	return body[:end], true
+}
+
+// extractChannelTestResponseText extracts the final answer used by the system-prompt effect test.
 func extractChannelTestResponseText(body []byte) string {
-	result := gjson.ParseBytes(body)
-	for _, path := range []string{"choices.0.text", "output_text"} {
-		if value := strings.TrimSpace(result.Get(path).String()); value != "" {
-			return value
+	content, _ := extractChannelTestResponseContent(body, false)
+	return content
+}
+
+// extractChannelTestResponseContent extracts explicit answer and reasoning text from supported response protocols.
+func extractChannelTestResponseContent(body []byte, isStream bool) (string, string) {
+	if isStream {
+		return extractChannelTestStreamContent(body)
+	}
+	return extractChannelTestJSONContent(gjson.ParseBytes(body))
+}
+
+// extractChannelTestJSONContent extracts one non-stream JSON response without mixing reasoning into the final answer.
+func extractChannelTestJSONContent(result gjson.Result) (string, string) {
+	if result.Get("choices").Exists() {
+		contentParts := make([]string, 0)
+		reasoningParts := make([]string, 0)
+		appendChannelTestPart(&contentParts, result.Get("choices.0.text").String())
+		appendChannelTestPart(&reasoningParts, result.Get("choices.0.message.reasoning_content").String())
+		if len(reasoningParts) == 0 {
+			appendChannelTestPart(&reasoningParts, result.Get("choices.0.message.reasoning").String())
+		}
+
+		chatContent := result.Get("choices.0.message.content")
+		if chatContent.Type == gjson.String {
+			appendChannelTestPart(&contentParts, chatContent.String())
+		} else {
+			for _, item := range chatContent.Array() {
+				if item.Type == gjson.String {
+					appendChannelTestPart(&contentParts, item.String())
+					continue
+				}
+				appendChannelTestPart(&contentParts, item.Get("text").String())
+			}
+		}
+		return strings.Join(contentParts, "\n"), strings.Join(reasoningParts, "\n")
+	}
+
+	if result.Get("output").Exists() || result.Get("output_text").Exists() {
+		contentParts := make([]string, 0)
+		reasoningParts := make([]string, 0)
+		appendChannelTestPart(&contentParts, result.Get("output_text").String())
+		hasOutputText := len(contentParts) > 0
+
+		for _, output := range result.Get("output").Array() {
+			outputType := output.Get("type").String()
+			for _, summary := range output.Get("summary").Array() {
+				appendChannelTestPart(&reasoningParts, summary.Get("text").String())
+			}
+			if outputType == "reasoning" {
+				appendChannelTestPart(&reasoningParts, output.Get("summary_text").String())
+				appendChannelTestPart(&reasoningParts, output.Get("text").String())
+			}
+			for _, item := range output.Get("content").Array() {
+				itemType := item.Get("type").String()
+				if outputType == "reasoning" || strings.Contains(itemType, "reasoning") || strings.Contains(itemType, "summary") {
+					appendChannelTestPart(&reasoningParts, item.Get("text").String())
+					continue
+				}
+				if !hasOutputText && (itemType == "" || itemType == "text" || itemType == "output_text") {
+					appendChannelTestPart(&contentParts, item.Get("text").String())
+				}
+			}
+		}
+		return strings.Join(contentParts, "\n"), strings.Join(reasoningParts, "\n")
+	}
+
+	if result.Get("candidates").Exists() {
+		contentParts := make([]string, 0)
+		reasoningParts := make([]string, 0)
+		for _, item := range result.Get("candidates.0.content.parts").Array() {
+			if item.Get("thought").Bool() {
+				appendChannelTestPart(&reasoningParts, item.Get("text").String())
+				continue
+			}
+			appendChannelTestPart(&contentParts, item.Get("text").String())
+		}
+		return strings.Join(contentParts, "\n"), strings.Join(reasoningParts, "\n")
+	}
+
+	contentParts := make([]string, 0)
+	reasoningParts := make([]string, 0)
+	for _, item := range result.Get("content").Array() {
+		switch item.Get("type").String() {
+		case "thinking":
+			appendChannelTestPart(&reasoningParts, item.Get("thinking").String())
+		case "text", "":
+			appendChannelTestPart(&contentParts, item.Get("text").String())
+		}
+	}
+	return strings.Join(contentParts, "\n"), strings.Join(reasoningParts, "\n")
+}
+
+// extractChannelTestStreamContent aggregates explicit text deltas from an SSE response.
+func extractChannelTestStreamContent(body []byte) (string, string) {
+	var content strings.Builder
+	var reasoning strings.Builder
+	var terminalContent string
+	var terminalReasoning string
+
+	for _, line := range bytes.Split(body, []byte{'\n'}) {
+		line = bytes.TrimSpace(line)
+		if !bytes.HasPrefix(line, []byte("data:")) {
+			continue
+		}
+		payload := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
+		if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) {
+			continue
+		}
+
+		event := gjson.ParseBytes(payload)
+		switch event.Get("type").String() {
+		case "response.output_text.delta":
+			appendChannelTestDelta(&content, event.Get("delta").String())
+			continue
+		case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
+			appendChannelTestDelta(&reasoning, event.Get("delta").String())
+			continue
+		case "response.output_text.done", "response.reasoning_summary_text.done", "response.reasoning_text.done":
+			continue
+		case "response.completed":
+			terminalContent, terminalReasoning = extractChannelTestJSONContent(event.Get("response"))
+			continue
+		}
+
+		appendChannelTestDelta(&content, event.Get("choices.0.delta.content").String())
+		reasoningDelta := event.Get("choices.0.delta.reasoning_content").String()
+		if strings.TrimSpace(reasoningDelta) == "" {
+			reasoningDelta = event.Get("choices.0.delta.reasoning").String()
+		}
+		appendChannelTestDelta(&reasoning, reasoningDelta)
+
+		deltaType := event.Get("delta.type").String()
+		switch deltaType {
+		case "text_delta":
+			appendChannelTestDelta(&content, event.Get("delta.text").String())
+		case "thinking_delta":
+			appendChannelTestDelta(&reasoning, event.Get("delta.thinking").String())
+		}
+
+		contentBlock := event.Get("content_block")
+		switch contentBlock.Get("type").String() {
+		case "text":
+			appendChannelTestDelta(&content, contentBlock.Get("text").String())
+		case "thinking":
+			appendChannelTestDelta(&reasoning, contentBlock.Get("thinking").String())
+		}
+
+		for _, item := range event.Get("candidates.0.content.parts").Array() {
+			if item.Get("thought").Bool() {
+				appendChannelTestDelta(&reasoning, item.Get("text").String())
+				continue
+			}
+			appendChannelTestDelta(&content, item.Get("text").String())
 		}
 	}
 
-	chatContent := result.Get("choices.0.message.content")
-	if chatContent.Type == gjson.String {
-		if content := strings.TrimSpace(chatContent.String()); content != "" {
-			return content
-		}
+	if content.Len() == 0 {
+		content.WriteString(terminalContent)
 	}
-	parts := make([]string, 0)
-	for _, item := range chatContent.Array() {
-		if text := strings.TrimSpace(item.Get("text").String()); text != "" {
-			parts = append(parts, text)
-		}
+	if reasoning.Len() == 0 {
+		reasoning.WriteString(terminalReasoning)
 	}
-	for _, output := range result.Get("output").Array() {
-		for _, item := range output.Get("content").Array() {
-			if text := strings.TrimSpace(item.Get("text").String()); text != "" {
-				parts = append(parts, text)
-			}
-		}
+	return content.String(), reasoning.String()
+}
+
+// appendChannelTestPart appends one non-empty response part while preserving its original whitespace.
+func appendChannelTestPart(parts *[]string, value string) {
+	if strings.TrimSpace(value) != "" {
+		*parts = append(*parts, value)
 	}
-	for _, item := range result.Get("content").Array() {
-		if text := strings.TrimSpace(item.Get("text").String()); text != "" {
-			parts = append(parts, text)
-		}
+}
+
+// appendChannelTestDelta appends one non-empty streaming delta without inserting protocol-visible separators.
+func appendChannelTestDelta(builder *strings.Builder, value string) {
+	if value != "" {
+		builder.WriteString(value)
 	}
-	for _, item := range result.Get("candidates.0.content.parts").Array() {
-		if text := strings.TrimSpace(item.Get("text").String()); text != "" {
-			parts = append(parts, text)
-		}
-	}
-	if len(parts) > 0 {
-		return strings.Join(parts, "\n")
-	}
-	return ""
 }
 
 // channelTestSummary records the outcome of one channel test cycle so the

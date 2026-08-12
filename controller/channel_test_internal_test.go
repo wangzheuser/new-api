@@ -1,10 +1,12 @@
 package controller
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -209,25 +211,181 @@ func TestChannelConnectionPromptValidatesInput(t *testing.T) {
 	}
 }
 
-func TestExtractChannelTestResponseText(t *testing.T) {
+// TestExtractChannelTestResponseContent verifies final answers and explicit reasoning stay separated.
+func TestExtractChannelTestResponseContent(t *testing.T) {
 	tests := []struct {
-		name string
-		body string
-		want string
+		name          string
+		body          string
+		wantContent   string
+		wantReasoning string
 	}{
-		{name: "openai chat", body: `{"choices":[{"message":{"content":"hello"}}]}`, want: "hello"},
-		{name: "openai content parts", body: `{"choices":[{"message":{"content":[{"type":"text","text":"hello"},{"type":"text","text":"world"}]}}]}`, want: "hello\nworld"},
-		{name: "responses", body: `{"output":[{"content":[{"type":"output_text","text":"hello"},{"type":"output_text","text":"world"}]}]}`, want: "hello\nworld"},
-		{name: "claude", body: `{"content":[{"type":"text","text":"hello"}]}`, want: "hello"},
-		{name: "gemini", body: `{"candidates":[{"content":{"parts":[{"text":"hello"}]}}]}`, want: "hello"},
-		{name: "empty", body: `{}`, want: ""},
+		{
+			name:          "openai chat reasoning content",
+			body:          `{"choices":[{"message":{"content":"final answer","reasoning_content":"explicit reasoning"}}]}`,
+			wantContent:   "final answer",
+			wantReasoning: "explicit reasoning",
+		},
+		{
+			name:          "openai chat reasoning compatibility field",
+			body:          `{"choices":[{"message":{"content":"final answer","reasoning":"compatibility reasoning"}}]}`,
+			wantContent:   "final answer",
+			wantReasoning: "compatibility reasoning",
+		},
+		{
+			name:        "openai content parts preserve order",
+			body:        `{"choices":[{"message":{"content":[{"type":"text","text":"hello"},{"type":"text","text":"world"}]}}]}`,
+			wantContent: "hello\nworld",
+		},
+		{
+			name:          "responses output and reasoning summary",
+			body:          `{"output":[{"type":"reasoning","summary":[{"type":"summary_text","text":"step one"},{"type":"summary_text","text":"step two"}]},{"type":"message","content":[{"type":"output_text","text":"hello"},{"type":"output_text","text":"world"}]}]}`,
+			wantContent:   "hello\nworld",
+			wantReasoning: "step one\nstep two",
+		},
+		{
+			name:          "responses direct reasoning summary and text",
+			body:          `{"output":[{"type":"reasoning","summary_text":"summary","content":[{"type":"reasoning_text","text":"reasoning text"}]}]}`,
+			wantReasoning: "summary\nreasoning text",
+		},
+		{
+			name:          "anthropic text and thinking blocks",
+			body:          `{"content":[{"type":"thinking","thinking":"considering"},{"type":"text","text":"answer"}]}`,
+			wantContent:   "answer",
+			wantReasoning: "considering",
+		},
+		{
+			name:          "gemini thought marker",
+			body:          `{"candidates":[{"content":{"parts":[{"text":"analysis","thought":true},{"text":"answer"}]}}]}`,
+			wantContent:   "answer",
+			wantReasoning: "analysis",
+		},
+		{name: "reasoning only", body: `{"choices":[{"message":{"reasoning_content":"reasoning"}}]}`, wantReasoning: "reasoning"},
+		{name: "answer only", body: `{"choices":[{"message":{"content":"answer"}}]}`, wantContent: "answer"},
+		{name: "empty", body: `{}`},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			assert.Equal(t, test.want, extractChannelTestResponseText([]byte(test.body)))
+			content, reasoning := extractChannelTestResponseContent([]byte(test.body), false)
+			assert.Equal(t, test.wantContent, content)
+			assert.Equal(t, test.wantReasoning, reasoning)
 		})
 	}
+}
+
+// TestExtractChannelTestResponseTextKeepsPromptEffectContract verifies prompt-effect tests still read final answers only.
+func TestExtractChannelTestResponseTextKeepsPromptEffectContract(t *testing.T) {
+	body := []byte(`{"choices":[{"message":{"content":"final answer","reasoning_content":"explicit reasoning"}}]}`)
+
+	assert.Equal(t, "final answer", extractChannelTestResponseText(body))
+}
+
+// TestExtractChannelTestStreamContent verifies supported SSE protocols aggregate deltas without duplicating terminal content.
+func TestExtractChannelTestStreamContent(t *testing.T) {
+	tests := []struct {
+		name          string
+		body          string
+		wantContent   string
+		wantReasoning string
+	}{
+		{
+			name: "openai chat deltas preserve whitespace",
+			body: strings.Join([]string{
+				`data: {"choices":[{"delta":{"reasoning_content":"think"}}]}`,
+				`data: {"choices":[{"delta":{"content":"hello"}}]}`,
+				`data: {"choices":[{"delta":{"content":" "}}]}`,
+				`data: {"choices":[{"delta":{"content":"world"}}]}`,
+				"data: [DONE]",
+			}, "\n"),
+			wantContent:   "hello world",
+			wantReasoning: "think",
+		},
+		{
+			name: "responses deltas ignore repeated terminal response",
+			body: strings.Join([]string{
+				`data: {"type":"response.reasoning_summary_text.delta","delta":"step"}`,
+				`data: {"type":"response.output_text.delta","delta":"answer"}`,
+				`data: {"type":"response.completed","response":{"output_text":"answer","output":[{"type":"reasoning","summary":[{"text":"step"}]}]}}`,
+			}, "\n"),
+			wantContent:   "answer",
+			wantReasoning: "step",
+		},
+		{
+			name: "anthropic text and thinking deltas",
+			body: strings.Join([]string{
+				`data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"reason"}}`,
+				`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"answer"}}`,
+			}, "\n"),
+			wantContent:   "answer",
+			wantReasoning: "reason",
+		},
+		{
+			name: "gemini streaming parts",
+			body: strings.Join([]string{
+				`data: {"candidates":[{"content":{"parts":[{"text":"reason","thought":true}]}}]}`,
+				`data: {"candidates":[{"content":{"parts":[{"text":"answer"}]}}]}`,
+			}, "\n"),
+			wantContent:   "answer",
+			wantReasoning: "reason",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			content, reasoning := extractChannelTestResponseContent([]byte(test.body), true)
+			assert.Equal(t, test.wantContent, content)
+			assert.Equal(t, test.wantReasoning, reasoning)
+		})
+	}
+}
+
+// TestBuildChannelTestResponseDetailsSanitizesBinaryData verifies display payloads do not expose encoded media.
+func TestBuildChannelTestResponseDetailsSanitizesBinaryData(t *testing.T) {
+	body := []byte(`{"choices":[{"message":{"content":"answer"}}],"image_url":{"url":"data:image/png;base64,aGVsbG8="},"source":{"type":"base64","data":"c2VjcmV0"}}`)
+
+	details := buildChannelTestResponseDetails(testResult{responseBody: body}, false)
+
+	assert.Equal(t, "answer", details.Content)
+	assert.Contains(t, details.RawResponse, "[binary data omitted]")
+	assert.NotContains(t, details.RawResponse, "aGVsbG8=")
+	assert.NotContains(t, details.RawResponse, "c2VjcmV0")
+	assert.False(t, details.RawResponseTruncated)
+}
+
+// TestBuildChannelTestResponseDetailsTruncatesAtUTF8Boundary verifies the 64 KiB display cap remains valid UTF-8.
+func TestBuildChannelTestResponseDetailsTruncatesAtUTF8Boundary(t *testing.T) {
+	body := []byte(strings.Repeat("界", maxChannelTestResponseDetailBytes))
+
+	details := buildChannelTestResponseDetails(testResult{responseBody: body}, false)
+
+	assert.True(t, details.RawResponseTruncated)
+	assert.LessOrEqual(t, len([]byte(details.RawResponse)), maxChannelTestResponseDetailBytes)
+	assert.True(t, utf8.ValidString(details.RawResponse))
+}
+
+// TestBuildChannelTestResponseDetailsKeepsStreamCaptureFlag verifies capture truncation reaches the response contract.
+func TestBuildChannelTestResponseDetailsKeepsStreamCaptureFlag(t *testing.T) {
+	details := buildChannelTestResponseDetails(testResult{
+		responseBody:          []byte("data: [DONE]\n\n"),
+		responseBodyTruncated: true,
+	}, true)
+
+	assert.True(t, details.RawResponseTruncated)
+}
+
+// TestReadTestResponseBodyCapsStreamCapture verifies streaming memory stays bounded while non-stream responses remain available for extraction.
+func TestReadTestResponseBodyCapsStreamCapture(t *testing.T) {
+	body := strings.Repeat("a", maxChannelTestResponseDetailBytes+128)
+
+	streamBody, streamTruncated, err := readTestResponseBody(io.NopCloser(strings.NewReader(body)), true)
+	require.NoError(t, err)
+	assert.Len(t, streamBody, maxChannelTestResponseDetailBytes)
+	assert.True(t, streamTruncated)
+
+	nonStreamBody, nonStreamTruncated, err := readTestResponseBody(io.NopCloser(strings.NewReader(body)), false)
+	require.NoError(t, err)
+	assert.Len(t, nonStreamBody, len(body))
+	assert.False(t, nonStreamTruncated)
 }
 
 func TestSettleTestQuotaUsesTieredBilling(t *testing.T) {
