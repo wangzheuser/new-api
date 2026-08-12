@@ -225,6 +225,13 @@ export interface ChannelTestResponse {
   }
 }
 
+export interface ChannelConnectionTestRequest {
+  model: string
+  user_prompt: string
+  endpoint_type?: string
+  stream?: boolean
+}
+
 export interface ChannelNativeProbeResponse extends ChannelTestResponse {
   model: string
   endpoint_type: TextEndpointType

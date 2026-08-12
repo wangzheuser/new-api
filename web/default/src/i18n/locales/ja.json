@@ -5529,6 +5529,16 @@
     "Model protocol override contains an invalid model name": "モデル別プロトコル上書きに無効なモデル名があります",
     "Model protocol profile must be an object": "モデルプロトコルプロファイルはオブジェクトである必要があります",
     "Protocol policy must be valid JSON": "プロトコルポリシーは有効な JSON である必要があります",
-    "Auto conversion conflicts with request body pass-through": "自動変換はリクエスト本文のパススルーと併用できません"
+    "Auto conversion conflicts with request body pass-through": "自動変換はリクエスト本文のパススルーと併用できません",
+    "Test Prompt": "テストプロンプト",
+    "Test prompt is required.": "テストプロンプトを入力してください。",
+    "Test prompt must not exceed 16 KiB.": "テストプロンプトは 16 KiB 以下にしてください。",
+    "Testing sends a real upstream request and may incur provider charges. Custom prompts use a maximum output of 1024 tokens.": "テストでは上流プロバイダーへ実際のリクエストを送信するため、料金が発生する場合があります。カスタムプロンプトの最大出力は 1024 トークンです。",
+    "Active Subscription": "有効なサブスクリプション",
+    "Has active subscription": "有効なサブスクリプションあり",
+    "No active subscription": "有効なサブスクリプションなし",
+    "Matches all groups currently available to the user, including inherited, manually granted, and subscription groups.": "継承グループ、管理者による付与、サブスクリプションによる付与を含む、現在利用可能なすべてのグループに一致します。",
+    "Active subscriptions must be active, already started, and not expired.": "有効なサブスクリプションは active 状態で、開始済みかつ有効期限内である必要があります。",
+    "Selecting a plan filters users by their currently active subscription to that plan.": "プランを選択すると、そのプランの現在有効なサブスクリプションを持つユーザーに絞り込みます。"
   }
 }

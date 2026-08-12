@@ -249,6 +249,21 @@ export function useUsersColumns(): ColumnDef<User>[] {
       meta: { mobileOrder: 30 },
     },
     {
+      id: 'effectiveGroup',
+      enableHiding: false,
+      enableSorting: false,
+    },
+    {
+      id: 'activeSubscription',
+      enableHiding: false,
+      enableSorting: false,
+    },
+    {
+      id: 'subscriptionPlanId',
+      enableHiding: false,
+      enableSorting: false,
+    },
+    {
       accessorKey: 'role',
       header: t('Role'),
       cell: ({ row }) => {

@@ -328,6 +328,7 @@ func GetAllUsers(c *gin.Context) {
 func SearchUsers(c *gin.Context) {
 	keyword := c.Query("keyword")
 	group := c.Query("group")
+	effectiveGroup := strings.TrimSpace(c.Query("effective_group"))
 	var role *int
 	if roleStr := c.Query("role"); roleStr != "" {
 		if parsed, err := strconv.Atoi(roleStr); err == nil {
@@ -340,8 +341,44 @@ func SearchUsers(c *gin.Context) {
 			status = &parsed
 		}
 	}
+	var activeSubscription *bool
+	if activeSubscriptionStr := c.Query("active_subscription"); activeSubscriptionStr != "" {
+		if activeSubscriptionStr != "true" && activeSubscriptionStr != "false" {
+			common.ApiErrorMsg(c, "invalid active_subscription")
+			return
+		}
+		parsed := activeSubscriptionStr == "true"
+		activeSubscription = &parsed
+	}
+	var subscriptionPlanId *int
+	if subscriptionPlanIdStr := c.Query("subscription_plan_id"); subscriptionPlanIdStr != "" {
+		parsed, err := strconv.Atoi(subscriptionPlanIdStr)
+		if err != nil || parsed <= 0 {
+			common.ApiErrorMsg(c, "invalid subscription_plan_id")
+			return
+		}
+		subscriptionPlanId = &parsed
+	}
+	effectiveBaseGroups := make([]string, 0)
+	if effectiveGroup != "" {
+		var err error
+		effectiveBaseGroups, err = service.GetUserBaseGroupsForEffectiveGroup(effectiveGroup)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
 	pageInfo := common.GetPageQuery(c)
-	users, total, err := model.SearchUsers(keyword, group, role, status, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	users, total, err := model.SearchUsers(model.UserSearchFilters{
+		Keyword:             keyword,
+		BaseGroup:           group,
+		EffectiveGroup:      effectiveGroup,
+		EffectiveBaseGroups: effectiveBaseGroups,
+		Role:                role,
+		Status:              status,
+		ActiveSubscription:  activeSubscription,
+		SubscriptionPlanId:  subscriptionPlanId,
+	}, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 	if err != nil {
 		common.ApiError(c, err)
 		return

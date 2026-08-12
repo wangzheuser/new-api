@@ -58,16 +58,26 @@ export async function searchUsers(
   const {
     keyword = '',
     group = '',
+    effective_group = '',
     role = '',
     status = '',
+    active_subscription,
+    subscription_plan_id,
     p = 1,
     page_size = 10,
   } = params
   const queryParams = new URLSearchParams()
   queryParams.set('keyword', keyword)
   queryParams.set('group', group)
+  if (effective_group) queryParams.set('effective_group', effective_group)
   if (role) queryParams.set('role', role)
   if (status) queryParams.set('status', status)
+  if (active_subscription !== undefined) {
+    queryParams.set('active_subscription', String(active_subscription))
+  }
+  if (subscription_plan_id !== undefined) {
+    queryParams.set('subscription_plan_id', String(subscription_plan_id))
+  }
   queryParams.set('p', String(p))
   queryParams.set('page_size', String(page_size))
   const res = await api.get(`/api/user/search?${queryParams.toString()}`)

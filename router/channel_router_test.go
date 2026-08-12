@@ -22,6 +22,10 @@ func TestChannelPromptEffectRouteUsesOperatePermission(t *testing.T) {
 	assertChannelRoutePermission(t, http.MethodPost, "/test/:id", authz.ChannelOperate, controller.TestChannelPromptEffect)
 }
 
+func TestChannelConnectionPromptRouteUsesOperatePermission(t *testing.T) {
+	assertChannelRoutePermission(t, http.MethodPost, "/test/:id/connection", authz.ChannelOperate, controller.TestChannelConnectionPrompt)
+}
+
 func TestChannelDeleteRoutesUseSensitiveWritePermission(t *testing.T) {
 	assertChannelRoutePermission(t, http.MethodDelete, "/:id", authz.ChannelSensitiveWrite, controller.DeleteChannel)
 	assertChannelRoutePermission(t, http.MethodPost, "/batch", authz.ChannelSensitiveWrite, controller.DeleteChannelBatch)

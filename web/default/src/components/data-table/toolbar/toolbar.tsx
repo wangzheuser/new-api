@@ -33,6 +33,7 @@ import { DataTableViewOptions } from './view-options'
 type FilterDef = {
   columnId: string
   title: string
+  description?: string
   options: {
     label: string
     value: string
@@ -264,6 +265,7 @@ export function DataTableToolbar<TData>(props: DataTableToolbarProps<TData>) {
             key={filter.columnId}
             column={column}
             title={filter.title}
+            description={filter.description}
             options={filter.options}
             singleSelect={filter.singleSelect}
           />

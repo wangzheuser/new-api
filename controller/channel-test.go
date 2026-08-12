@@ -60,7 +60,23 @@ type channelPromptTestRequest struct {
 	UserPrompt   string `json:"user_prompt"`
 }
 
+type channelConnectionTestRequest struct {
+	Model        string `json:"model"`
+	UserPrompt   string `json:"user_prompt"`
+	EndpointType string `json:"endpoint_type"`
+	Stream       bool   `json:"stream"`
+}
+
 const maxChannelPromptTestUserPromptBytes = 16 * 1024
+const customChannelTestMaxOutputTokens = 1024
+
+// getChannelConnectionTestMaxOutputTokens returns the expanded output limit for a custom prompt.
+func getChannelConnectionTestMaxOutputTokens(userPrompt string) uint {
+	if userPrompt == "hi" {
+		return 0
+	}
+	return customChannelTestMaxOutputTokens
+}
 
 func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointType string) string {
 	normalized := strings.TrimSpace(endpointType)
@@ -835,6 +851,9 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 	testResponsesInput := json.RawMessage(common.GetJsonString([]map[string]string{{
 		"role": "user", "content": userPrompt,
 	}}))
+	defaultResponsesInput := json.RawMessage(common.GetJsonString([]map[string]string{{
+		"role": "user", "content": "hi",
+	}}))
 
 	// 根据端点类型构建不同的测试请求
 	if endpointType != "" {
@@ -873,7 +892,7 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 			// 返回 OpenAIResponsesCompactionRequest
 			return &dto.OpenAIResponsesCompactionRequest{
 				Model: model,
-				Input: testResponsesInput,
+				Input: defaultResponsesInput,
 			}
 		case constant.EndpointTypeAnthropic, constant.EndpointTypeGemini, constant.EndpointTypeOpenAI:
 			// 返回 GeneralOpenAIRequest
@@ -893,7 +912,12 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 				MaxTokens: lo.ToPtr(maxTokens),
 			}
 			if options.maxOutputTokens > 0 {
-				req.MaxTokens = lo.ToPtr(options.maxOutputTokens)
+				if constant.EndpointType(endpointType) == constant.EndpointTypeOpenAI && dto.IsOpenAIReasoningOModel(model) {
+					req.MaxTokens = nil
+					req.MaxCompletionTokens = lo.ToPtr(options.maxOutputTokens)
+				} else {
+					req.MaxTokens = lo.ToPtr(options.maxOutputTokens)
+				}
 			}
 			if options.isStream {
 				req.StreamOptions = &dto.StreamOptions{IncludeUsage: true}
@@ -927,7 +951,7 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 	if strings.HasSuffix(model, ratio_setting.CompactModelSuffix) {
 		return &dto.OpenAIResponsesCompactionRequest{
 			Model: model,
-			Input: testResponsesInput,
+			Input: defaultResponsesInput,
 		}
 	}
 
@@ -1038,6 +1062,74 @@ func TestChannel(c *gin.Context) {
 		})
 		return
 	}
+	respondChannelConnectionTest(c, channel, tik, result)
+}
+
+// TestChannelConnectionPrompt uses the supplied prompt for one real channel connection test.
+func TestChannelConnectionPrompt(c *gin.Context) {
+	channelId, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	request := channelConnectionTestRequest{}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	request.Model = strings.TrimSpace(request.Model)
+	request.EndpointType = strings.TrimSpace(request.EndpointType)
+	if request.Model == "" {
+		common.ApiError(c, errors.New("model is required"))
+		return
+	}
+	if len(request.Model) > 255 {
+		common.ApiError(c, errors.New("invalid model"))
+		return
+	}
+	if strings.TrimSpace(request.UserPrompt) == "" {
+		common.ApiError(c, errors.New("user_prompt is required"))
+		return
+	}
+	if len(request.UserPrompt) > maxChannelPromptTestUserPromptBytes {
+		common.ApiError(c, errors.New("user_prompt must not exceed 16 KiB"))
+		return
+	}
+	if request.EndpointType != "" {
+		if _, ok := common.GetDefaultEndpointInfo(constant.EndpointType(request.EndpointType)); !ok {
+			common.ApiError(c, errors.New("invalid endpoint_type"))
+			return
+		}
+	}
+
+	channel, err := model.CacheGetChannel(channelId)
+	if err != nil {
+		channel, err = model.GetChannelById(channelId, true)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
+	testUserID, err := resolveChannelTestUserID(c)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	tik := time.Now()
+	result := testChannel(c.Request.Context(), channel, testUserID, channelTestOptions{
+		model:           request.Model,
+		endpointType:    request.EndpointType,
+		isStream:        request.Stream,
+		userPrompt:      request.UserPrompt,
+		maxOutputTokens: getChannelConnectionTestMaxOutputTokens(request.UserPrompt),
+	})
+	respondChannelConnectionTest(c, channel, tik, result)
+}
+
+// respondChannelConnectionTest writes the shared success and failure response for connection tests.
+func respondChannelConnectionTest(c *gin.Context, channel *model.Channel, tik time.Time, result testResult) {
 	if result.localErr != nil {
 		resp := gin.H{
 			"success": false,

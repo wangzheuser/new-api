@@ -37,6 +37,7 @@ import {
   fixChannelAbilities,
   editTagChannels,
   testAllChannels,
+  testChannelConnectionPrompt,
   updateAllChannelsBalance,
   updateChannelBalance,
 } from '../api'
@@ -275,6 +276,7 @@ export async function handleTestChannel(
     testModel?: string
     endpointType?: string
     stream?: boolean
+    userPrompt?: string
     silent?: boolean
   },
   onTestComplete?: (
@@ -296,7 +298,17 @@ export async function handleTestChannel(
       : undefined
 
   try {
-    const response = await testChannel(id, payload)
+    const response =
+      options?.userPrompt !== undefined && options.testModel
+        ? await testChannelConnectionPrompt(id, {
+            model: options.testModel,
+            user_prompt: options.userPrompt,
+            ...(options.endpointType
+              ? { endpoint_type: options.endpointType }
+              : {}),
+            ...(options.stream ? { stream: true } : {}),
+          })
+        : await testChannel(id, payload)
     const responseTime = getChannelTestResponseTime(response)
     const duration = formatChannelTestDuration(responseTime)
     const target = getChannelTestLabel(options)

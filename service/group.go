@@ -63,6 +63,21 @@ func GetUserEffectiveGroups(userId int, userGroup string) (map[string]string, er
 	return groups, nil
 }
 
+// GetUserBaseGroupsForEffectiveGroup returns persisted base groups that inherit the target group.
+func GetUserBaseGroupsForEffectiveGroup(groupName string) ([]string, error) {
+	baseGroups, err := model.GetDistinctUserBaseGroups()
+	if err != nil {
+		return nil, err
+	}
+	matched := make([]string, 0, len(baseGroups))
+	for _, baseGroup := range baseGroups {
+		if _, ok := GetUserUsableGroups(baseGroup)[groupName]; ok {
+			matched = append(matched, baseGroup)
+		}
+	}
+	return matched, nil
+}
+
 // GroupInUserEffectiveGroups reports whether a user can use the specified group now.
 func GroupInUserEffectiveGroups(userId int, userGroup, groupName string) (bool, error) {
 	if _, ok := GetUserUsableGroups(userGroup)[groupName]; ok {

@@ -5529,6 +5529,16 @@
     "Model protocol override contains an invalid model name": "Model protocol override contains an invalid model name",
     "Model protocol profile must be an object": "Model protocol profile must be an object",
     "Protocol policy must be valid JSON": "Protocol policy must be valid JSON",
-    "Auto conversion conflicts with request body pass-through": "Auto conversion conflicts with request body pass-through"
+    "Auto conversion conflicts with request body pass-through": "Auto conversion conflicts with request body pass-through",
+    "Test Prompt": "Test Prompt",
+    "Test prompt is required.": "Test prompt is required.",
+    "Test prompt must not exceed 16 KiB.": "Test prompt must not exceed 16 KiB.",
+    "Testing sends a real upstream request and may incur provider charges. Custom prompts use a maximum output of 1024 tokens.": "Testing sends a real upstream request and may incur provider charges. Custom prompts use a maximum output of 1024 tokens.",
+    "Active Subscription": "Active Subscription",
+    "Has active subscription": "Has active subscription",
+    "No active subscription": "No active subscription",
+    "Matches all groups currently available to the user, including inherited, manually granted, and subscription groups.": "Matches all groups currently available to the user, including inherited, manually granted, and subscription groups.",
+    "Active subscriptions must be active, already started, and not expired.": "Active subscriptions must be active, already started, and not expired.",
+    "Selecting a plan filters users by their currently active subscription to that plan.": "Selecting a plan filters users by their currently active subscription to that plan."
   }
 }

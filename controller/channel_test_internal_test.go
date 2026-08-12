@@ -3,6 +3,7 @@ package controller
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -47,6 +48,165 @@ func TestBuildTestRequestUsesCustomUserPromptAndOutputLimit(t *testing.T) {
 	require.True(t, ok)
 	require.NoError(t, common.Unmarshal(explicitResponsesRequest.Input, &input))
 	assert.Equal(t, options.userPrompt, input[0]["content"])
+}
+
+// TestChannelConnectionTestOutputLimit verifies default and custom prompt output limits.
+func TestChannelConnectionTestOutputLimit(t *testing.T) {
+	assert.Zero(t, getChannelConnectionTestMaxOutputTokens("hi"))
+	assert.Equal(t, uint(1024), getChannelConnectionTestMaxOutputTokens("Hi"))
+	assert.Equal(t, uint(1024), getChannelConnectionTestMaxOutputTokens("hi "))
+	assert.Equal(t, uint(1024), getChannelConnectionTestMaxOutputTokens("first line\nsecond line"))
+
+	defaultRequest, ok := buildTestRequest("gpt-4o-mini", "", nil, channelTestOptions{
+		userPrompt:      "hi",
+		maxOutputTokens: getChannelConnectionTestMaxOutputTokens("hi"),
+	}).(*dto.GeneralOpenAIRequest)
+	require.True(t, ok)
+	require.NotNil(t, defaultRequest.MaxTokens)
+	assert.Equal(t, uint(16), *defaultRequest.MaxTokens)
+
+	customPrompt := "  first line\nsecond line  "
+	customRequest, ok := buildTestRequest("gpt-4o-mini", "", nil, channelTestOptions{
+		userPrompt:      customPrompt,
+		maxOutputTokens: getChannelConnectionTestMaxOutputTokens(customPrompt),
+	}).(*dto.GeneralOpenAIRequest)
+	require.True(t, ok)
+	require.Len(t, customRequest.Messages, 1)
+	assert.Equal(t, customPrompt, customRequest.Messages[0].StringContent())
+	require.NotNil(t, customRequest.MaxTokens)
+	assert.Equal(t, uint(1024), *customRequest.MaxTokens)
+
+	reasoningRequest, ok := buildTestRequest("o3-mini", "", nil, channelTestOptions{
+		userPrompt:      "custom",
+		maxOutputTokens: customChannelTestMaxOutputTokens,
+	}).(*dto.GeneralOpenAIRequest)
+	require.True(t, ok)
+	require.NotNil(t, reasoningRequest.MaxCompletionTokens)
+	assert.Equal(t, uint(1024), *reasoningRequest.MaxCompletionTokens)
+
+	explicitReasoningRequest, ok := buildTestRequest(
+		"o3-mini",
+		string(constant.EndpointTypeOpenAI),
+		nil,
+		channelTestOptions{userPrompt: "custom", maxOutputTokens: customChannelTestMaxOutputTokens},
+	).(*dto.GeneralOpenAIRequest)
+	require.True(t, ok)
+	assert.Nil(t, explicitReasoningRequest.MaxTokens)
+	require.NotNil(t, explicitReasoningRequest.MaxCompletionTokens)
+	assert.Equal(t, uint(1024), *explicitReasoningRequest.MaxCompletionTokens)
+
+	responsesRequest, ok := buildTestRequest("codex-mini", "", nil, channelTestOptions{
+		userPrompt:      "custom",
+		maxOutputTokens: customChannelTestMaxOutputTokens,
+	}).(*dto.OpenAIResponsesRequest)
+	require.True(t, ok)
+	require.NotNil(t, responsesRequest.MaxOutputTokens)
+	assert.Equal(t, uint(1024), *responsesRequest.MaxOutputTokens)
+
+	compactRequest, ok := buildTestRequest(
+		"gpt-4o-mini",
+		string(constant.EndpointTypeOpenAIResponseCompact),
+		nil,
+		channelTestOptions{userPrompt: "custom", maxOutputTokens: customChannelTestMaxOutputTokens},
+	).(*dto.OpenAIResponsesCompactionRequest)
+	require.True(t, ok)
+	var compactInput []map[string]string
+	require.NoError(t, common.Unmarshal(compactRequest.Input, &compactInput))
+	require.Len(t, compactInput, 1)
+	assert.Equal(t, "hi", compactInput[0]["content"])
+
+	for _, endpointType := range []constant.EndpointType{
+		constant.EndpointTypeAnthropic,
+		constant.EndpointTypeGemini,
+	} {
+		request, requestOk := buildTestRequest(
+			"text-model",
+			string(endpointType),
+			nil,
+			channelTestOptions{userPrompt: customPrompt, maxOutputTokens: customChannelTestMaxOutputTokens},
+		).(*dto.GeneralOpenAIRequest)
+		require.True(t, requestOk)
+		require.Len(t, request.Messages, 1)
+		assert.Equal(t, customPrompt, request.Messages[0].StringContent())
+		require.NotNil(t, request.MaxTokens)
+		assert.Equal(t, uint(1024), *request.MaxTokens)
+	}
+
+	embeddingRequest, ok := buildTestRequest(
+		"embedding-model",
+		string(constant.EndpointTypeEmbeddings),
+		nil,
+		channelTestOptions{userPrompt: "custom", maxOutputTokens: customChannelTestMaxOutputTokens},
+	).(*dto.EmbeddingRequest)
+	require.True(t, ok)
+	assert.Equal(t, []any{"hello world"}, embeddingRequest.Input)
+
+	rerankRequest, ok := buildTestRequest(
+		"rerank-model",
+		string(constant.EndpointTypeJinaRerank),
+		nil,
+		channelTestOptions{userPrompt: "custom", maxOutputTokens: customChannelTestMaxOutputTokens},
+	).(*dto.RerankRequest)
+	require.True(t, ok)
+	assert.Equal(t, "What is Deep Learning?", rerankRequest.Query)
+
+	imageRequest, ok := buildTestRequest(
+		"image-model",
+		string(constant.EndpointTypeImageGeneration),
+		nil,
+		channelTestOptions{userPrompt: "custom", maxOutputTokens: customChannelTestMaxOutputTokens},
+	).(*dto.ImageRequest)
+	require.True(t, ok)
+	assert.Equal(t, "a cute cat", imageRequest.Prompt)
+}
+
+// TestChannelConnectionPromptValidatesInput verifies malformed tests stop before channel lookup.
+func TestChannelConnectionPromptValidatesInput(t *testing.T) {
+	tests := []struct {
+		name        string
+		body        string
+		wantMessage string
+	}{
+		{
+			name:        "blank model",
+			body:        `{"model":"   ","user_prompt":"hi"}`,
+			wantMessage: "model is required",
+		},
+		{
+			name:        "oversized model",
+			body:        `{"model":"` + strings.Repeat("m", 256) + `","user_prompt":"hi"}`,
+			wantMessage: "invalid model",
+		},
+		{
+			name:        "blank prompt",
+			body:        `{"model":"gpt-4o-mini","user_prompt":"   "}`,
+			wantMessage: "user_prompt is required",
+		},
+		{
+			name:        "oversized prompt",
+			body:        `{"model":"gpt-4o-mini","user_prompt":"` + strings.Repeat("a", maxChannelPromptTestUserPromptBytes+1) + `"}`,
+			wantMessage: "user_prompt must not exceed 16 KiB",
+		},
+		{
+			name:        "invalid endpoint",
+			body:        `{"model":"gpt-4o-mini","user_prompt":"hi","endpoint_type":"unknown"}`,
+			wantMessage: "invalid endpoint_type",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(response)
+			ctx.Params = gin.Params{{Key: "id", Value: "1"}}
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/api/channel/test/1/connection", strings.NewReader(test.body))
+			ctx.Request.Header.Set("Content-Type", "application/json")
+
+			TestChannelConnectionPrompt(ctx)
+
+			assert.Contains(t, response.Body.String(), test.wantMessage)
+		})
+	}
 }
 
 func TestExtractChannelTestResponseText(t *testing.T) {

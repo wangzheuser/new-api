@@ -5529,6 +5529,16 @@
     "Model protocol override contains an invalid model name": "Un remplacement de protocole contient un nom de modèle invalide",
     "Model protocol profile must be an object": "Le profil de protocole du modèle doit être un objet",
     "Protocol policy must be valid JSON": "La stratégie de protocole doit être un JSON valide",
-    "Auto conversion conflicts with request body pass-through": "La conversion automatique est incompatible avec la transmission directe du corps de requête"
+    "Auto conversion conflicts with request body pass-through": "La conversion automatique est incompatible avec la transmission directe du corps de requête",
+    "Test Prompt": "Invite de test",
+    "Test prompt is required.": "L’invite de test est obligatoire.",
+    "Test prompt must not exceed 16 KiB.": "L’invite de test ne doit pas dépasser 16 Kio.",
+    "Testing sends a real upstream request and may incur provider charges. Custom prompts use a maximum output of 1024 tokens.": "Le test envoie une requête réelle au fournisseur en amont et peut entraîner des frais. Les invites personnalisées utilisent une sortie maximale de 1 024 jetons.",
+    "Active Subscription": "Abonnement actif",
+    "Has active subscription": "Avec un abonnement actif",
+    "No active subscription": "Sans abonnement actif",
+    "Matches all groups currently available to the user, including inherited, manually granted, and subscription groups.": "Correspond à tous les groupes actuellement accessibles à l’utilisateur, y compris les groupes hérités, accordés manuellement et liés aux abonnements.",
+    "Active subscriptions must be active, already started, and not expired.": "Les abonnements actifs doivent avoir commencé, avoir le statut actif et ne pas être expirés.",
+    "Selecting a plan filters users by their currently active subscription to that plan.": "La sélection d’un forfait filtre les utilisateurs selon leur abonnement actuellement actif à ce forfait."
   }
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -50,4 +51,34 @@ func TestGroupInUserEffectiveGroupsRejectsCancelledEntitlement(t *testing.T) {
 	allowed, err := GroupInUserEffectiveGroups(7311, "default", "国模")
 	require.NoError(t, err)
 	assert.False(t, allowed)
+}
+
+// TestGetUserBaseGroupsForEffectiveGroupUsesSpecialRules verifies inherited additions and removals.
+func TestGetUserBaseGroupsForEffectiveGroupUsesSpecialRules(t *testing.T) {
+	truncate(t)
+	previousGroups := setting.UserUsableGroups2JSONString()
+	specialGroups := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup
+	previousSpecialGroups := specialGroups.ReadAll()
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"shared":""}`))
+	specialGroups.Clear()
+	specialGroups.Set("alpha", map[string]string{"-:shared": "", "+:plus": ""})
+	t.Cleanup(func() {
+		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(previousGroups))
+		specialGroups.Clear()
+		specialGroups.AddAll(previousSpecialGroups)
+	})
+
+	require.NoError(t, model.DB.Create(&[]model.User{
+		{Id: 7350, Username: "alpha-user", Group: "alpha", AffCode: "group-alpha"},
+		{Id: 7351, Username: "beta-user", Group: "beta", AffCode: "group-beta"},
+		{Id: 7352, Username: "shared-user", Group: "shared", AffCode: "group-shared"},
+	}).Error)
+
+	sharedBaseGroups, err := GetUserBaseGroupsForEffectiveGroup("shared")
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"beta", "shared"}, sharedBaseGroups)
+
+	plusBaseGroups, err := GetUserBaseGroupsForEffectiveGroup("plus")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"alpha"}, plusBaseGroups)
 }

@@ -112,8 +112,11 @@ export interface GetUsersResponse {
 export interface SearchUsersParams {
   keyword?: string
   group?: string
+  effective_group?: string
   role?: string
   status?: string
+  active_subscription?: boolean
+  subscription_plan_id?: number
   p?: number
   page_size?: number
 }

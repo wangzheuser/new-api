@@ -5529,6 +5529,16 @@
     "Model protocol override contains an invalid model name": "Ghi đè giao thức chứa tên mô hình không hợp lệ",
     "Model protocol profile must be an object": "Hồ sơ giao thức mô hình phải là một đối tượng",
     "Protocol policy must be valid JSON": "Chính sách giao thức phải là JSON hợp lệ",
-    "Auto conversion conflicts with request body pass-through": "Chuyển đổi tự động xung đột với truyền nguyên phần thân yêu cầu"
+    "Auto conversion conflicts with request body pass-through": "Chuyển đổi tự động xung đột với truyền nguyên phần thân yêu cầu",
+    "Test Prompt": "Lời nhắc kiểm thử",
+    "Test prompt is required.": "Vui lòng nhập lời nhắc kiểm thử.",
+    "Test prompt must not exceed 16 KiB.": "Lời nhắc kiểm thử không được vượt quá 16 KiB.",
+    "Testing sends a real upstream request and may incur provider charges. Custom prompts use a maximum output of 1024 tokens.": "Kiểm thử sẽ gửi yêu cầu thực đến nhà cung cấp thượng nguồn và có thể phát sinh chi phí. Lời nhắc tùy chỉnh sử dụng đầu ra tối đa 1024 token.",
+    "Active Subscription": "Gói đăng ký đang hiệu lực",
+    "Has active subscription": "Có gói đăng ký đang hiệu lực",
+    "No active subscription": "Không có gói đăng ký đang hiệu lực",
+    "Matches all groups currently available to the user, including inherited, manually granted, and subscription groups.": "Khớp với tất cả nhóm hiện người dùng có thể sử dụng, bao gồm nhóm kế thừa, nhóm được quản trị viên cấp và nhóm do gói đăng ký cấp.",
+    "Active subscriptions must be active, already started, and not expired.": "Gói đăng ký có hiệu lực phải ở trạng thái active, đã bắt đầu và chưa hết hạn.",
+    "Selecting a plan filters users by their currently active subscription to that plan.": "Khi chọn một gói, người dùng được lọc theo đăng ký hiện đang có hiệu lực với gói đó."
   }
 }

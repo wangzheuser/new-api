@@ -5529,6 +5529,16 @@
     "Model protocol override contains an invalid model name": "Переопределение протокола содержит недопустимое имя модели",
     "Model protocol profile must be an object": "Профиль протокола модели должен быть объектом",
     "Protocol policy must be valid JSON": "Политика протоколов должна содержать допустимый JSON",
-    "Auto conversion conflicts with request body pass-through": "Автоматическое преобразование конфликтует со сквозной передачей тела запроса"
+    "Auto conversion conflicts with request body pass-through": "Автоматическое преобразование конфликтует со сквозной передачей тела запроса",
+    "Test Prompt": "Тестовый промпт",
+    "Test prompt is required.": "Введите тестовый промпт.",
+    "Test prompt must not exceed 16 KiB.": "Тестовый промпт не должен превышать 16 КиБ.",
+    "Testing sends a real upstream request and may incur provider charges. Custom prompts use a maximum output of 1024 tokens.": "Тест отправляет реальный запрос вышестоящему провайдеру и может повлечь расходы. Для пользовательских промптов максимальный вывод составляет 1024 токена.",
+    "Active Subscription": "Активная подписка",
+    "Has active subscription": "Есть активная подписка",
+    "No active subscription": "Нет активной подписки",
+    "Matches all groups currently available to the user, including inherited, manually granted, and subscription groups.": "Учитывает все группы, доступные пользователю сейчас, включая унаследованные, выданные администратором и предоставленные подпиской.",
+    "Active subscriptions must be active, already started, and not expired.": "Действующая подписка должна иметь статус active, уже начаться и ещё не истечь.",
+    "Selecting a plan filters users by their currently active subscription to that plan.": "При выборе тарифа пользователи фильтруются по действующей сейчас подписке на этот тариф."
   }
 }

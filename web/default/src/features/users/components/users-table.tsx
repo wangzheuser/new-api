@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
+import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -27,10 +28,11 @@ import {
   DataTablePage,
   useDataTable,
 } from '@/components/data-table'
+import { getAdminPlans } from '@/features/subscriptions/api'
 import { useMediaQuery } from '@/hooks'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 
-import { getUsers, searchUsers } from '../api'
+import { getGroups, getUsers, searchUsers } from '../api'
 import {
   USER_STATUS,
   getUserStatusOptions,
@@ -46,6 +48,12 @@ const route = getRouteApi('/_authenticated/users/')
 
 function isDisabledUserRow(user: User) {
   return isUserDeleted(user) || user.status === USER_STATUS.DISABLED
+}
+
+/** Returns the muted row style for disabled or deleted users. */
+function getUserRowClassName(user: User, isMobile: boolean) {
+  if (!isDisabledUserRow(user)) return undefined
+  return isMobile ? DISABLED_ROW_MOBILE : DISABLED_ROW_DESKTOP
 }
 
 export function UsersTable() {
@@ -70,7 +78,21 @@ export function UsersTable() {
     columnFilters: [
       { columnId: 'status', searchKey: 'status', type: 'array' },
       { columnId: 'role', searchKey: 'role', type: 'array' },
-      { columnId: 'group', searchKey: 'group', type: 'string' },
+      {
+        columnId: 'effectiveGroup',
+        searchKey: 'effectiveGroup',
+        type: 'array',
+      },
+      {
+        columnId: 'activeSubscription',
+        searchKey: 'activeSubscription',
+        type: 'array',
+      },
+      {
+        columnId: 'subscriptionPlanId',
+        searchKey: 'subscriptionPlanId',
+        type: 'array',
+      },
     ],
   })
   const statusFilter =
@@ -81,9 +103,43 @@ export function UsersTable() {
     (columnFilters.find((filter) => filter.id === 'role')?.value as
       | string[]
       | undefined) ?? []
-  const groupFilter =
-    (columnFilters.find((filter) => filter.id === 'group')?.value as string) ??
-    ''
+  const effectiveGroupFilter =
+    (columnFilters.find((filter) => filter.id === 'effectiveGroup')?.value as
+      | string[]
+      | undefined) ?? []
+  const activeSubscriptionFilter =
+    (columnFilters.find((filter) => filter.id === 'activeSubscription')
+      ?.value as string[] | undefined) ?? []
+  const subscriptionPlanFilter =
+    (columnFilters.find((filter) => filter.id === 'subscriptionPlanId')
+      ?.value as string[] | undefined) ?? []
+
+  const { data: groupsData } = useQuery({
+    queryKey: ['groups'],
+    queryFn: getGroups,
+  })
+  const { data: plansData } = useQuery({
+    queryKey: ['subscription-plans', 'admin'],
+    queryFn: getAdminPlans,
+  })
+  const groupOptions = useMemo(
+    () =>
+      (groupsData?.data || []).map((group) => ({
+        label: group,
+        value: group,
+      })),
+    [groupsData]
+  )
+  const subscriptionPlanOptions = useMemo(
+    () =>
+      (plansData?.data || []).map(({ plan }) => ({
+        label: plan.enabled
+          ? `${plan.title} (#${plan.id})`
+          : `${plan.title} (#${plan.id}) · ${t('Disabled')}`,
+        value: String(plan.id),
+      })),
+    [plansData, t]
+  )
 
   // Fetch data with React Query
   const { data, isLoading, isFetching } = useQuery({
@@ -94,16 +150,30 @@ export function UsersTable() {
       globalFilter,
       statusFilter,
       roleFilter,
-      groupFilter,
+      effectiveGroupFilter,
+      activeSubscriptionFilter,
+      subscriptionPlanFilter,
       refreshTrigger,
     ],
     queryFn: async () => {
       const hasFilter = globalFilter?.trim()
       const hasColumnFilter =
-        statusFilter.length > 0 || roleFilter.length > 0 || Boolean(groupFilter)
+        statusFilter.length > 0 ||
+        roleFilter.length > 0 ||
+        effectiveGroupFilter.length > 0 ||
+        activeSubscriptionFilter.length > 0 ||
+        subscriptionPlanFilter.length > 0
       const params = {
         p: pagination.pageIndex + 1,
         page_size: pagination.pageSize,
+      }
+      let activeSubscription: boolean | undefined
+      if (activeSubscriptionFilter[0] !== undefined) {
+        activeSubscription = activeSubscriptionFilter[0] === 'true'
+      }
+      let subscriptionPlanId: number | undefined
+      if (subscriptionPlanFilter[0]) {
+        subscriptionPlanId = Number(subscriptionPlanFilter[0])
       }
 
       const result =
@@ -113,7 +183,9 @@ export function UsersTable() {
               keyword: globalFilter,
               status: statusFilter[0] ?? '',
               role: roleFilter[0] ?? '',
-              group: groupFilter,
+              effective_group: effectiveGroupFilter[0] ?? '',
+              active_subscription: activeSubscription,
+              subscription_plan_id: subscriptionPlanId,
             })
           : await getUsers(params)
 
@@ -129,7 +201,6 @@ export function UsersTable() {
         total: result.data?.total || 0,
       }
     },
-    placeholderData: (previousData) => previousData,
   })
 
   const users = data?.items || []
@@ -161,6 +232,11 @@ export function UsersTable() {
     manualFiltering: true,
     totalCount: data?.total || 0,
     ensurePageInRange,
+    initialColumnVisibility: {
+      effectiveGroup: false,
+      activeSubscription: false,
+      subscriptionPlanId: false,
+    },
   })
 
   return (
@@ -190,14 +266,40 @@ export function UsersTable() {
             options: getUserRoleOptions(t),
             singleSelect: true,
           },
+          {
+            columnId: 'effectiveGroup',
+            title: t('Group'),
+            description: t(
+              'Matches all groups currently available to the user, including inherited, manually granted, and subscription groups.'
+            ),
+            options: groupOptions,
+            singleSelect: true,
+          },
+          {
+            columnId: 'activeSubscription',
+            title: t('Active Subscription'),
+            description: t(
+              'Active subscriptions must be active, already started, and not expired.'
+            ),
+            options: [
+              { label: t('Has active subscription'), value: 'true' },
+              { label: t('No active subscription'), value: 'false' },
+            ],
+            singleSelect: true,
+          },
+          {
+            columnId: 'subscriptionPlanId',
+            title: t('Subscription Plan'),
+            description: t(
+              'Selecting a plan filters users by their currently active subscription to that plan.'
+            ),
+            options: subscriptionPlanOptions,
+            singleSelect: true,
+          },
         ],
       }}
       getRowClassName={(row, { isMobile }) =>
-        isDisabledUserRow(row.original)
-          ? isMobile
-            ? DISABLED_ROW_MOBILE
-            : DISABLED_ROW_DESKTOP
-          : undefined
+        getUserRowClassName(row.original, isMobile)
       }
       bulkActions={<DataTableBulkActions table={table} />}
     />

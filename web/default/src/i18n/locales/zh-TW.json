@@ -5529,6 +5529,16 @@
     "Model protocol override contains an invalid model name": "模型協議覆蓋包含無效的模型名稱",
     "Model protocol profile must be an object": "模型協議設定必須是物件",
     "Protocol policy must be valid JSON": "協議策略必須是有效的 JSON",
-    "Auto conversion conflicts with request body pass-through": "自動轉換與請求本文透傳衝突"
+    "Auto conversion conflicts with request body pass-through": "自動轉換與請求本文透傳衝突",
+    "Test Prompt": "測試提示詞",
+    "Test prompt is required.": "請輸入測試提示詞。",
+    "Test prompt must not exceed 16 KiB.": "測試提示詞不得超過 16 KiB。",
+    "Testing sends a real upstream request and may incur provider charges. Custom prompts use a maximum output of 1024 tokens.": "測試會向上游發出真實請求，可能產生供應商費用。自訂提示詞的最大輸出為 1024 tokens。",
+    "Active Subscription": "生效訂閱",
+    "Has active subscription": "有生效訂閱",
+    "No active subscription": "無生效訂閱",
+    "Matches all groups currently available to the user, including inherited, manually granted, and subscription groups.": "比對使用者目前全部可用分組，包括系統繼承、管理員授予與訂閱授予的分組。",
+    "Active subscriptions must be active, already started, and not expired.": "生效訂閱必須處於 active 狀態、已開始且尚未到期。",
+    "Selecting a plan filters users by their currently active subscription to that plan.": "選擇套餐後，將依使用者目前生效的該套餐訂閱進行篩選。"
   }
 }

@@ -25,6 +25,7 @@ import type {
   BatchSetTagParams,
   Channel,
   ChannelBalanceResponse,
+  ChannelConnectionTestRequest,
   ChannelOpsResponse,
   ChannelPromptTestRequest,
   ChannelPromptTestResponse,
@@ -225,6 +226,21 @@ export async function testChannel(
   const res = await api.get(
     `/api/channel/test/${id}`,
     channelActionConfig({ params })
+  )
+  return res.data
+}
+
+/**
+ * Test channel connectivity with a custom text prompt.
+ */
+export async function testChannelConnectionPrompt(
+  id: number,
+  data: ChannelConnectionTestRequest
+): Promise<ChannelTestResponse> {
+  const res = await api.post(
+    `/api/channel/test/${id}/connection`,
+    data,
+    channelActionConfig()
   )
   return res.data
 }

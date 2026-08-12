@@ -79,6 +79,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
 import {
   Tooltip,
   TooltipContent,
@@ -214,6 +215,42 @@ const MODEL_PRICE_ERROR_CODE = 'model_price_error'
 const FAILURE_SUMMARY_MAX_LENGTH = 96
 const BATCH_TEST_CONCURRENCY = 5
 const BATCH_TEST_DELAY_MS = 100
+const DEFAULT_CHANNEL_TEST_PROMPT = 'hi'
+const MAX_CHANNEL_TEST_PROMPT_BYTES = 16 * 1024
+
+/** Returns the browser storage key for one channel's connection-test prompt. */
+function getChannelTestPromptStorageKey(channelId: number) {
+  return `channel-test-prompt:${channelId}`
+}
+
+/** Reads one channel's persisted test prompt without making storage mandatory. */
+function readChannelTestPrompt(channelId: number) {
+  try {
+    return (
+      window.localStorage.getItem(getChannelTestPromptStorageKey(channelId)) ??
+      DEFAULT_CHANNEL_TEST_PROMPT
+    )
+  } catch {
+    return DEFAULT_CHANNEL_TEST_PROMPT
+  }
+}
+
+/** Persists one channel's test prompt while tolerating unavailable storage. */
+function writeChannelTestPrompt(channelId: number, prompt: string) {
+  try {
+    window.localStorage.setItem(
+      getChannelTestPromptStorageKey(channelId),
+      prompt
+    )
+  } catch {
+    // The current test can continue even when browser storage is unavailable.
+  }
+}
+
+/** Measures the UTF-8 payload size used by the backend request limit. */
+function getPromptByteLength(prompt: string) {
+  return new TextEncoder().encode(prompt).length
+}
 
 type FailureStatusDisplay = {
   summary: string
@@ -334,6 +371,9 @@ function ChannelTestDialogContent({
   > | null>(null)
   const [endpointType, setEndpointType] = useState('auto')
   const [isStreamTest, setIsStreamTest] = useState(false)
+  const [testPrompt, setTestPrompt] = useState(() =>
+    readChannelTestPrompt(currentChannelId)
+  )
   const [searchTerm, setSearchTerm] = useState('')
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({})
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
@@ -417,6 +457,29 @@ function ChannelTestDialogContent({
 
   const streamDisabled = STREAM_INCOMPATIBLE_ENDPOINTS.has(endpointType)
   const effectiveStreamTest = !streamDisabled && isStreamTest
+  const testPromptByteLength = useMemo(
+    () => getPromptByteLength(testPrompt),
+    [testPrompt]
+  )
+  const testPromptError = useMemo(() => {
+    if (!testPrompt.trim()) {
+      return t('Test prompt is required.')
+    }
+    if (testPromptByteLength > MAX_CHANNEL_TEST_PROMPT_BYTES) {
+      return t('Test prompt must not exceed 16 KiB.')
+    }
+    return undefined
+  }, [t, testPrompt, testPromptByteLength])
+  const isTestPromptValid = testPromptError === undefined
+
+  const handleTestPromptChange = useCallback(
+    (event: ChangeEvent<HTMLTextAreaElement>) => {
+      const prompt = event.target.value
+      setTestPrompt(prompt)
+      writeChannelTestPrompt(currentChannelId, prompt)
+    },
+    [currentChannelId]
+  )
 
   const handleEndpointTypeChange = useCallback((value: string | null) => {
     if (value === null) return
@@ -546,9 +609,16 @@ function ChannelTestDialogContent({
     async (
       model: string,
       silent = false,
-      refreshList = true
+      refreshList = true,
+      prompt = testPrompt
     ): Promise<TestResult | undefined> => {
-      if (!currentRow) return
+      if (
+        !currentRow ||
+        !prompt.trim() ||
+        getPromptByteLength(prompt) > MAX_CHANNEL_TEST_PROMPT_BYTES
+      ) {
+        return
+      }
 
       markModelTesting(model, true)
       updateTestResult(model, { status: 'testing' })
@@ -562,6 +632,7 @@ function ChannelTestDialogContent({
             testModel: model,
             endpointType: endpointType === 'auto' ? undefined : endpointType,
             stream: effectiveStreamTest || undefined,
+            userPrompt: prompt,
             silent,
           },
           (success, responseTime, error, errorCode) => {
@@ -603,6 +674,7 @@ function ChannelTestDialogContent({
       markModelTesting,
       refreshChannelLists,
       t,
+      testPrompt,
       updateTestResult,
     ]
   )
@@ -620,6 +692,14 @@ function ChannelTestDialogContent({
         ...new Set(modelsToTest.map((model) => model.trim()).filter(Boolean)),
       ]
       if (!uniqueModels.length) return
+
+      const promptSnapshot = testPrompt
+      if (
+        !promptSnapshot.trim() ||
+        getPromptByteLength(promptSnapshot) > MAX_CHANNEL_TEST_PROMPT_BYTES
+      ) {
+        return
+      }
 
       batchStopRequestedRef.current = false
       setIsBatchTesting(true)
@@ -675,7 +755,12 @@ function ChannelTestDialogContent({
           )
           const batchPromises = batch.map(async (modelName) => {
             try {
-              const result = await testSingleModel(modelName, true, false)
+              const result = await testSingleModel(
+                modelName,
+                true,
+                false,
+                promptSnapshot
+              )
               const finalResult = result ?? createFallbackResult()
               if (!result) {
                 updateTestResult(modelName, finalResult)
@@ -749,6 +834,7 @@ function ChannelTestDialogContent({
       dismissBatchProgressToast,
       refreshChannelLists,
       t,
+      testPrompt,
       testSingleModel,
       updateTestResult,
     ]
@@ -930,7 +1016,9 @@ function ChannelTestDialogContent({
                     variant='ghost'
                     size='icon-sm'
                     onClick={() => testSingleModel(model)}
-                    disabled={isTestingModel || isBatchTesting}
+                    disabled={
+                      isTestingModel || isBatchTesting || !isTestPromptValid
+                    }
                     aria-label={t('Test Connection')}
                   />
                 }
@@ -951,6 +1039,7 @@ function ChannelTestDialogContent({
     [
       defaultTestModel,
       isBatchTesting,
+      isTestPromptValid,
       t,
       testResults,
       testingModels,
@@ -993,6 +1082,28 @@ function ChannelTestDialogContent({
         }
       >
         <div className='max-h-[78vh] space-y-4 overflow-y-auto py-4 pr-1'>
+          <div className='grid gap-2'>
+            <Label htmlFor='channel-test-prompt'>{t('Test Prompt')}</Label>
+            <Textarea
+              id='channel-test-prompt'
+              value={testPrompt}
+              onChange={handleTestPromptChange}
+              rows={3}
+              maxLength={MAX_CHANNEL_TEST_PROMPT_BYTES}
+              disabled={isAnyTesting}
+              aria-invalid={Boolean(testPromptError)}
+            />
+            {testPromptError ? (
+              <p className='text-destructive text-xs'>{testPromptError}</p>
+            ) : (
+              <p className='text-muted-foreground text-xs'>
+                {t(
+                  'Testing sends a real upstream request and may incur provider charges. Custom prompts use a maximum output of 1024 tokens.'
+                )}
+              </p>
+            )}
+          </div>
+
           <div className='grid gap-4 md:grid-cols-2'>
             <div className='grid gap-2'>
               <Label htmlFor='endpoint-type'>{t('Endpoint Type')}</Label>
@@ -1075,7 +1186,11 @@ function ChannelTestDialogContent({
                       <Button
                         size='sm'
                         onClick={() => handleBatchTest(filteredModels)}
-                        disabled={isAnyTesting || filteredModels.length === 0}
+                        disabled={
+                          isAnyTesting ||
+                          !isTestPromptValid ||
+                          filteredModels.length === 0
+                        }
                       >
                         {testAllButtonLabel}
                       </Button>

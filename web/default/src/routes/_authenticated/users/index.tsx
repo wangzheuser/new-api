@@ -36,6 +36,15 @@ const usersSearchSchema = z.object({
     .optional()
     .catch([]),
   group: z.string().optional().catch(''),
+  effectiveGroup: z.array(z.string()).optional().catch([]),
+  activeSubscription: z
+    .array(z.enum(['true', 'false']))
+    .optional()
+    .catch([]),
+  subscriptionPlanId: z
+    .array(z.string().regex(/^[1-9]\d*$/))
+    .optional()
+    .catch([]),
 })
 
 export const Route = createFileRoute('/_authenticated/users/')({

@@ -321,7 +321,27 @@ func GetAllUsers(pageInfo *common.PageInfo) (users []*User, total int64, err err
 	return users, total, nil
 }
 
-func SearchUsers(keyword string, group string, role *int, status *int, startIdx int, num int) ([]*User, int64, error) {
+// UserSearchFilters contains the server-side filters supported by the user list.
+type UserSearchFilters struct {
+	Keyword             string
+	BaseGroup           string
+	EffectiveGroup      string
+	EffectiveBaseGroups []string
+	Role                *int
+	Status              *int
+	ActiveSubscription  *bool
+	SubscriptionPlanId  *int
+}
+
+// GetDistinctUserBaseGroups returns all persisted base groups, including soft-deleted users.
+func GetDistinctUserBaseGroups() ([]string, error) {
+	groups := make([]string, 0)
+	err := DB.Unscoped().Model(&User{}).Distinct("group").Pluck("group", &groups).Error
+	return groups, err
+}
+
+// SearchUsers applies keyword, entitlement, and subscription filters before pagination.
+func SearchUsers(filters UserSearchFilters, startIdx int, num int) ([]*User, int64, error) {
 	var users []*User
 	var total int64
 	var err error
@@ -342,10 +362,10 @@ func SearchUsers(keyword string, group string, role *int, status *int, startIdx 
 
 	// 构建搜索条件
 	likeCondition := "username LIKE ? OR email LIKE ? OR display_name LIKE ?"
-	likeArgs := []interface{}{"%" + keyword + "%", "%" + keyword + "%", "%" + keyword + "%"}
+	likeArgs := []interface{}{"%" + filters.Keyword + "%", "%" + filters.Keyword + "%", "%" + filters.Keyword + "%"}
 
 	// 尝试将关键字转换为整数ID
-	keywordInt, err := strconv.Atoi(keyword)
+	keywordInt, err := strconv.Atoi(filters.Keyword)
 	if err == nil {
 		// 如果是数字，同时搜索ID和其他字段
 		likeCondition = "id = ? OR " + likeCondition
@@ -353,17 +373,64 @@ func SearchUsers(keyword string, group string, role *int, status *int, startIdx 
 	}
 
 	query = query.Where("("+likeCondition+")", likeArgs...)
-	if group != "" {
-		query = query.Where(commonGroupCol+" = ?", group)
+	if filters.BaseGroup != "" {
+		query = query.Where(commonGroupCol+" = ?", filters.BaseGroup)
 	}
-	if role != nil {
-		query = query.Where("role = ?", *role)
+	if filters.Role != nil {
+		query = query.Where("role = ?", *filters.Role)
 	}
-	if status != nil {
-		if *status == -1 {
+	if filters.Status != nil {
+		if *filters.Status == -1 {
 			query = query.Where("deleted_at IS NOT NULL")
 		} else {
-			query = query.Where("deleted_at IS NULL").Where("status = ?", *status)
+			query = query.Where("deleted_at IS NULL").Where("status = ?", *filters.Status)
+		}
+	}
+
+	now := common.GetTimestamp()
+	if filters.EffectiveGroup != "" {
+		manualGrantUsers := tx.Model(&UserGroupGrant{}).
+			Select("user_id").
+			Where("group_name = ? AND (expires_at = 0 OR expires_at > ?)", filters.EffectiveGroup, now)
+
+		encodedGroup, marshalErr := common.Marshal(filters.EffectiveGroup)
+		if marshalErr != nil {
+			tx.Rollback()
+			return nil, 0, marshalErr
+		}
+		// Escape SQL LIKE metacharacters while matching one complete JSON string element.
+		encodedGroupPattern := strings.ReplaceAll(string(encodedGroup), "!", "!!")
+		encodedGroupPattern = strings.ReplaceAll(encodedGroupPattern, "%", "!%")
+		encodedGroupPattern = strings.ReplaceAll(encodedGroupPattern, "_", "!_")
+		grantGroupPattern := "%" + encodedGroupPattern + "%"
+		subscriptionGrantUsers := tx.Model(&UserSubscription{}).
+			Select("user_id").
+			Where("status = ? AND start_time <= ? AND end_time > ?", "active", now, now).
+			Where("entitlement_group = ? OR grant_groups LIKE ? ESCAPE '!'", filters.EffectiveGroup, grantGroupPattern)
+
+		effectiveGroupCondition := tx.Where("id IN (?)", manualGrantUsers).
+			Or("id IN (?)", subscriptionGrantUsers)
+		if len(filters.EffectiveBaseGroups) > 0 {
+			effectiveGroupCondition = effectiveGroupCondition.Or(commonGroupCol+" IN ?", filters.EffectiveBaseGroups)
+		}
+		query = query.Where(effectiveGroupCondition)
+	}
+
+	if filters.ActiveSubscription != nil || filters.SubscriptionPlanId != nil {
+		activeSubscriptionUsers := tx.Model(&UserSubscription{}).
+			Select("user_id").
+			Where("status = ? AND start_time <= ? AND end_time > ?", "active", now, now)
+		if filters.SubscriptionPlanId != nil {
+			activeSubscriptionUsers = activeSubscriptionUsers.Where("plan_id = ?", *filters.SubscriptionPlanId)
+		}
+		isActive := true
+		if filters.ActiveSubscription != nil {
+			isActive = *filters.ActiveSubscription
+		}
+		if isActive {
+			query = query.Where("id IN (?)", activeSubscriptionUsers)
+		} else {
+			query = query.Where("id NOT IN (?)", activeSubscriptionUsers)
 		}
 	}
 

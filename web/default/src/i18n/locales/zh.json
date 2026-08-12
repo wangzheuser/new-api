@@ -5529,6 +5529,16 @@
     "Model protocol override contains an invalid model name": "模型协议覆盖包含无效的模型名称",
     "Model protocol profile must be an object": "模型协议配置必须是对象",
     "Protocol policy must be valid JSON": "协议策略必须是有效的 JSON",
-    "Auto conversion conflicts with request body pass-through": "自动转换与请求体透传冲突"
+    "Auto conversion conflicts with request body pass-through": "自动转换与请求体透传冲突",
+    "Test Prompt": "测试提示词",
+    "Test prompt is required.": "请输入测试提示词。",
+    "Test prompt must not exceed 16 KiB.": "测试提示词不得超过 16 KiB。",
+    "Testing sends a real upstream request and may incur provider charges. Custom prompts use a maximum output of 1024 tokens.": "测试会向上游发起真实请求，可能产生供应商费用。自定义提示词的最大输出为 1024 tokens。",
+    "Active Subscription": "生效订阅",
+    "Has active subscription": "有生效订阅",
+    "No active subscription": "无生效订阅",
+    "Matches all groups currently available to the user, including inherited, manually granted, and subscription groups.": "匹配用户当前全部可用分组，包括系统继承、管理员授予和订阅授予的分组。",
+    "Active subscriptions must be active, already started, and not expired.": "生效订阅必须处于 active 状态、已开始且尚未到期。",
+    "Selecting a plan filters users by their currently active subscription to that plan.": "选择套餐后，将按用户当前生效的该套餐订阅进行筛选。"
   }
 }
