@@ -309,6 +309,28 @@ export interface KeyStatus {
   key_preview?: string
 }
 
+export type MultiKeyTestClassification =
+  | 'available'
+  | 'auth_failed'
+  | 'quota_exhausted'
+  | 'rate_limited'
+  | 'model_forbidden'
+  | 'configuration_error'
+  | 'upstream_error'
+  | 'network_error'
+  | 'response_error'
+
+export interface MultiKeyTestResult {
+  key_index: number
+  success: boolean
+  classification: MultiKeyTestClassification
+  http_status?: number
+  time?: number
+  error_code?: string
+  message?: string
+  tested_at: number
+}
+
 export type MultiKeyConfirmAction = {
   type:
     | 'enable'
@@ -317,7 +339,10 @@ export type MultiKeyConfirmAction = {
     | 'enable-all'
     | 'disable-all'
     | 'delete-disabled'
+    | 'disable-auth-failed'
+    | 'enable-recovered'
   keyIndex?: number
+  keyIndexes?: number[]
 }
 
 export interface MultiKeyStatusResponse {

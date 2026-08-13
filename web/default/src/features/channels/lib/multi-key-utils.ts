@@ -55,6 +55,10 @@ export function getMultiKeyConfirmMessage(
       return MULTI_KEY_CONFIRM_MESSAGES.DISABLE_ALL
     case 'delete-disabled':
       return MULTI_KEY_CONFIRM_MESSAGES.DELETE_DISABLED
+    case 'disable-auth-failed':
+      return 'Disable all keys that failed authentication? Keys with temporary upstream errors will not be changed.'
+    case 'enable-recovered':
+      return 'Enable all disabled keys that passed the latest test?'
     default:
       return ''
   }
@@ -70,6 +74,7 @@ export function isDestructiveAction(
   return (
     action.type === 'delete' ||
     action.type === 'delete-disabled' ||
-    action.type === 'disable-all'
+    action.type === 'disable-all' ||
+    action.type === 'disable-auth-failed'
   )
 }

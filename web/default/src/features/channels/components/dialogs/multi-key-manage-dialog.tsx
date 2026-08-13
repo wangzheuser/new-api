@@ -17,7 +17,18 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQueryClient } from '@tanstack/react-query'
-import { Loader2, RefreshCw, Trash2, Power, PowerOff } from 'lucide-react'
+import {
+  CheckCircle2,
+  Loader2,
+  Play,
+  RefreshCw,
+  RotateCw,
+  ShieldOff,
+  Square,
+  Trash2,
+  Power,
+  PowerOff,
+} from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -27,6 +38,11 @@ import { StaticDataTable } from '@/components/data-table'
 import { Dialog } from '@/components/dialog'
 import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
+import {
+  Progress,
+  ProgressLabel,
+  ProgressValue,
+} from '@/components/ui/progress'
 import {
   Select,
   SelectContent,
@@ -53,6 +69,7 @@ import {
   deleteDisabledMultiKeys,
 } from '../../api'
 import { MULTI_KEY_FILTER_OPTIONS } from '../../constants'
+import { useMultiKeyTest } from '../../hooks/use-multi-key-test'
 import {
   channelsQueryKeys,
   formatTimestamp,
@@ -60,10 +77,16 @@ import {
   getMultiKeyConfirmMessage,
   isDestructiveAction,
 } from '../../lib'
-import type { KeyStatus, MultiKeyConfirmAction } from '../../types'
+import type {
+  KeyStatus,
+  MultiKeyConfirmAction,
+  MultiKeyTestResult,
+} from '../../types'
 import { useChannels } from '../channels-provider'
 import { StatisticsCard } from './multi-key-statistics-card'
 import { MultiKeyTableRowActions } from './multi-key-table-row-actions'
+import { MultiKeyTestDetailsDialog } from './multi-key-test-details-dialog'
+import { MultiKeyTestResultBadge } from './multi-key-test-result'
 
 type MultiKeyManageDialogProps = {
   open: boolean
@@ -94,18 +117,30 @@ export function MultiKeyManageDialog({
   const [enabledCount, setEnabledCount] = useState(0)
   const [manualDisabledCount, setManualDisabledCount] = useState(0)
   const [autoDisabledCount, setAutoDisabledCount] = useState(0)
+  const [knownKeyStatus, setKnownKeyStatus] = useState<Map<number, number>>(
+    () => new Map()
+  )
 
   // UI state
   const [statusFilter, setStatusFilter] = useState<number | null>(null)
   const [confirmAction, setConfirmAction] =
     useState<MultiKeyConfirmAction | null>(null)
   const [isPerformingAction, setIsPerformingAction] = useState(false)
+  const [detailsResult, setDetailsResult] = useState<MultiKeyTestResult | null>(
+    null
+  )
+  const multiKeyTest = useMultiKeyTest({
+    channelId: currentRow?.id ?? 0,
+    open,
+  })
 
   // Reset and load data when dialog opens
   useEffect(() => {
     if (open && currentRow) {
       setCurrentPage(1)
       setStatusFilter(null)
+      setKnownKeyStatus(new Map())
+      multiKeyTest.reset()
       loadKeyStatus(1, pageSize, null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -136,6 +171,13 @@ export function MultiKeyManageDialog({
         setEnabledCount(response.data.enabled_count || 0)
         setManualDisabledCount(response.data.manual_disabled_count || 0)
         setAutoDisabledCount(response.data.auto_disabled_count || 0)
+        setKnownKeyStatus((current) => {
+          const next = new Map(current)
+          for (const key of response.data?.keys || []) {
+            next.set(key.index, key.status)
+          }
+          return next
+        })
       } else {
         toast.error(response.message || t('Failed to load key status'))
       }
@@ -149,7 +191,7 @@ export function MultiKeyManageDialog({
   }
 
   const handleStatusFilterChange = (value: string) => {
-    const newFilter = value === 'all' ? null : parseInt(value)
+    const newFilter = value === 'all' ? null : Number.parseInt(value)
     setStatusFilter(newFilter)
     setCurrentPage(1)
     loadKeyStatus(1, pageSize, newFilter)
@@ -189,11 +231,42 @@ export function MultiKeyManageDialog({
         response = await disableAllMultiKeys(currentRow.id)
       } else if (type === 'delete-disabled') {
         response = await deleteDisabledMultiKeys(currentRow.id)
+      } else if (type === 'disable-auth-failed') {
+        const responses = await Promise.all(
+          (confirmAction.keyIndexes || []).map((index) =>
+            disableMultiKey(currentRow.id, index)
+          )
+        )
+        response = responses.find((item) => !item.success) || { success: true }
+      } else if (type === 'enable-recovered') {
+        const responses = await Promise.all(
+          (confirmAction.keyIndexes || []).map((index) =>
+            enableMultiKey(currentRow.id, index)
+          )
+        )
+        response = responses.find((item) => !item.success) || { success: true }
       }
 
       if (response?.success) {
         toast.success(response.message || t('Operation successful'))
         queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+        if (type === 'disable-auth-failed') {
+          setKnownKeyStatus((current) => {
+            const next = new Map(current)
+            for (const index of confirmAction.keyIndexes || []) {
+              next.set(index, 2)
+            }
+            return next
+          })
+        } else if (type === 'enable-recovered') {
+          setKnownKeyStatus((current) => {
+            const next = new Map(current)
+            for (const index of confirmAction.keyIndexes || []) {
+              next.set(index, 1)
+            }
+            return next
+          })
+        }
 
         // Reload data - reset to page 1 for bulk actions
         const isBulkAction = type.includes('all') || type === 'delete-disabled'
@@ -202,6 +275,9 @@ export function MultiKeyManageDialog({
           loadKeyStatus(1, pageSize)
         } else {
           loadKeyStatus(currentPage, pageSize)
+        }
+        if (type === 'delete' || type === 'delete-disabled') {
+          multiKeyTest.reset()
         }
       } else {
         toast.error(response?.message || t('Operation failed'))
@@ -231,6 +307,62 @@ export function MultiKeyManageDialog({
   const formatKeyTimestamp = (timestamp?: number) => {
     if (!timestamp) return '-'
     return formatTimestamp(timestamp)
+  }
+
+  const authFailedIndexes = [...multiKeyTest.results.values()]
+    .filter((result) => result.classification === 'auth_failed')
+    .map((result) => result.key_index)
+  const recoveredIndexes = [...multiKeyTest.results.values()]
+    .filter(
+      (result) => result.success && knownKeyStatus.get(result.key_index) !== 1
+    )
+    .map((result) => result.key_index)
+  const abnormalIndexes = [...multiKeyTest.results.values()]
+    .filter((result) => !result.success)
+    .map((result) => result.key_index)
+  const showTestSummary =
+    multiKeyTest.runState !== 'idle' || multiKeyTest.summary.completed > 0
+  const progress =
+    multiKeyTest.runTotal > 0
+      ? (multiKeyTest.runCompleted / multiKeyTest.runTotal) * 100
+      : 0
+  const keyCount = currentRow?.channel_info?.multi_key_size || total
+  let testProgressLabel = t('Testing completed')
+  if (multiKeyTest.runState === 'running') {
+    testProgressLabel = t('Testing keys')
+  } else if (multiKeyTest.runState === 'stopped') {
+    testProgressLabel = t('Testing stopped')
+  }
+
+  let keyTableFallback = (
+    <div className='text-muted-foreground py-12 text-center'>
+      {t('No keys found')}
+    </div>
+  )
+  if (isLoading) {
+    keyTableFallback = (
+      <div className='flex items-center justify-center py-12'>
+        <Loader2 className='text-muted-foreground h-8 w-8 animate-spin' />
+      </div>
+    )
+  }
+
+  const startAllKeyTests = async () => {
+    if (!currentRow || keyCount <= 0) return
+    try {
+      const response = await getMultiKeyStatus(currentRow.id, 1, keyCount)
+      if (response.success && response.data) {
+        setKnownKeyStatus(
+          new Map(response.data.keys.map((key) => [key.index, key.status]))
+        )
+      }
+    } catch {
+      // Testing can continue because the key indexes come from channel metadata.
+    }
+    await multiKeyTest.startBatch(
+      Array.from({ length: keyCount }, (_, index) => index),
+      true
+    )
   }
 
   if (!currentRow) return null
@@ -273,33 +405,54 @@ export function MultiKeyManageDialog({
           {/* Statistics */}
           <div className='grid shrink-0 grid-cols-3 gap-3'>
             <StatisticsCard
-              label={t('Enabled')}
-              count={enabledCount}
-              total={total}
+              label={t(showTestSummary ? 'Tested' : 'Enabled')}
+              count={
+                showTestSummary ? multiKeyTest.summary.completed : enabledCount
+              }
+              total={showTestSummary ? keyCount : total}
             />
             <StatisticsCard
-              label={t('Manual Disabled')}
-              count={manualDisabledCount}
-              total={total}
+              label={t(showTestSummary ? 'Available' : 'Manual Disabled')}
+              count={
+                showTestSummary
+                  ? multiKeyTest.summary.available
+                  : manualDisabledCount
+              }
+              total={showTestSummary ? keyCount : total}
             />
             <StatisticsCard
-              label={t('Auto Disabled')}
-              count={autoDisabledCount}
-              total={total}
+              label={t(showTestSummary ? 'Abnormal' : 'Auto Disabled')}
+              count={
+                showTestSummary
+                  ? multiKeyTest.summary.abnormal
+                  : autoDisabledCount
+              }
+              total={showTestSummary ? keyCount : total}
             />
           </div>
+
+          {multiKeyTest.runState !== 'idle' && (
+            <div className='bg-muted/35 shrink-0 rounded-md border p-3'>
+              <Progress value={progress}>
+                <ProgressLabel>{testProgressLabel}</ProgressLabel>
+                <ProgressValue>
+                  {() =>
+                    `${multiKeyTest.runCompleted} / ${multiKeyTest.runTotal}`
+                  }
+                </ProgressValue>
+              </Progress>
+            </div>
+          )}
 
           <Separator className='shrink-0' />
 
           {/* Toolbar */}
-          <div className='flex shrink-0 items-center justify-between'>
+          <div className='flex shrink-0 flex-wrap items-center justify-between gap-2'>
             <Select
-              items={[
-                ...MULTI_KEY_FILTER_OPTIONS.map((option) => ({
-                  value: option.value,
-                  label: t(option.label),
-                })),
-              ]}
+              items={MULTI_KEY_FILTER_OPTIONS.map((option) => ({
+                value: option.value,
+                label: t(option.label),
+              }))}
               value={statusFilter === null ? 'all' : statusFilter.toString()}
               onValueChange={(v) => v !== null && handleStatusFilterChange(v)}
             >
@@ -317,7 +470,73 @@ export function MultiKeyManageDialog({
               </SelectContent>
             </Select>
 
-            <div className='flex items-center gap-2'>
+            <div className='flex flex-wrap items-center justify-end gap-2'>
+              {multiKeyTest.runState === 'running' ? (
+                <Button
+                  variant='outline'
+                  size='sm'
+                  onClick={multiKeyTest.stopBatch}
+                >
+                  <Square className='h-4 w-4' />
+                  {t('Stop testing')}
+                </Button>
+              ) : (
+                <Button
+                  variant='default'
+                  size='sm'
+                  onClick={() => void startAllKeyTests()}
+                  disabled={keyCount === 0}
+                >
+                  <Play className='h-4 w-4' />
+                  {t('Test all keys')}
+                </Button>
+              )}
+
+              {abnormalIndexes.length > 0 &&
+                multiKeyTest.runState !== 'running' && (
+                  <Button
+                    variant='outline'
+                    size='sm'
+                    onClick={() =>
+                      void multiKeyTest.startBatch(abnormalIndexes)
+                    }
+                  >
+                    <RotateCw className='h-4 w-4' />
+                    {t('Retest abnormal')}
+                  </Button>
+                )}
+
+              {authFailedIndexes.length > 0 && (
+                <Button
+                  variant='outline'
+                  size='sm'
+                  onClick={() =>
+                    setConfirmAction({
+                      type: 'disable-auth-failed',
+                      keyIndexes: authFailedIndexes,
+                    })
+                  }
+                >
+                  <ShieldOff className='h-4 w-4' />
+                  {t('Disable auth failures')}
+                </Button>
+              )}
+
+              {recoveredIndexes.length > 0 && (
+                <Button
+                  variant='outline'
+                  size='sm'
+                  onClick={() =>
+                    setConfirmAction({
+                      type: 'enable-recovered',
+                      keyIndexes: recoveredIndexes,
+                    })
+                  }
+                >
+                  <CheckCircle2 className='h-4 w-4' />
+                  {t('Enable recovered')}
+                </Button>
+              )}
               <Button
                 variant='outline'
                 size='sm'
@@ -378,18 +597,10 @@ export function MultiKeyManageDialog({
 
           {/* Table */}
           <div className='min-h-0 flex-1 overflow-auto rounded-md border'>
-            {isLoading ? (
-              <div className='flex items-center justify-center py-12'>
-                <Loader2 className='text-muted-foreground h-8 w-8 animate-spin' />
-              </div>
-            ) : keys.length === 0 ? (
-              <div className='text-muted-foreground py-12 text-center'>
-                {t('No keys found')}
-              </div>
-            ) : (
+            {keys.length > 0 && !isLoading ? (
               <StaticDataTable
                 className='rounded-none border-0'
-                tableClassName='min-w-[800px]'
+                tableClassName='min-w-[1100px]'
                 data={keys}
                 getRowKey={(key) => key.index}
                 columns={[
@@ -421,6 +632,42 @@ export function MultiKeyManageDialog({
                     cell: (key) => formatKeyTimestamp(key.disabled_time),
                   },
                   {
+                    id: 'test-result',
+                    header: t('Test result'),
+                    className: 'w-44',
+                    cell: (key) => (
+                      <MultiKeyTestResultBadge
+                        result={multiKeyTest.results.get(key.index)}
+                        isTesting={multiKeyTest.testingKeys.has(key.index)}
+                        onShowDetails={setDetailsResult}
+                      />
+                    ),
+                  },
+                  {
+                    id: 'response-time',
+                    header: t('Response time'),
+                    className: 'w-32',
+                    cellClassName: 'text-muted-foreground text-sm tabular-nums',
+                    cell: (key) => {
+                      const time = multiKeyTest.results.get(key.index)?.time
+                      return time === undefined ? '-' : `${time.toFixed(2)} s`
+                    },
+                  },
+                  {
+                    id: 'tested-at',
+                    header: t('Last tested'),
+                    className: 'w-44',
+                    cellClassName: 'text-muted-foreground text-sm',
+                    cell: (key) => {
+                      const testedAt = multiKeyTest.results.get(
+                        key.index
+                      )?.tested_at
+                      return testedAt
+                        ? formatKeyTimestamp(Math.floor(testedAt / 1000))
+                        : '-'
+                    },
+                  },
+                  {
                     id: 'actions',
                     header: t('Actions'),
                     className: 'text-right',
@@ -429,12 +676,19 @@ export function MultiKeyManageDialog({
                         keyIndex={key.index}
                         status={key.status}
                         canDelete={canEditSensitive}
+                        hasTestResult={multiKeyTest.results.has(key.index)}
+                        isTesting={multiKeyTest.testingKeys.has(key.index)}
+                        onTest={(keyIndex) =>
+                          void multiKeyTest.testKey(keyIndex)
+                        }
                         onAction={setConfirmAction}
                       />
                     ),
                   },
                 ]}
               />
+            ) : (
+              keyTableFallback
             )}
           </div>
 
@@ -479,6 +733,10 @@ export function MultiKeyManageDialog({
         destructive={isDestructiveAction(confirmAction)}
         isLoading={isPerformingAction}
         handleConfirm={performAction}
+      />
+      <MultiKeyTestDetailsDialog
+        result={detailsResult}
+        onOpenChange={(detailsOpen) => !detailsOpen && setDetailsResult(null)}
       />
     </>
   )

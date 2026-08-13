@@ -39,6 +39,7 @@ import type {
   GetChannelsResponse,
   MultiKeyManageParams,
   MultiKeyStatusResponse,
+  MultiKeyTestResult,
   SearchChannelsParams,
   SearchChannelsResponse,
   TagOperationParams,
@@ -221,11 +222,26 @@ export async function testChannel(
     endpoint_type?: string
     stream?: boolean
     probe_mode?: 'native'
+    key_index?: number
   }
 ): Promise<ChannelTestResponse> {
   const res = await api.get(
     `/api/channel/test/${id}`,
     channelActionConfig({ params })
+  )
+  return res.data
+}
+
+/**
+ * Test one exact key without changing its enabled state or polling position.
+ */
+export async function testMultiKey(
+  channelId: number,
+  keyIndex: number
+): Promise<Omit<MultiKeyTestResult, 'tested_at'>> {
+  const res = await api.get(
+    `/api/channel/test/${channelId}`,
+    channelActionConfig({ params: { key_index: keyIndex } })
   )
   return res.data
 }

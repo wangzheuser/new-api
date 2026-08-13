@@ -1,11 +1,13 @@
 package controller
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
@@ -601,6 +603,57 @@ func TestClassifyNativeProbeResult(t *testing.T) {
 			assert.Equal(t, test.want, classifyNativeProbeResult(test.result))
 		})
 	}
+}
+
+func TestClassifyMultiKeyTestResult(t *testing.T) {
+	tests := []struct {
+		name   string
+		result testResult
+		want   string
+	}{
+		{name: "available", result: testResult{upstreamStatus: http.StatusOK}, want: "available"},
+		{name: "authentication", result: testResult{newAPIError: types.NewErrorWithStatusCode(assert.AnError, types.ErrorCodeBadResponseStatusCode, http.StatusUnauthorized), upstreamStatus: http.StatusUnauthorized}, want: "auth_failed"},
+		{name: "quota", result: testResult{newAPIError: types.NewErrorWithStatusCode(assert.AnError, types.ErrorCodeBadResponseStatusCode, http.StatusPaymentRequired), upstreamStatus: http.StatusPaymentRequired}, want: "quota_exhausted"},
+		{name: "rate limited", result: testResult{newAPIError: types.NewErrorWithStatusCode(assert.AnError, types.ErrorCodeBadResponseStatusCode, http.StatusTooManyRequests), upstreamStatus: http.StatusTooManyRequests}, want: "rate_limited"},
+		{name: "model forbidden", result: testResult{newAPIError: types.NewError(assert.AnError, types.ErrorCodeModelNotFound)}, want: "model_forbidden"},
+		{name: "configuration", result: testResult{newAPIError: types.NewError(assert.AnError, types.ErrorCodeGetChannelFailed)}, want: "configuration_error"},
+		{name: "response", result: testResult{newAPIError: types.NewError(assert.AnError, types.ErrorCodeBadResponseBody), upstreamStatus: http.StatusOK}, want: "response_error"},
+		{name: "upstream", result: testResult{newAPIError: types.NewErrorWithStatusCode(assert.AnError, types.ErrorCodeBadResponseStatusCode, http.StatusBadGateway), upstreamStatus: http.StatusBadGateway}, want: "upstream_error"},
+		{name: "request failed", result: testResult{newAPIError: types.NewError(assert.AnError, types.ErrorCodeDoRequestFailed)}, want: "network_error"},
+		{name: "network", result: testResult{localErr: assert.AnError}, want: "network_error"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, classifyMultiKeyTestResult(test.result))
+		})
+	}
+}
+
+func TestRespondMultiKeyConnectionTestMasksSensitiveError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	testContext, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(testContext, constant.ContextKeyChannelKey, "sk-secret-value")
+	apiErr := types.NewErrorWithStatusCode(
+		errors.New("upstream rejected sk-secret-value"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusUnauthorized,
+	)
+
+	respondMultiKeyConnectionTest(c, time.Now(), testResult{
+		context:        testContext,
+		newAPIError:    apiErr,
+		upstreamStatus: http.StatusUnauthorized,
+	}, 2)
+
+	var response map[string]any
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.Equal(t, false, response["success"])
+	assert.Equal(t, float64(2), response["key_index"])
+	assert.Equal(t, "auth_failed", response["classification"])
+	assert.NotContains(t, response["message"], "sk-secret-value")
 }
 
 func TestSelectChannelsForAutomaticTestPassiveRecoveryOnlyUsesAutoDisabled(t *testing.T) {

@@ -62,6 +62,14 @@ type channelTestOptions struct {
 	applySystemPrompt          bool
 	requireSystemPromptSupport bool
 	nativeProbe                bool
+	keyIndex                   *int
+}
+
+type channelTestResponseOptions struct {
+	includeDetails     bool
+	isStream           bool
+	keyIndex           *int
+	updateResponseTime bool
 }
 
 type channelPromptTestRequest struct {
@@ -236,7 +244,12 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, op
 		channelCopy.SetSetting(settings)
 		setupChannel = &channelCopy
 	}
-	newAPIError := middleware.SetupContextForSelectedChannel(c, setupChannel, testModel)
+	var newAPIError *types.NewAPIError
+	if options.keyIndex == nil {
+		newAPIError = middleware.SetupContextForSelectedChannel(c, setupChannel, testModel)
+	} else {
+		newAPIError = middleware.SetupContextForSelectedChannelKey(c, setupChannel, testModel, *options.keyIndex)
+	}
 	if newAPIError != nil {
 		return testResult{
 			context:     c,
@@ -1048,6 +1061,19 @@ func TestChannel(c *gin.Context) {
 	endpointType := c.Query("endpoint_type")
 	isStream, _ := strconv.ParseBool(c.Query("stream"))
 	nativeProbe := c.Query("probe_mode") == "native"
+	var keyIndex *int
+	if rawKeyIndex, exists := c.GetQuery("key_index"); exists {
+		parsedKeyIndex, parseErr := strconv.Atoi(rawKeyIndex)
+		if parseErr != nil || parsedKeyIndex < 0 {
+			common.ApiError(c, errors.New("key_index must be a non-negative integer"))
+			return
+		}
+		keyIndex = &parsedKeyIndex
+	}
+	if keyIndex != nil && nativeProbe {
+		common.ApiError(c, errors.New("key_index cannot be combined with probe_mode"))
+		return
+	}
 	if nativeProbe && !dto.IsTextProtocolEndpointType(constant.EndpointType(endpointType)) {
 		common.ApiError(c, errors.New("native probe requires a supported text endpoint_type"))
 		return
@@ -1063,7 +1089,7 @@ func TestChannel(c *gin.Context) {
 		requestCtx = c.Request.Context()
 	}
 	result := testChannel(requestCtx, channel, testUserID, channelTestOptions{
-		model: testModel, endpointType: endpointType, isStream: isStream, nativeProbe: nativeProbe,
+		model: testModel, endpointType: endpointType, isStream: isStream, nativeProbe: nativeProbe, keyIndex: keyIndex,
 	})
 	if nativeProbe {
 		consumedTime := float64(time.Since(tik).Milliseconds()) / 1000.0
@@ -1086,7 +1112,11 @@ func TestChannel(c *gin.Context) {
 		})
 		return
 	}
-	respondChannelConnectionTest(c, channel, tik, result, false, isStream)
+	respondChannelConnectionTest(c, channel, tik, result, channelTestResponseOptions{
+		isStream:           isStream,
+		keyIndex:           keyIndex,
+		updateResponseTime: keyIndex == nil,
+	})
 }
 
 // shouldApplySystemPromptForConnectionTest mirrors the request rewriting guards used by real relay requests.
@@ -1158,11 +1188,19 @@ func TestChannelConnectionPrompt(c *gin.Context) {
 		maxOutputTokens:   getChannelConnectionTestMaxOutputTokens(request.UserPrompt),
 		applySystemPrompt: shouldApplySystemPromptForConnectionTest(channel),
 	})
-	respondChannelConnectionTest(c, channel, tik, result, true, request.Stream)
+	respondChannelConnectionTest(c, channel, tik, result, channelTestResponseOptions{
+		includeDetails:     true,
+		isStream:           request.Stream,
+		updateResponseTime: true,
+	})
 }
 
 // respondChannelConnectionTest writes the shared success and failure response for connection tests.
-func respondChannelConnectionTest(c *gin.Context, channel *model.Channel, tik time.Time, result testResult, includeDetails bool, isStream bool) {
+func respondChannelConnectionTest(c *gin.Context, channel *model.Channel, tik time.Time, result testResult, options channelTestResponseOptions) {
+	if options.keyIndex != nil {
+		respondMultiKeyConnectionTest(c, tik, result, *options.keyIndex)
+		return
+	}
 	if result.localErr != nil {
 		resp := gin.H{
 			"success": false,
@@ -1177,7 +1215,9 @@ func respondChannelConnectionTest(c *gin.Context, channel *model.Channel, tik ti
 	}
 	tok := time.Now()
 	milliseconds := tok.Sub(tik).Milliseconds()
-	go channel.UpdateResponseTime(milliseconds)
+	if options.updateResponseTime {
+		go channel.UpdateResponseTime(milliseconds)
+	}
 	consumedTime := float64(milliseconds) / 1000.0
 	if result.newAPIError != nil {
 		c.JSON(http.StatusOK, gin.H{
@@ -1193,10 +1233,89 @@ func respondChannelConnectionTest(c *gin.Context, channel *model.Channel, tik ti
 		"message": "",
 		"time":    consumedTime,
 	}
-	if includeDetails {
-		response["data"] = buildChannelTestResponseDetails(result, isStream)
+	if options.includeDetails {
+		response["data"] = buildChannelTestResponseDetails(result, options.isStream)
 	}
 	c.JSON(http.StatusOK, response)
+}
+
+// respondMultiKeyConnectionTest writes the structured result consumed by the multi-key test queue.
+func respondMultiKeyConnectionTest(c *gin.Context, tik time.Time, result testResult, keyIndex int) {
+	milliseconds := time.Since(tik).Milliseconds()
+	classification := classifyMultiKeyTestResult(result)
+	response := gin.H{
+		"success":        classification == "available",
+		"message":        "",
+		"key_index":      keyIndex,
+		"classification": classification,
+		"http_status":    result.upstreamStatus,
+		"time":           float64(milliseconds) / 1000.0,
+	}
+	if result.newAPIError != nil {
+		response["error_code"] = result.newAPIError.GetErrorCode()
+		response["message"] = maskMultiKeyTestError(result, result.newAPIError.MaskSensitiveError())
+	} else if result.localErr != nil {
+		response["message"] = maskMultiKeyTestError(result, result.localErr.Error())
+	}
+	c.JSON(http.StatusOK, response)
+}
+
+// maskMultiKeyTestError prevents an upstream error from echoing the selected credential.
+func maskMultiKeyTestError(result testResult, message string) string {
+	message = common.MaskSensitiveInfo(message)
+	if result.context == nil {
+		return message
+	}
+	key := common.GetContextKeyString(result.context, constant.ContextKeyChannelKey)
+	if key == "" {
+		return message
+	}
+	return strings.ReplaceAll(message, key, "***")
+}
+
+// classifyMultiKeyTestResult maps connection failures to actionable key states.
+func classifyMultiKeyTestResult(result testResult) string {
+	if result.localErr == nil && result.newAPIError == nil && result.upstreamStatus >= http.StatusOK && result.upstreamStatus < http.StatusMultipleChoices {
+		return "available"
+	}
+	status := result.upstreamStatus
+	if status == 0 && result.newAPIError != nil {
+		status = result.newAPIError.StatusCode
+	}
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return "auth_failed"
+	case http.StatusPaymentRequired:
+		return "quota_exhausted"
+	case http.StatusTooManyRequests:
+		return "rate_limited"
+	case http.StatusNotFound, http.StatusMethodNotAllowed:
+		return "configuration_error"
+	}
+	if result.newAPIError != nil {
+		switch result.newAPIError.GetErrorCode() {
+		case types.ErrorCodeDoRequestFailed:
+			return "network_error"
+		case types.ErrorCodeInsufficientUserQuota, types.ErrorCodePreConsumeTokenQuotaFailed:
+			return "quota_exhausted"
+		case types.ErrorCodeModelNotFound:
+			return "model_forbidden"
+		case types.ErrorCodeBadResponse, types.ErrorCodeBadResponseBody, types.ErrorCodeEmptyResponse, types.ErrorCodeReadResponseBodyFailed:
+			return "response_error"
+		case types.ErrorCodeGetChannelFailed, types.ErrorCodeChannelParamOverrideInvalid, types.ErrorCodeChannelHeaderOverrideInvalid, types.ErrorCodeChannelModelMappedError:
+			return "configuration_error"
+		}
+	}
+	if status >= http.StatusInternalServerError {
+		return "upstream_error"
+	}
+	if status == 0 {
+		return "network_error"
+	}
+	if status >= http.StatusOK && status < http.StatusMultipleChoices {
+		return "response_error"
+	}
+	return "upstream_error"
 }
 
 func classifyNativeProbeResult(result testResult) string {

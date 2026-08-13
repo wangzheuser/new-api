@@ -490,6 +490,16 @@ func getTaskOriginModelName(c *gin.Context) string {
 }
 
 func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, modelName string) *types.NewAPIError {
+	return setupContextForSelectedChannel(c, channel, modelName, nil)
+}
+
+// SetupContextForSelectedChannelKey initializes channel context with one exact multi-key index.
+func SetupContextForSelectedChannelKey(c *gin.Context, channel *model.Channel, modelName string, keyIndex int) *types.NewAPIError {
+	return setupContextForSelectedChannel(c, channel, modelName, &keyIndex)
+}
+
+// setupContextForSelectedChannel shares channel metadata setup between normal routing and targeted key tests.
+func setupContextForSelectedChannel(c *gin.Context, channel *model.Channel, modelName string, keyIndex *int) *types.NewAPIError {
 	if common.GetContextKeyString(c, constant.ContextKeyOriginalModel) == "" {
 		common.SetContextKey(c, constant.ContextKeyOriginalModel, modelName)
 	}
@@ -530,9 +540,25 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	common.SetContextKey(c, constant.ContextKeyChannelModelMapping, channel.GetModelMapping())
 	common.SetContextKey(c, constant.ContextKeyChannelStatusCodeMapping, channel.GetStatusCodeMapping())
 
-	key, index, newAPIError := channel.GetNextEnabledKey()
-	if newAPIError != nil {
-		return newAPIError
+	key := ""
+	index := 0
+	if keyIndex == nil {
+		selectedKey, selectedIndex, newAPIError := channel.GetNextEnabledKey()
+		if newAPIError != nil {
+			return newAPIError
+		}
+		key = selectedKey
+		index = selectedIndex
+	} else {
+		if !channel.ChannelInfo.IsMultiKey {
+			return types.NewError(errors.New("key_index is only supported for multi-key channels"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		}
+		keys := channel.GetKeys()
+		if *keyIndex < 0 || *keyIndex >= len(keys) {
+			return types.NewError(fmt.Errorf("key_index %d is out of range", *keyIndex), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		}
+		key = keys[*keyIndex]
+		index = *keyIndex
 	}
 	if channel.ChannelInfo.IsMultiKey {
 		common.SetContextKey(c, constant.ContextKeyChannelIsMultiKey, true)
