@@ -54,13 +54,14 @@ type channelTestResponseDetails struct {
 }
 
 type channelTestOptions struct {
-	model             string
-	endpointType      string
-	isStream          bool
-	userPrompt        string
-	maxOutputTokens   uint
-	applySystemPrompt bool
-	nativeProbe       bool
+	model                      string
+	endpointType               string
+	isStream                   bool
+	userPrompt                 string
+	maxOutputTokens            uint
+	applySystemPrompt          bool
+	requireSystemPromptSupport bool
+	nativeProbe                bool
 }
 
 type channelPromptTestRequest struct {
@@ -298,9 +299,13 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, op
 	if directNativeProbe {
 		request = buildNativeTextProbeRequest(testModel, constant.EndpointType(endpointType), options)
 	}
-	if options.applySystemPrompt {
+	if options.requireSystemPromptSupport {
 		switch request.(type) {
-		case *dto.GeneralOpenAIRequest, *dto.OpenAIResponsesRequest:
+		case *dto.GeneralOpenAIRequest,
+			*dto.OpenAIResponsesRequest,
+			*dto.OpenAIResponsesCompactionRequest,
+			*dto.ClaudeRequest,
+			*dto.GeminiChatRequest:
 		default:
 			return testResult{
 				context:     c,
@@ -1084,6 +1089,14 @@ func TestChannel(c *gin.Context) {
 	respondChannelConnectionTest(c, channel, tik, result, false, isStream)
 }
 
+// shouldApplySystemPromptForConnectionTest mirrors the request rewriting guards used by real relay requests.
+func shouldApplySystemPromptForConnectionTest(channel *model.Channel) bool {
+	if channel == nil || model_setting.GetGlobalSettings().PassThroughRequestEnabled {
+		return false
+	}
+	return !channel.GetSetting().PassThroughBodyEnabled
+}
+
 // TestChannelConnectionPrompt uses the supplied prompt for one real channel connection test.
 func TestChannelConnectionPrompt(c *gin.Context) {
 	channelId, err := strconv.Atoi(c.Param("id"))
@@ -1138,11 +1151,12 @@ func TestChannelConnectionPrompt(c *gin.Context) {
 
 	tik := time.Now()
 	result := testChannel(c.Request.Context(), channel, testUserID, channelTestOptions{
-		model:           request.Model,
-		endpointType:    request.EndpointType,
-		isStream:        request.Stream,
-		userPrompt:      request.UserPrompt,
-		maxOutputTokens: getChannelConnectionTestMaxOutputTokens(request.UserPrompt),
+		model:             request.Model,
+		endpointType:      request.EndpointType,
+		isStream:          request.Stream,
+		userPrompt:        request.UserPrompt,
+		maxOutputTokens:   getChannelConnectionTestMaxOutputTokens(request.UserPrompt),
+		applySystemPrompt: shouldApplySystemPromptForConnectionTest(channel),
 	})
 	respondChannelConnectionTest(c, channel, tik, result, true, request.Stream)
 }
@@ -1272,10 +1286,11 @@ func TestChannelPromptEffect(c *gin.Context) {
 	}
 	tik := time.Now()
 	result := testChannel(c.Request.Context(), &testChannelConfig, testUserID, channelTestOptions{
-		model:             request.Model,
-		userPrompt:        request.UserPrompt,
-		maxOutputTokens:   512,
-		applySystemPrompt: true,
+		model:                      request.Model,
+		userPrompt:                 request.UserPrompt,
+		maxOutputTokens:            512,
+		applySystemPrompt:          true,
+		requireSystemPromptSupport: true,
 	})
 	consumedTime := float64(time.Since(tik).Milliseconds()) / 1000.0
 	if result.localErr != nil {

@@ -153,6 +153,7 @@ import {
   channelFormSchema,
   channelsQueryKeys,
   getAdvancedCustomStats,
+  hasConfiguredSystemPrompt,
   transformChannelToFormDefaults,
   type ChannelFormValues,
   deduplicateKeys,
@@ -633,6 +634,8 @@ export function ChannelMutateDrawer({
   const initialModelsRef = useRef<string[]>([])
   const initialModelMappingRef = useRef<string>('')
   const initialStatusCodeMappingRef = useRef<string>('')
+  const systemPromptOverrideTouchedRef = useRef(false)
+  const hadConfiguredSystemPromptRef = useRef(false)
   const [statusCodeRiskOpen, setStatusCodeRiskOpen] = useState(false)
   const [statusCodeRiskDetailItems, setStatusCodeRiskDetailItems] = useState<
     string[]
@@ -781,6 +784,10 @@ export function ChannelMutateDrawer({
   const currentProxy = form.watch('proxy')
   const currentSystemPrompt = form.watch('system_prompt')
   const currentModelSystemPrompts = form.watch('model_system_prompts') || {}
+  const systemPromptsConfigured = hasConfiguredSystemPrompt(
+    currentSystemPrompt,
+    currentModelSystemPrompts
+  )
   const currentModelContextFallbacks = form.watch('model_context_fallbacks')
   const currentProtocolPolicy = form.watch('protocol_policy')
   const currentAllowServiceTier = form.watch('allow_service_tier')
@@ -814,6 +821,18 @@ export function ChannelMutateDrawer({
       resetDoubaoApiUnlock()
     }
   }, [open, resetDoubaoApiUnlock])
+
+  useEffect(() => {
+    const wasConfigured = hadConfiguredSystemPromptRef.current
+    if (
+      !wasConfigured &&
+      systemPromptsConfigured &&
+      !systemPromptOverrideTouchedRef.current
+    ) {
+      form.setValue('system_prompt_override', true, { shouldDirty: true })
+    }
+    hadConfiguredSystemPromptRef.current = systemPromptsConfigured
+  }, [form, systemPromptsConfigured])
 
   const applyConnectionInfo = useCallback(
     (connectionInfo: ChannelConnectionInfo) => {
@@ -1034,9 +1053,6 @@ export function ChannelMutateDrawer({
   )
   const modelsStatus = getCompletionStatus(modelsHaveErrors, modelsComplete)
   const modelSystemPromptCount = Object.keys(currentModelSystemPrompts).length
-  const systemPromptsConfigured = Boolean(
-    currentSystemPrompt?.trim() || modelSystemPromptCount > 0
-  )
   let systemPromptsStatus: ChannelEditorSectionStatus = 'idle'
   if (systemPromptsHaveErrors) {
     systemPromptsStatus = 'error'
@@ -1335,6 +1351,11 @@ export function ChannelMutateDrawer({
   useEffect(() => {
     if (isEditing && channelData?.data) {
       const defaults = transformChannelToFormDefaults(channelData.data)
+      systemPromptOverrideTouchedRef.current = false
+      hadConfiguredSystemPromptRef.current = hasConfiguredSystemPrompt(
+        defaults.system_prompt,
+        defaults.model_system_prompts
+      )
       form.reset(defaults)
       setAdvancedSettingsOpen(
         readAdvancedSettingsPreference() ||
@@ -1349,6 +1370,8 @@ export function ChannelMutateDrawer({
       initialStatusCodeMappingRef.current =
         channelData.data.status_code_mapping || ''
     } else if (!isEditing) {
+      systemPromptOverrideTouchedRef.current = false
+      hadConfiguredSystemPromptRef.current = false
       form.reset(CHANNEL_FORM_DEFAULT_VALUES)
       setAdvancedSettingsOpen(false)
       initialModelsRef.current = []
@@ -1939,6 +1962,8 @@ export function ChannelMutateDrawer({
     (v: boolean) => {
       onOpenChange(v)
       if (!v) {
+        systemPromptOverrideTouchedRef.current = false
+        hadConfiguredSystemPromptRef.current = false
         form.reset(CHANNEL_FORM_DEFAULT_VALUES)
         advancedNavScrollPendingRef.current = false
         setActiveEditorSectionId(CHANNEL_EDITOR_SECTION_IDS.identity)
@@ -2381,7 +2406,10 @@ export function ChannelMutateDrawer({
                                     <FormControl>
                                       <Switch
                                         checked={field.value}
-                                        onCheckedChange={field.onChange}
+                                        onCheckedChange={(checked) => {
+                                          systemPromptOverrideTouchedRef.current = true
+                                          field.onChange(checked)
+                                        }}
                                       />
                                     </FormControl>
                                   </FormItem>

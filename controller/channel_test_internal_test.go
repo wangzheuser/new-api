@@ -14,6 +14,8 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -207,6 +209,128 @@ func TestChannelConnectionPromptValidatesInput(t *testing.T) {
 			TestChannelConnectionPrompt(ctx)
 
 			assert.Contains(t, response.Body.String(), test.wantMessage)
+		})
+	}
+}
+
+// TestChannelConnectionTestAppliesSavedSystemPrompt verifies the connection dialog sends the same rewritten text request as the relay path.
+func TestChannelConnectionTestAppliesSavedSystemPrompt(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	service.InitHttpClient()
+	testUser := &model.User{
+		Id:       1,
+		Username: "channel-test-user",
+		Password: "channel-test-password",
+		Role:     common.RoleRootUser,
+		Status:   common.UserStatusEnabled,
+		Quota:    1_000_000,
+		Group:    "default",
+	}
+	testUser.SetSetting(dto.UserSetting{AcceptUnsetRatioModel: true})
+	require.NoError(t, db.Create(testUser).Error)
+
+	originalLogConsumeEnabled := common.LogConsumeEnabled
+	originalGlobalPassThrough := model_setting.GetGlobalSettings().PassThroughRequestEnabled
+	common.LogConsumeEnabled = false
+	model_setting.GetGlobalSettings().PassThroughRequestEnabled = false
+	t.Cleanup(func() {
+		common.LogConsumeEnabled = originalLogConsumeEnabled
+		model_setting.GetGlobalSettings().PassThroughRequestEnabled = originalGlobalPassThrough
+	})
+
+	tests := []struct {
+		name              string
+		settings          dto.ChannelSettings
+		globalPassThrough bool
+		wantSystemPrompt  string
+	}{
+		{
+			name: "model prompt matches requested model before mapping",
+			settings: dto.ChannelSettings{
+				SystemPrompt:         "channel default",
+				SystemPromptOverride: true,
+				ModelSystemPrompts:   map[string]string{"gpt-4o-mini": "requested model prompt"},
+			},
+			wantSystemPrompt: "requested model prompt",
+		},
+		{
+			name:             "channel default is used without model prompt",
+			settings:         dto.ChannelSettings{SystemPrompt: "channel default"},
+			wantSystemPrompt: "channel default",
+		},
+		{
+			name:     "request remains unchanged without prompt",
+			settings: dto.ChannelSettings{},
+		},
+		{
+			name:     "channel passthrough skips prompt",
+			settings: dto.ChannelSettings{SystemPrompt: "channel default", PassThroughBodyEnabled: true},
+		},
+		{
+			name:              "global passthrough skips prompt",
+			settings:          dto.ChannelSettings{SystemPrompt: "channel default"},
+			globalPassThrough: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			model_setting.GetGlobalSettings().PassThroughRequestEnabled = test.globalPassThrough
+			capturedBody := make(chan []byte, 1)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				body, _ := io.ReadAll(request.Body)
+				capturedBody <- body
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`)
+			}))
+			defer upstream.Close()
+
+			mapping := `{"gpt-4o-mini":"gpt-4o"}`
+			baseURL := upstream.URL
+			channel := &model.Channel{
+				Id:           1,
+				Type:         constant.ChannelTypeOpenAI,
+				Key:          "test-key",
+				Status:       common.ChannelStatusEnabled,
+				Name:         "system prompt test",
+				BaseURL:      &baseURL,
+				Models:       "gpt-4o-mini",
+				Group:        "default",
+				ModelMapping: &mapping,
+				CreatedTime:  common.GetTimestamp(),
+			}
+			channel.SetSetting(test.settings)
+
+			result := testChannel(t.Context(), channel, 1, channelTestOptions{
+				model:             "gpt-4o-mini",
+				userPrompt:        "hi",
+				applySystemPrompt: shouldApplySystemPromptForConnectionTest(channel),
+			})
+
+			require.NoError(t, result.localErr)
+			require.Nil(t, result.newAPIError)
+			body := <-capturedBody
+			var upstreamRequest struct {
+				Model    string `json:"model"`
+				Messages []struct {
+					Role    string `json:"role"`
+					Content string `json:"content"`
+				} `json:"messages"`
+			}
+			require.NoError(t, common.Unmarshal(body, &upstreamRequest))
+			assert.Equal(t, "gpt-4o", upstreamRequest.Model)
+
+			systemPrompts := make([]string, 0, 1)
+			for _, message := range upstreamRequest.Messages {
+				if message.Role == "system" {
+					systemPrompts = append(systemPrompts, message.Content)
+				}
+			}
+			if test.wantSystemPrompt == "" {
+				assert.Empty(t, systemPrompts)
+			} else {
+				assert.Equal(t, []string{test.wantSystemPrompt}, systemPrompts)
+			}
 		})
 	}
 }

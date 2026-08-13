@@ -527,6 +527,19 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
 // ============================================================================
 
 /**
+ * Check whether the channel has at least one effective system prompt.
+ */
+export function hasConfiguredSystemPrompt(
+  systemPrompt: string | undefined,
+  modelSystemPrompts: Record<string, string> | undefined
+): boolean {
+  if (systemPrompt?.trim()) return true
+  return Object.values(modelSystemPrompts || {}).some(
+    (prompt) => typeof prompt === 'string' && Boolean(prompt.trim())
+  )
+}
+
+/**
  * Transform Channel from API to Form default values
  */
 export function transformChannelToFormDefaults(
@@ -548,19 +561,27 @@ export function transformChannelToFormDefaults(
   if (channel.setting) {
     try {
       const parsed = JSON.parse(channel.setting)
+      const systemPrompt =
+        typeof parsed.system_prompt === 'string' ? parsed.system_prompt : ''
+      const modelSystemPrompts =
+        parsed.model_system_prompts &&
+        typeof parsed.model_system_prompts === 'object' &&
+        !Array.isArray(parsed.model_system_prompts)
+          ? parsed.model_system_prompts
+          : {}
+      const hasExplicitSystemPromptOverride =
+        Object.hasOwn(parsed, 'system_prompt_override') &&
+        typeof parsed.system_prompt_override === 'boolean'
       extraSettings = {
         force_format: parsed.force_format || false,
         thinking_to_content: parsed.thinking_to_content || false,
         proxy: parsed.proxy || '',
         pass_through_body_enabled: parsed.pass_through_body_enabled || false,
-        system_prompt: parsed.system_prompt || '',
-        system_prompt_override: parsed.system_prompt_override || false,
-        model_system_prompts:
-          parsed.model_system_prompts &&
-          typeof parsed.model_system_prompts === 'object' &&
-          !Array.isArray(parsed.model_system_prompts)
-            ? parsed.model_system_prompts
-            : {},
+        system_prompt: systemPrompt,
+        system_prompt_override: hasExplicitSystemPromptOverride
+          ? parsed.system_prompt_override
+          : hasConfiguredSystemPrompt(systemPrompt, modelSystemPrompts),
+        model_system_prompts: modelSystemPrompts,
         model_context_fallbacks:
           parsed.model_context_fallbacks &&
           typeof parsed.model_context_fallbacks === 'object' &&

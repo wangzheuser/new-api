@@ -1,0 +1,135 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+import assert from 'node:assert/strict'
+import { describe, test } from 'node:test'
+
+import type { Channel } from '../types'
+import {
+  CHANNEL_FORM_DEFAULT_VALUES,
+  transformChannelToFormDefaults,
+  transformFormDataToCreatePayload,
+} from './channel-form'
+
+/**
+ * Build the minimum complete channel fixture required by the form transformer.
+ */
+function createChannel(setting: Record<string, unknown>): Channel {
+  return {
+    id: 1,
+    type: 1,
+    key: '',
+    openai_organization: null,
+    test_model: null,
+    status: 1,
+    name: 'test channel',
+    weight: 0,
+    created_time: 0,
+    test_time: 0,
+    response_time: 0,
+    base_url: null,
+    other: '',
+    balance: 0,
+    balance_updated_time: 0,
+    models: 'gpt-4o-mini',
+    group: 'default',
+    used_quota: 0,
+    model_mapping: null,
+    status_code_mapping: null,
+    priority: 0,
+    auto_ban: 1,
+    other_info: '',
+    tag: null,
+    setting: JSON.stringify(setting),
+    param_override: null,
+    header_override: null,
+    remark: '',
+    max_input_tokens: 0,
+    channel_info: {
+      is_multi_key: false,
+      multi_key_size: 0,
+      multi_key_polling_index: 0,
+      multi_key_mode: 'random',
+    },
+    settings: '{}',
+  }
+}
+
+describe('channel system prompt form defaults', () => {
+  test('enables prepend for legacy settings with an effective prompt', () => {
+    const channelDefault = transformChannelToFormDefaults(
+      createChannel({ system_prompt: 'channel prompt' })
+    )
+    const modelSpecific = transformChannelToFormDefaults(
+      createChannel({
+        model_system_prompts: {
+          'empty-model': '   ',
+          'configured-model': 'model prompt',
+        },
+      })
+    )
+
+    assert.equal(channelDefault.system_prompt_override, true)
+    assert.equal(modelSpecific.system_prompt_override, true)
+  })
+
+  test('preserves an explicitly disabled or enabled prepend setting', () => {
+    const disabled = transformChannelToFormDefaults(
+      createChannel({
+        system_prompt: 'channel prompt',
+        system_prompt_override: false,
+      })
+    )
+    const enabled = transformChannelToFormDefaults(
+      createChannel({
+        system_prompt: 'channel prompt',
+        system_prompt_override: true,
+      })
+    )
+
+    assert.equal(disabled.system_prompt_override, false)
+    assert.equal(enabled.system_prompt_override, true)
+  })
+
+  test('keeps prepend disabled when legacy settings contain no effective prompt', () => {
+    const defaults = transformChannelToFormDefaults(
+      createChannel({
+        system_prompt: '   ',
+        model_system_prompts: { 'empty-model': '' },
+      })
+    )
+
+    assert.equal(defaults.system_prompt_override, false)
+  })
+
+  test('persists the explicit prepend value in the channel setting payload', () => {
+    const result = transformFormDataToCreatePayload({
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      name: 'test channel',
+      key: 'test-key',
+      models: 'gpt-4o-mini',
+      system_prompt: 'channel prompt',
+      system_prompt_override: false,
+    })
+    assert.equal(typeof result.channel.setting, 'string')
+    const setting = JSON.parse(String(result.channel.setting))
+
+    assert.equal(setting.system_prompt, 'channel prompt')
+    assert.equal(setting.system_prompt_override, false)
+  })
+})
