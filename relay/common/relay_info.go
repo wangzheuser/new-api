@@ -63,6 +63,7 @@ type ResponsesUsageInfo struct {
 type ChannelMeta struct {
 	ChannelType          int
 	ChannelId            int
+	ChannelName          string
 	ChannelIsMultiKey    bool
 	ChannelMultiKeyIndex int
 	ChannelBaseUrl       string
@@ -185,6 +186,8 @@ type RelayInfo struct {
 	RuntimeHeadersOverride                map[string]interface{}
 	UseRuntimeHeadersOverride             bool
 	ParamOverrideAudit                    []string
+	ResponseSemantics                     ResponseSemantics
+	ResponseOverride                      *ResponseOverrideDecision
 	ConversationCapture                   *ConversationCapture
 
 	// UpstreamRequestBodySize is the byte size of the marshaled upstream request
@@ -228,6 +231,7 @@ type RelayInfo struct {
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
+	info.resetAttemptState(c)
 	channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
 	paramOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelParamOverride)
 	headerOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelHeaderOverride)
@@ -239,6 +243,7 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	channelMeta := &ChannelMeta{
 		ChannelType:          channelType,
 		ChannelId:            common.GetContextKeyInt(c, constant.ContextKeyChannelId),
+		ChannelName:          common.GetContextKeyString(c, constant.ContextKeyChannelName),
 		ChannelIsMultiKey:    common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey),
 		ChannelMultiKeyIndex: common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex),
 		ChannelBaseUrl:       common.GetContextKeyString(c, constant.ContextKeyChannelBaseUrl),
@@ -280,6 +285,8 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 
 	info.ChannelMeta = channelMeta
 	StartConversationCapture(c, info)
+	StartResponseOverrideBuffer(c, info)
+	ApplyFinalResponseWriter(c)
 
 	// reset some fields based on channel meta
 	// 重置某些字段，例如模型名称等
@@ -287,6 +294,25 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	info.ResetEstimatePromptTokens()
 	if info.Request != nil {
 		info.Request.SetModelName(info.GetRequestedModelName())
+	}
+}
+
+// resetAttemptState clears response and billing facts produced by the previous relay attempt.
+func (info *RelayInfo) resetAttemptState(c *gin.Context) {
+	common.SetContextKey(c, constant.ContextKeyLocalCountTokens, false)
+	common.SetContextKey(c, constant.ContextKeyAdminRejectReason, "")
+	c.Set("claude_web_search_requests", 0)
+	c.Set("image_generation_call", false)
+	c.Set("image_generation_call_quality", "")
+	c.Set("image_generation_call_size", "")
+
+	if info.ResponsesUsageInfo == nil {
+		return
+	}
+	for _, tool := range info.ResponsesUsageInfo.BuiltInTools {
+		if tool != nil {
+			tool.CallCount = 0
+		}
 	}
 }
 

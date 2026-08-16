@@ -33,6 +33,7 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	if oaiError := responsesResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
+	info.MergeResponseSemantics(types.RelayFormatOpenAIResponses, responseBody)
 
 	if responsesResponse.HasImageGenerationCall() {
 		c.Set("image_generation_call", true)

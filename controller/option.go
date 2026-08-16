@@ -309,6 +309,24 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
+	case "channel_affinity_setting.rules":
+		var rules []operation_setting.ChannelAffinityRule
+		err = common.UnmarshalJsonStr(option.Value.(string), &rules)
+		if err == nil {
+			for index, rule := range rules {
+				if validateErr := relaycommon.ValidateParamOverride(rule.ParamOverrideTemplate); validateErr != nil {
+					err = fmt.Errorf("channel affinity rule %d param override: %w", index, validateErr)
+					break
+				}
+			}
+		}
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
 	case "console_setting.api_info":
 		err = console_setting.ValidateConsoleSettings(option.Value.(string), "ApiInfo")
 		if err != nil {

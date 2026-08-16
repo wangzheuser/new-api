@@ -308,6 +308,7 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
+	info.MergeResponseSemantics(types.RelayFormatGemini, responseBody)
 	if len(geminiResponse.Candidates) == 0 {
 		usage := buildUsageFromGeminiResponse(c, info, &geminiResponse)
 
@@ -341,6 +342,7 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 				"error": newAPIError.ToOpenAIError(),
 			})
 		}
+		service.EvaluateResponseOverrideBeforeSettlement(c, info, &usage, http.StatusOK)
 		return &usage, nil
 	}
 	fullTextResponse := responseGeminiChat2OpenAI(c, &geminiResponse)

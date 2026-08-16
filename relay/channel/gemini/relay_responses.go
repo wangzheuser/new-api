@@ -31,22 +31,35 @@ func GeminiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 	if err := common.Unmarshal(responseBody, &geminiResponse); err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
+	info.MergeResponseSemantics(types.RelayFormatGemini, responseBody)
 	if len(geminiResponse.Candidates) == 0 {
 		usage := buildUsageFromGeminiResponse(c, info, &geminiResponse)
+		var responseErr *types.NewAPIError
 		if geminiResponse.PromptFeedback != nil && geminiResponse.PromptFeedback.BlockReason != nil {
 			common.SetContextKey(c, constant.ContextKeyAdminRejectReason, fmt.Sprintf("gemini_block_reason=%s", *geminiResponse.PromptFeedback.BlockReason))
-			return &usage, types.NewOpenAIError(
+			responseErr = types.NewOpenAIError(
 				errors.New("request blocked by Gemini API: "+*geminiResponse.PromptFeedback.BlockReason),
 				types.ErrorCodePromptBlocked,
 				http.StatusBadRequest,
 			)
+		} else {
+			common.SetContextKey(c, constant.ContextKeyAdminRejectReason, "gemini_empty_candidates")
+			responseErr = types.NewOpenAIError(
+				errors.New("empty response from Gemini API"),
+				types.ErrorCodeEmptyResponse,
+				http.StatusInternalServerError,
+			)
 		}
-		common.SetContextKey(c, constant.ContextKeyAdminRejectReason, "gemini_empty_candidates")
-		return &usage, types.NewOpenAIError(
-			errors.New("empty response from Gemini API"),
-			types.ErrorCodeEmptyResponse,
-			http.StatusInternalServerError,
-		)
+
+		// Preserve the legacy relay error unless a configured response rule explicitly matches.
+		if relaycommon.CurrentResponseOverrideBuffer(c) != nil {
+			c.JSON(responseErr.StatusCode, gin.H{"error": responseErr.ToOpenAIError()})
+			decision := service.EvaluateResponseOverrideBeforeSettlement(c, info, &usage, http.StatusOK)
+			if decision != nil && decision.Applied {
+				return &usage, nil
+			}
+		}
+		return &usage, responseErr
 	}
 
 	chatResp := responseGeminiChat2OpenAI(c, &geminiResponse)

@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -355,6 +356,7 @@ func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 }
 
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {
+	EvaluateResponseOverrideBeforeSettlement(ctx, relayInfo, usage, http.StatusOK)
 	originUsage := usage
 	billingUsage := effectiveBillingUsage(usage)
 	if usage == nil {

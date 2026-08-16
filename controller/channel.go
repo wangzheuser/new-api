@@ -17,6 +17,7 @@ import (
 	relaychannel "github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/gemini"
 	"github.com/QuantumNous/new-api/relay/channel/ollama"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
 
@@ -465,14 +466,21 @@ func validateTwoFactorAuth(twoFA *model.TwoFA, code string) bool {
 
 // validateChannel 通用的渠道校验函数
 func validateChannel(channel *model.Channel, isAdd bool) error {
+	if channel == nil {
+		return fmt.Errorf("channel cannot be empty")
+	}
+
 	// 校验 channel settings
 	if err := channel.ValidateSettings(); err != nil {
 		return fmt.Errorf("渠道额外设置[channel setting] 格式错误：%s", err.Error())
 	}
+	if err := validateChannelParamOverride(channel.ParamOverride); err != nil {
+		return err
+	}
 
 	// 如果是添加操作，检查 channel 和 key 是否为空
 	if isAdd {
-		if channel == nil || channel.Key == "" {
+		if channel.Key == "" {
 			return fmt.Errorf("channel cannot be empty")
 		}
 
@@ -520,6 +528,27 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		}
 	}
 
+	return nil
+}
+
+// validateChannelParamOverride validates and normalizes one persisted channel override document.
+func validateChannelParamOverride(raw *string) error {
+	if raw == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*raw)
+	*raw = trimmed
+	if trimmed == "" {
+		return nil
+	}
+
+	override := make(map[string]interface{})
+	if err := common.UnmarshalJsonStr(trimmed, &override); err != nil {
+		return fmt.Errorf("参数覆盖必须是合法的 JSON 对象: %w", err)
+	}
+	if err := relaycommon.ValidateParamOverride(override); err != nil {
+		return fmt.Errorf("参数覆盖配置无效: %w", err)
+	}
 	return nil
 }
 
@@ -833,15 +862,13 @@ func EditTagChannels(c *gin.Context) {
 		return
 	}
 	if channelTag.ParamOverride != nil {
-		trimmed := strings.TrimSpace(*channelTag.ParamOverride)
-		if trimmed != "" && !json.Valid([]byte(trimmed)) {
+		if err := validateChannelParamOverride(channelTag.ParamOverride); err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "参数覆盖必须是合法的 JSON 格式",
+				"message": err.Error(),
 			})
 			return
 		}
-		channelTag.ParamOverride = common.GetPointer[string](trimmed)
 	}
 	if channelTag.HeaderOverride != nil {
 		trimmed := strings.TrimSpace(*channelTag.HeaderOverride)

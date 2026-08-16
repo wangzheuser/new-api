@@ -102,7 +102,10 @@ func isConversationCaptureEligible(info *RelayInfo) bool {
 	case types.RelayFormatOpenAIResponses, types.RelayFormatOpenAIResponsesCompaction:
 		return true
 	case types.RelayFormatGemini:
-		return strings.Contains(info.RequestURLPath, "generateContent")
+		return strings.Contains(info.RequestURLPath, ":generateContent") ||
+			strings.Contains(info.RequestURLPath, ":streamGenerateContent") ||
+			info.RelayMode == relayconstant.RelayModeChatCompletions ||
+			info.RelayMode == relayconstant.RelayModeCompletions
 	default:
 		return false
 	}

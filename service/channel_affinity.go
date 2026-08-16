@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/cachex"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -449,22 +450,23 @@ func mergeChannelOverride(base map[string]interface{}, tpl map[string]interface{
 	if len(base) == 0 && len(tpl) == 0 {
 		return map[string]interface{}{}
 	}
-	if len(tpl) == 0 {
-		return base
-	}
 	out := cloneStringAnyMap(base)
-	for k, v := range tpl {
+	template := cloneStringAnyMap(tpl)
+	baseOps, hasBaseOps := extractCanonicalParamOperations(out)
+	tplOps, hasTplOps := extractCanonicalParamOperations(template)
+	if hasTplOps {
+		if hasBaseOps {
+			out["operations"] = append(tplOps, baseOps...)
+		} else {
+			out["operations"] = tplOps
+		}
+	} else if hasBaseOps {
+		out["operations"] = baseOps
+	}
+
+	for k, v := range template {
 		if strings.EqualFold(strings.TrimSpace(k), "operations") {
-			baseOps, hasBaseOps := extractParamOperations(out[k])
-			tplOps, hasTplOps := extractParamOperations(v)
-			if hasTplOps {
-				if hasBaseOps {
-					out[k] = append(tplOps, baseOps...)
-				} else {
-					out[k] = tplOps
-				}
-				continue
-			}
+			continue
 		}
 		if _, exists := out[k]; exists {
 			continue
@@ -472,6 +474,33 @@ func mergeChannelOverride(base map[string]interface{}, tpl map[string]interface{
 		out[k] = v
 	}
 	return out
+}
+
+// extractCanonicalParamOperations returns the canonical operations value and
+// removes every case or whitespace variant from the provided map.
+func extractCanonicalParamOperations(values map[string]interface{}) ([]interface{}, bool) {
+	if len(values) == 0 {
+		return nil, false
+	}
+	value, hasCanonical := values["operations"]
+	variantKey := ""
+	for key := range values {
+		if key == "operations" || !strings.EqualFold(strings.TrimSpace(key), "operations") {
+			continue
+		}
+		if variantKey == "" || key < variantKey {
+			variantKey = key
+		}
+	}
+	if !hasCanonical && variantKey != "" {
+		value = values[variantKey]
+	}
+	for key := range values {
+		if key != "operations" && strings.EqualFold(strings.TrimSpace(key), "operations") {
+			delete(values, key)
+		}
+	}
+	return extractParamOperations(value)
 }
 
 func extractParamOperations(value interface{}) ([]interface{}, bool) {
@@ -494,7 +523,7 @@ func extractParamOperations(value interface{}) ([]interface{}, bool) {
 	}
 }
 
-func appendChannelAffinityTemplateAdminInfo(c *gin.Context, meta channelAffinityMeta) {
+func appendChannelAffinityTemplateAdminInfo(c *gin.Context, meta channelAffinityMeta, applied bool, configError string) {
 	if c == nil {
 		return
 	}
@@ -503,9 +532,13 @@ func appendChannelAffinityTemplateAdminInfo(c *gin.Context, meta channelAffinity
 	}
 
 	templateInfo := map[string]interface{}{
-		"applied":             true,
+		"applied":             applied,
 		"rule_name":           meta.RuleName,
 		"param_override_keys": len(meta.ParamTemplate),
+	}
+	if configError != "" {
+		templateInfo["not_applied_reason"] = "invalid_merged_config"
+		templateInfo["config_error"] = configError
 	}
 	if anyInfo, ok := c.Get(ginKeyChannelAffinityLogInfo); ok {
 		if info, ok := anyInfo.(map[string]interface{}); ok {
@@ -543,7 +576,12 @@ func ApplyChannelAffinityOverrideTemplate(c *gin.Context, paramOverride map[stri
 	}
 
 	mergedParam := mergeChannelOverride(paramOverride, meta.ParamTemplate)
-	appendChannelAffinityTemplateAdminInfo(c, meta)
+	if err := relaycommon.ValidateParamOverride(mergedParam); err != nil {
+		common.SysError(fmt.Sprintf("channel affinity override template merge failed: rule=%q, err=%v", meta.RuleName, err))
+		appendChannelAffinityTemplateAdminInfo(c, meta, false, err.Error())
+		return paramOverride, false
+	}
+	appendChannelAffinityTemplateAdminInfo(c, meta, true, "")
 	return mergedParam, true
 }
 

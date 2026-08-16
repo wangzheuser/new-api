@@ -72,11 +72,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	//originalModel := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 
 	var (
-		newAPIError   *types.NewAPIError
-		rawFinalError *types.NewAPIError
-		ws            *websocket.Conn
-		relayInfo     *relaycommon.RelayInfo
-		relayStarted  bool
+		newAPIError         *types.NewAPIError
+		clientResponseError *types.NewAPIError
+		rawFinalError       *types.NewAPIError
+		ws                  *websocket.Conn
+		relayInfo           *relaycommon.RelayInfo
+		relayStarted        bool
 	)
 
 	if relayFormat == types.RelayFormatOpenAIRealtime {
@@ -101,8 +102,15 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				}
 				writeRelayErrorResponse(c, relayFormat, ws, relayInfo, newAPIError)
 			}
+		} else if clientResponseError != nil {
+			clientResponseError.SetMessage(common.MessageWithRequestId(clientResponseError.Error(), requestId))
+			writeRelayErrorResponse(c, relayFormat, ws, relayInfo, clientResponseError)
 		}
-		service.RecordConversationLog(c, relayInfo, newAPIError)
+		conversationError := newAPIError
+		if conversationError == nil {
+			conversationError = clientResponseError
+		}
+		service.RecordConversationLog(c, relayInfo, conversationError)
 	}()
 
 	request, err := helper.GetAndValidateRequest(c, relayFormat)
@@ -240,7 +248,15 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		if newAPIError == nil {
 			relayInfo.LastError = nil
+			// Response overrides may map one successful, billable upstream attempt
+			// to a client 4xx/5xx without changing its internal success semantics.
+			common.SetContextKey(c, constant.ContextKeyRelayUpstreamSucceeded, true)
+			clientResponseError = finalizeResponseOverride(c, relayInfo)
 			return
+		}
+		if buffer := relaycommon.CurrentResponseOverrideBuffer(c); buffer != nil {
+			buffer.MarkRelayError()
+			buffer.Discard(c)
 		}
 		if requestErr := c.Request.Context().Err(); requestErr != nil {
 			if relayInfo.StreamStatus != nil {
@@ -300,6 +316,23 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 }
 
+// finalizeResponseOverride commits the successful upstream response or replaces
+// it with the independently configured client response.
+func finalizeResponseOverride(c *gin.Context, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
+	buffer := relaycommon.CurrentResponseOverrideBuffer(c)
+	if buffer == nil {
+		return nil
+	}
+	if relayInfo != nil && relayInfo.ResponseOverride != nil && relayInfo.ResponseOverride.Applied {
+		buffer.Discard(c)
+		return relayInfo.ResponseOverride.ClientError
+	}
+	if err := buffer.Commit(c); err != nil {
+		logger.LogError(c, fmt.Sprintf("failed to commit buffered relay response: %s", err.Error()))
+	}
+	return nil
+}
+
 // writeRelayErrorResponse 按客户端协议输出错误，已提交的流式响应继续使用 SSE 帧。
 func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, ws *websocket.Conn, relayInfo *relaycommon.RelayInfo, newAPIError *types.NewAPIError) {
 	if newAPIError == nil || types.IsClientErrorWritten(newAPIError) {
@@ -348,15 +381,74 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, ws *
 	}
 
 	if relayFormat == types.RelayFormatClaude {
+		prepareRelayErrorHeaders(c)
 		c.JSON(newAPIError.StatusCode, gin.H{
 			"type":  "error",
 			"error": newAPIError.ToClaudeError(),
 		})
 		return
 	}
+	if relayFormat == types.RelayFormatGemini {
+		prepareRelayErrorHeaders(c)
+		c.JSON(newAPIError.StatusCode, dto.GeminiErrorResponse{
+			Error: dto.GeminiError{
+				Code:    newAPIError.StatusCode,
+				Message: newAPIError.ToOpenAIError().Message,
+				Status:  geminiCanonicalErrorStatus(newAPIError.StatusCode),
+			},
+		})
+		return
+	}
+	prepareRelayErrorHeaders(c)
 	c.JSON(newAPIError.StatusCode, gin.H{
 		"error": newAPIError.ToOpenAIError(),
 	})
+}
+
+// geminiCanonicalErrorStatus maps HTTP status codes to Google RPC canonical status names.
+func geminiCanonicalErrorStatus(statusCode int) string {
+	switch statusCode {
+	case http.StatusBadRequest, http.StatusUnprocessableEntity:
+		return "INVALID_ARGUMENT"
+	case http.StatusUnauthorized:
+		return "UNAUTHENTICATED"
+	case http.StatusForbidden:
+		return "PERMISSION_DENIED"
+	case http.StatusNotFound, http.StatusGone:
+		return "NOT_FOUND"
+	case http.StatusRequestTimeout, http.StatusGatewayTimeout:
+		return "DEADLINE_EXCEEDED"
+	case http.StatusConflict:
+		return "ABORTED"
+	case http.StatusPreconditionFailed:
+		return "FAILED_PRECONDITION"
+	case http.StatusRequestEntityTooLarge, http.StatusTooManyRequests:
+		return "RESOURCE_EXHAUSTED"
+	case http.StatusRequestedRangeNotSatisfiable:
+		return "OUT_OF_RANGE"
+	case 499:
+		return "CANCELLED"
+	case http.StatusNotImplemented:
+		return "UNIMPLEMENTED"
+	case http.StatusBadGateway, http.StatusServiceUnavailable:
+		return "UNAVAILABLE"
+	default:
+		if statusCode >= http.StatusInternalServerError {
+			return "INTERNAL"
+		}
+		return "UNKNOWN"
+	}
+}
+
+// prepareRelayErrorHeaders removes representation-specific headers inherited from a discarded upstream body.
+func prepareRelayErrorHeaders(c *gin.Context) {
+	if c == nil || c.Writer == nil {
+		return
+	}
+	for _, key := range []string{"Content-Length", "Content-Encoding", "ETag", "Content-Range", "Transfer-Encoding"} {
+		c.Writer.Header().Del(key)
+	}
+	c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 }
 
 // CountTokens 返回 Claude Messages 请求的本地输入 token 估算，不进入上游和计费链。
@@ -639,6 +731,7 @@ func recordRelayErrorLog(c *gin.Context, relayInfo *relaycommon.RelayInfo, err *
 	}
 	service.AppendChannelAffinityAdminInfo(c, adminInfo)
 	service.AppendContextFallbackAdminInfo(relayInfo, adminInfo)
+	service.AppendResponseOverrideAdminInfo(relayInfo, adminInfo)
 	service.AppendStreamStatus(relayInfo, other)
 	if rawError != nil {
 		adminInfo["upstream_error"] = common.LocalLogPreview(rawError.MaskSensitiveErrorWithStatusCode())

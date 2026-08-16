@@ -184,10 +184,21 @@ func Distribute() func(c *gin.Context) {
 			return
 		}
 		c.Next()
-		if channel != nil && c.Writer != nil && c.Writer.Status() < http.StatusBadRequest {
+		upstreamSucceeded := common.GetContextKeyBool(c, constant.ContextKeyRelayUpstreamSucceeded)
+		clientStatus := 0
+		if c.Writer != nil {
+			clientStatus = c.Writer.Status()
+		}
+		if channel != nil && shouldRecordChannelAffinity(upstreamSucceeded, clientStatus) {
 			service.RecordChannelAffinity(c, channel.Id)
 		}
 	}
+}
+
+// shouldRecordChannelAffinity keeps internal relay success independent from a
+// client-facing error produced by a response override.
+func shouldRecordChannelAffinity(upstreamSucceeded bool, clientStatus int) bool {
+	return upstreamSucceeded || (clientStatus > 0 && clientStatus < http.StatusBadRequest)
 }
 
 // channelSupportsRequestPath reports whether a channel can serve the request path.

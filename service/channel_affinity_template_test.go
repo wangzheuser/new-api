@@ -116,6 +116,118 @@ func TestApplyChannelAffinityOverrideTemplate_MergeOperations(t *testing.T) {
 	require.Equal(t, "trim_prefix", secondOp["mode"])
 }
 
+// TestApplyChannelAffinityOverrideTemplate_CanonicalizesOperationsKeys verifies
+// operation aliases are merged under the runtime-recognized canonical key.
+func TestApplyChannelAffinityOverrideTemplate_CanonicalizesOperationsKeys(t *testing.T) {
+	template := map[string]interface{}{
+		" OPERATIONS ": []interface{}{
+			map[string]interface{}{
+				"path":  "metadata.template",
+				"mode":  "set",
+				"value": true,
+			},
+		},
+	}
+	ctx := buildChannelAffinityTemplateContextForTest(channelAffinityMeta{
+		RuleName:      "rule-with-aliased-ops",
+		ParamTemplate: template,
+	})
+	base := map[string]interface{}{
+		"operations": []interface{}{
+			map[string]interface{}{
+				"path":  "metadata.channel",
+				"mode":  "set",
+				"value": true,
+			},
+		},
+		"Operations": []interface{}{
+			map[string]interface{}{
+				"path":  "metadata.ignored_alias",
+				"mode":  "set",
+				"value": true,
+			},
+		},
+	}
+
+	merged, applied := ApplyChannelAffinityOverrideTemplate(ctx, base)
+
+	require.True(t, applied)
+	require.Contains(t, merged, "operations")
+	require.NotContains(t, merged, "Operations")
+	require.NotContains(t, merged, " OPERATIONS ")
+	require.Contains(t, base, "Operations")
+	require.Contains(t, template, " OPERATIONS ")
+	require.NoError(t, relaycommon.ValidateParamOverride(merged))
+
+	result, err := relaycommon.ApplyParamOverride([]byte(`{"metadata":{}}`), merged, nil)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"metadata":{"template":true,"channel":true}}`, string(result))
+
+	aliasOnlyBase := map[string]interface{}{
+		" Operations ": []interface{}{
+			map[string]interface{}{
+				"path":  "metadata.alias_only",
+				"mode":  "set",
+				"value": true,
+			},
+		},
+	}
+	aliasOnlyMerged := mergeChannelOverride(aliasOnlyBase, map[string]interface{}{"temperature": 0.2})
+	require.Contains(t, aliasOnlyMerged, "operations")
+	require.NotContains(t, aliasOnlyMerged, " Operations ")
+	require.Contains(t, aliasOnlyBase, " Operations ")
+
+	result, err = relaycommon.ApplyParamOverride([]byte(`{"metadata":{}}`), aliasOnlyMerged, nil)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"metadata":{"alias_only":true},"temperature":0.2}`, string(result))
+}
+
+// TestApplyChannelAffinityOverrideTemplate_InvalidCombinedOrder verifies an
+// incompatible template is ignored without disabling the valid channel rules.
+func TestApplyChannelAffinityOverrideTemplate_InvalidCombinedOrder(t *testing.T) {
+	meta := channelAffinityMeta{
+		RuleName: "response-catch-all-template",
+		ParamTemplate: map[string]interface{}{
+			"operations": []interface{}{
+				map[string]interface{}{
+					"phase": "response",
+					"mode":  "return_error",
+					"value": map[string]interface{}{"message": "template fallback"},
+				},
+			},
+		},
+	}
+	ctx := buildChannelAffinityTemplateContextForTest(meta)
+	base := map[string]interface{}{
+		"operations": []interface{}{
+			map[string]interface{}{
+				"phase": "response",
+				"mode":  "return_error",
+				"value": map[string]interface{}{"message": "channel rule"},
+				"conditions": []interface{}{
+					map[string]interface{}{"source": "body", "path": "blocked", "mode": "full", "value": true},
+				},
+			},
+		},
+	}
+	require.NoError(t, relaycommon.ValidateParamOverride(base))
+	require.NoError(t, relaycommon.ValidateParamOverride(meta.ParamTemplate))
+
+	merged, applied := ApplyChannelAffinityOverrideTemplate(ctx, base)
+
+	require.False(t, applied)
+	require.Equal(t, base, merged)
+	anyInfo, ok := ctx.Get(ginKeyChannelAffinityLogInfo)
+	require.True(t, ok)
+	info, ok := anyInfo.(map[string]interface{})
+	require.True(t, ok)
+	templateInfo, ok := info["override_template"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, false, templateInfo["applied"])
+	require.Equal(t, "invalid_merged_config", templateInfo["not_applied_reason"])
+	require.Contains(t, templateInfo["config_error"], "must be last")
+}
+
 func TestShouldSkipRetryAfterChannelAffinityFailure(t *testing.T) {
 	tests := []struct {
 		name string

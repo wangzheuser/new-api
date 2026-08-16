@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -84,6 +85,50 @@ func TestRecordRelayErrorLogPersistsIntermediateState(t *testing.T) {
 	require.Len(t, logs, 2)
 	require.True(t, logs[0].IsIntermediate)
 	require.False(t, logs[1].IsIntermediate)
+}
+
+// TestRecordRelayErrorLogPreservesDiscardedResponseOverrideAttempt verifies a
+// failed attempt keeps its response-stage skip reason before retry state resets.
+func TestRecordRelayErrorLogPreservesDiscardedResponseOverrideAttempt(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Log{}))
+
+	previousErrorLogEnabled := constant.ErrorLogEnabled
+	constant.ErrorLogEnabled = true
+	t.Cleanup(func() {
+		constant.ErrorLogEnabled = previousErrorLogEnabled
+	})
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	ctx.Set("id", 1)
+	ctx.Set("username", "test-user")
+	ctx.Set("original_model", "test-model")
+	ctx.Set(common.RequestIdKey, "req-response-override-attempt")
+	decision := &relaycommon.ResponseOverrideDecision{
+		Configured:       true,
+		NotAppliedReason: relaycommon.ResponseOverrideNotAppliedRelayError,
+		Billable:         true,
+	}
+	info := &relaycommon.RelayInfo{ResponseOverride: decision}
+	relayError := types.NewOpenAIError(
+		errors.New("upstream unavailable"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusServiceUnavailable,
+	)
+
+	recordRelayErrorLog(ctx, info, relayError, "", nil, true)
+
+	var log model.Log
+	require.NoError(t, db.First(&log).Error)
+	var other map[string]interface{}
+	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	require.True(t, ok)
+	responseOverride, ok := adminInfo["response_override"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, true, responseOverride["configured"])
+	assert.Equal(t, relaycommon.ResponseOverrideNotAppliedRelayError, responseOverride["not_applied_reason"])
 }
 
 // TestResolveConfiguredFinalRelayError verifies channel precedence, system fallback, and leak-safe fallback.

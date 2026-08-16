@@ -2761,6 +2761,7 @@
     "第 {{line}} 条操作缺少来源字段": "Rule #{{line}} operation is missing a source field",
     "第 {{line}} 条操作缺少目标字段": "Rule #{{line}} operation is missing a target field",
     "第 {{line}} 条操作缺少目标路径": "Rule #{{line}} operation is missing a target path",
+    "第 {{line}} 条操作的第 {{condition}} 个条件缺少路径": "Condition #{{condition}} in rule #{{line}} is missing a path",
     "第 {{line}} 条请求头透传格式无效": "Rule #{{line}} header pass-through format is invalid",
     "第 {{line}} 条请求头透传缺少请求头名称": "Rule #{{line}} header pass-through is missing header name",
     "第 {{n}} 档": "Tier {{n}}",
@@ -3927,6 +3928,23 @@
     "默认折叠侧边栏": "Default collapse sidebar",
     "默认测试模型": "Default Test Model",
     "默认用户消息": "Default User Message",
-    "默认补全倍率": "Default completion ratio"
+    "默认补全倍率": "Default completion ratio",
+    "上游请求前": "Before Upstream Request",
+    "客户端响应前（非流式）": "Before Client Response (Non-stream)",
+    "最终错误响应前": "Before Final Error Response",
+    "自动（兼容旧版查找）": "Auto (Legacy Lookup)",
+    "响应 / 请求正文": "Response / Request Body",
+    "语义响应": "Semantic Response",
+    "执行上下文": "Execution Context",
+    "应用阶段": "Application Phase",
+    "条件来源": "Condition Source",
+    "当前配置包含可视化编辑器暂不支持的字段，已保留原始 JSON。": "This configuration contains fields unsupported by the visual editor. The original Raw JSON has been preserved.",
+    "响应阶段仅支持返回自定义错误": "Response phase only supports Return Custom Error",
+    "最终错误阶段仅支持返回自定义错误": "Final error phase only supports Return Custom Error",
+    "无条件响应规则必须位于该阶段最后": "Unconditional response rule must be last",
+    "无条件最终错误规则必须位于该阶段最后": "Unconditional final error rule must be last",
+    "第 {{line}} 条操作的状态码无效": "Rule {{line}} has an invalid status code",
+    "响应阶段始终停止内部重试": "Response phase always stops internal retry",
+    "语义条件仅可用于响应阶段": "Semantic conditions are only available in response phase"
   }
 }

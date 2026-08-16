@@ -10,6 +10,8 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -32,6 +34,7 @@ func newResponsesChatTestContext(t *testing.T, body string, isStream bool) (*gin
 		ChannelMeta:        &relaycommon.ChannelMeta{UpstreamModelName: "gpt-test"},
 		IsStream:           isStream,
 		RelayFormat:        types.RelayFormatOpenAI,
+		RelayMode:          relayconstant.RelayModeChatCompletions,
 		ShouldIncludeUsage: true,
 		DisablePing:        true,
 	}
@@ -109,11 +112,142 @@ func TestOaiResponsesToChatBufferedStreamHandlerReturnsJSONFromSSE(t *testing.T)
 
 	got := recorder.Body.String()
 	require.NotContains(t, got, `data:`)
+	require.Equal(t, "application/json", recorder.Header().Get("Content-Type"))
 	require.Contains(t, got, `"object":"chat.completion"`)
 	require.Contains(t, got, `"content":"buffered text"`)
 	require.Contains(t, got, `"name":"lookup"`)
 	require.Contains(t, got, `"arguments":"{\"q\":\"x\"}"`)
 	require.Contains(t, got, `"finish_reason":"tool_calls"`)
+}
+
+// TestOaiResponsesToChatBufferedStreamHandlerAppliesResponseOverride verifies
+// an SSE-to-JSON conversion remains eligible for non-streaming response rules.
+func TestOaiResponsesToChatBufferedStreamHandlerAppliesResponseOverride(t *testing.T) {
+	body := `data: {"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"content_filter"},"output":[],"usage":{"input_tokens":2,"output_tokens":0,"total_tokens":2}}}` + "\n\n"
+	c, recorder, resp, info := newResponsesChatTestContext(t, body, false)
+	resp.Header.Set("Content-Encoding", "gzip")
+	resp.Header.Set("ETag", `"upstream-sse"`)
+	info.ChannelMeta.ParamOverride = map[string]interface{}{
+		"operations": []interface{}{
+			map[string]interface{}{
+				"id":    "responses_rejection",
+				"phase": "response",
+				"mode":  "return_error",
+				"conditions": []interface{}{
+					map[string]interface{}{
+						"source": "semantic",
+						"path":   "response.primary_outcome",
+						"mode":   "full",
+						"value":  relaycommon.ResponseOutcomeRejected,
+					},
+				},
+				"value": map[string]interface{}{
+					"message":     "response rejected",
+					"status_code": http.StatusInternalServerError,
+				},
+			},
+		},
+	}
+	relaycommon.StartResponseOverrideBuffer(c, info)
+
+	usage, apiError := OaiResponsesToChatBufferedStreamHandler(c, info, resp)
+	decision := service.EvaluateResponseOverrideBeforeSettlement(c, info, usage, http.StatusOK)
+
+	require.Nil(t, apiError)
+	require.NotNil(t, usage)
+	require.NotNil(t, info.ResponseOverride)
+	require.Same(t, info.ResponseOverride, decision)
+	require.True(t, info.ResponseOverride.Evaluated)
+	require.True(t, info.ResponseOverride.Applied)
+	require.Equal(t, "responses_rejection", info.ResponseOverride.RuleID)
+	require.Equal(t, relaycommon.ResponseOutcomeRejected, info.ResponseOverride.Semantics.Response.PrimaryOutcome)
+	require.Empty(t, recorder.Body.String())
+	statusCode, headers, candidateBody := relaycommon.CurrentResponseOverrideBuffer(c).Snapshot()
+	require.Equal(t, http.StatusOK, statusCode)
+	require.Equal(t, "application/json", headers.Get("Content-Type"))
+	require.Empty(t, headers.Get("Content-Encoding"))
+	require.Empty(t, headers.Get("ETag"))
+	require.Contains(t, string(candidateBody), `"finish_reason":"content_filter"`)
+}
+
+// TestOaiResponsesToChatBufferedStreamHandlerPreservesProviderTerminalSemantics
+// verifies conversion cannot erase terminal facts collected from Responses SSE.
+func TestOaiResponsesToChatBufferedStreamHandlerPreservesProviderTerminalSemantics(t *testing.T) {
+	tests := []struct {
+		name             string
+		terminal         string
+		outcome          string
+		rejection        string
+		providerReason   string
+		normalizedReason string
+		truncated        bool
+		finishReason     string
+	}{
+		{
+			name:             "incomplete max output tokens",
+			terminal:         `{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"partial"}]}],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}`,
+			outcome:          relaycommon.ResponseOutcomeIncomplete,
+			rejection:        relaycommon.ResponseRejectionNone,
+			providerReason:   "max_output_tokens",
+			normalizedReason: "max_tokens",
+			truncated:        true,
+			finishReason:     "length",
+		},
+		{
+			name:             "incomplete content filter",
+			terminal:         `{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"content_filter"},"output":[],"usage":{"input_tokens":2,"output_tokens":0,"total_tokens":2}}}`,
+			outcome:          relaycommon.ResponseOutcomeRejected,
+			rejection:        relaycommon.ResponseRejectionAll,
+			providerReason:   "content_filter",
+			normalizedReason: "content_filter",
+			finishReason:     "content_filter",
+		},
+		{
+			name:             "completed refusal output",
+			terminal:         `{"type":"response.completed","response":{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"refusal","text":"policy refusal"}]}],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}`,
+			outcome:          relaycommon.ResponseOutcomeRejected,
+			rejection:        relaycommon.ResponseRejectionAll,
+			providerReason:   "completed",
+			normalizedReason: "content_filter",
+			finishReason:     "stop",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body := "data: " + test.terminal + "\n\ndata: [DONE]\n\n"
+			c, recorder, resp, info := newResponsesChatTestContext(t, body, false)
+
+			usage, apiError := OaiResponsesToChatBufferedStreamHandler(c, info, resp)
+
+			require.Nil(t, apiError)
+			require.NotNil(t, usage)
+			require.Equal(t, types.RelayFormat(types.RelayFormatOpenAIResponses), info.ResponseSemantics.Upstream.Format)
+			require.Equal(t, test.outcome, info.ResponseSemantics.Response.PrimaryOutcome)
+			require.Equal(t, test.rejection, info.ResponseSemantics.Response.RejectionState)
+			require.Equal(t, test.providerReason, info.ResponseSemantics.Response.ProviderReason)
+			require.Equal(t, test.normalizedReason, info.ResponseSemantics.Response.NormalizedReason)
+			require.Equal(t, test.truncated, info.ResponseSemantics.Response.Truncated)
+			require.Contains(t, recorder.Body.String(), `"finish_reason":"`+test.finishReason+`"`)
+		})
+	}
+}
+
+// TestOaiResponsesToChatBufferedStreamHandlerPreservesFailedSemantics verifies
+// the relay error path still records the provider-native failed terminal state.
+func TestOaiResponsesToChatBufferedStreamHandlerPreservesFailedSemantics(t *testing.T) {
+	body := `data: {"type":"response.failed","error":{"type":"server_error","code":"upstream_aborted","message":"mid stream aborted"}}` + "\n\n"
+	c, recorder, resp, info := newResponsesChatTestContext(t, body, false)
+
+	usage, apiError := OaiResponsesToChatBufferedStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, apiError)
+	require.Equal(t, types.RelayFormat(types.RelayFormatOpenAIResponses), info.ResponseSemantics.Upstream.Format)
+	require.Equal(t, relaycommon.ResponseOutcomeFailed, info.ResponseSemantics.Response.PrimaryOutcome)
+	require.Equal(t, relaycommon.ResponseRejectionNone, info.ResponseSemantics.Response.RejectionState)
+	require.Equal(t, "failed", info.ResponseSemantics.Response.ProviderReason)
+	require.Empty(t, recorder.Body.String())
 }
 
 func TestOaiChatToResponsesStreamHandlerConvertsSSEOrderAndUsage(t *testing.T) {

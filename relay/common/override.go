@@ -47,6 +47,7 @@ type paramOverrideAuditRecorder struct {
 }
 
 type ConditionOperation struct {
+	Source         string      `json:"source,omitempty"` // body, semantic, context；省略时保持 body 优先、context 回退
 	Path           string      `json:"path"`             // JSON路径
 	Mode           string      `json:"mode"`             // full, prefix, suffix, contains, gt, gte, lt, lte
 	Value          interface{} `json:"value"`            // 匹配的值
@@ -55,15 +56,17 @@ type ConditionOperation struct {
 }
 
 type ParamOperation struct {
-	Phase      string               `json:"phase,omitempty"` // request, final_error
-	Path       string               `json:"path"`
-	Mode       string               `json:"mode"` // delete, set, move, copy, prepend, append, trim_prefix, trim_suffix, ensure_prefix, ensure_suffix, trim_space, to_lower, to_upper, replace, regex_replace, return_error, prune_objects, set_header, delete_header, copy_header, move_header, pass_headers, sync_fields
-	Value      interface{}          `json:"value"`
-	KeepOrigin bool                 `json:"keep_origin"`
-	From       string               `json:"from,omitempty"`
-	To         string               `json:"to,omitempty"`
-	Conditions []ConditionOperation `json:"conditions,omitempty"` // 条件列表
-	Logic      string               `json:"logic,omitempty"`      // AND, OR (默认OR)
+	ID          string               `json:"id,omitempty"`
+	Description string               `json:"description,omitempty"`
+	Phase       string               `json:"phase,omitempty"` // request, response, final_error
+	Path        string               `json:"path"`
+	Mode        string               `json:"mode"` // delete, set, move, copy, prepend, append, trim_prefix, trim_suffix, ensure_prefix, ensure_suffix, trim_space, to_lower, to_upper, replace, regex_replace, return_error, prune_objects, set_header, delete_header, copy_header, move_header, pass_headers, sync_fields
+	Value       interface{}          `json:"value"`
+	KeepOrigin  bool                 `json:"keep_origin"`
+	From        string               `json:"from,omitempty"`
+	To          string               `json:"to,omitempty"`
+	Conditions  []ConditionOperation `json:"conditions,omitempty"` // 条件列表
+	Logic       string               `json:"logic,omitempty"`      // AND, OR (默认OR)
 }
 
 type ParamOverrideReturnError struct {
@@ -72,6 +75,8 @@ type ParamOverrideReturnError struct {
 	Code       string
 	Type       string
 	SkipRetry  bool
+	statusSet  bool
+	skipSet    bool
 }
 
 func (e *ParamOverrideReturnError) Error() string {
@@ -105,7 +110,7 @@ func NewAPIErrorFromParamOverride(err *ParamOverrideReturnError) *types.NewAPIEr
 	}
 
 	statusCode := err.StatusCode
-	if statusCode < http.StatusContinue || statusCode > http.StatusNetworkAuthenticationRequired {
+	if statusCode < http.StatusContinue || statusCode > 599 {
 		statusCode = http.StatusBadRequest
 	}
 
@@ -138,7 +143,14 @@ func NewAPIErrorFromParamOverride(err *ParamOverrideReturnError) *types.NewAPIEr
 
 const (
 	paramOverridePhaseRequest    = "request"
+	paramOverridePhaseResponse   = "response"
 	paramOverridePhaseFinalError = "final_error"
+)
+
+const (
+	conditionSourceBody     = "body"
+	conditionSourceSemantic = "semantic"
+	conditionSourceContext  = "context"
 )
 
 func normalizeParamOverridePhase(phase string) string {
@@ -226,7 +238,94 @@ func ApplyFinalErrorOverride(paramOverride map[string]interface{}, info *RelayIn
 	return NewAPIErrorFromParamOverride(returnErr), true, nil
 }
 
-// ValidateFinalErrorOverride validates ordered final_error rules without executing them.
+// ValidateParamOverride validates all operation phases before a configuration is persisted.
+func ValidateParamOverride(paramOverride map[string]interface{}) error {
+	if len(paramOverride) == 0 {
+		return nil
+	}
+	operations, ok := tryParseOperations(paramOverride)
+	if !ok {
+		if _, exists := paramOverride["operations"]; exists {
+			return fmt.Errorf("param override operations format is invalid")
+		}
+		return nil
+	}
+
+	catchAllSeen := make(map[string]bool, 2)
+	for index, operation := range operations {
+		phase := normalizeParamOverridePhase(operation.Phase)
+		operationMode := strings.ToLower(strings.TrimSpace(operation.Mode))
+		if !isSupportedParamOverrideMode(operationMode) {
+			return fmt.Errorf("operation %d: unsupported mode: %s", index, operation.Mode)
+		}
+		if logic := strings.ToUpper(strings.TrimSpace(operation.Logic)); logic != "" && logic != "AND" && logic != "OR" {
+			return fmt.Errorf("operation %d: unsupported condition logic: %s", index, operation.Logic)
+		}
+		switch phase {
+		case paramOverridePhaseRequest:
+		case paramOverridePhaseResponse, paramOverridePhaseFinalError:
+			if catchAllSeen[phase] {
+				return fmt.Errorf("unconditional %s rule must be last", phase)
+			}
+			if operationMode != "return_error" {
+				return fmt.Errorf("%s phase only supports return_error", phase)
+			}
+			_, err := parseParamOverrideReturnErrorForPhase(operation.Value, phase)
+			if err != nil {
+				return fmt.Errorf("operation %d: %w", index, err)
+			}
+			catchAllSeen[phase] = len(operation.Conditions) == 0
+		default:
+			return fmt.Errorf("operation %d: unsupported phase: %s", index, phase)
+		}
+		if operationMode == "return_error" && phase == paramOverridePhaseRequest {
+			if _, err := parseParamOverrideReturnError(operation.Value); err != nil {
+				return fmt.Errorf("operation %d: %w", index, err)
+			}
+		}
+
+		for conditionIndex, condition := range operation.Conditions {
+			if strings.TrimSpace(condition.Path) == "" {
+				return fmt.Errorf("operation %d condition %d: condition path is required", index, conditionIndex)
+			}
+			if !isSupportedConditionMode(condition.Mode) {
+				return fmt.Errorf("operation %d condition %d: unsupported comparison mode: %s", index, conditionIndex, condition.Mode)
+			}
+			source := normalizeConditionSource(condition.Source)
+			if source == "" {
+				return fmt.Errorf("operation %d condition %d: unsupported condition source: %s", index, conditionIndex, condition.Source)
+			}
+			if phase != paramOverridePhaseResponse && source == conditionSourceSemantic {
+				return fmt.Errorf("operation %d condition %d: semantic source is only available in response phase", index, conditionIndex)
+			}
+		}
+	}
+	return nil
+}
+
+func isSupportedConditionMode(mode string) bool {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "full", "prefix", "suffix", "contains", "gt", "gte", "lt", "lte":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSupportedParamOverrideMode(mode string) bool {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "delete", "set", "move", "copy", "prepend", "append",
+		"trim_prefix", "trim_suffix", "ensure_prefix", "ensure_suffix",
+		"trim_space", "to_lower", "to_upper", "replace", "regex_replace",
+		"return_error", "prune_objects", "set_header", "delete_header",
+		"copy_header", "move_header", "pass_headers", "sync_fields":
+		return true
+	default:
+		return false
+	}
+}
+
+// ValidateFinalErrorOverride validates system-level final_error configuration.
 func ValidateFinalErrorOverride(paramOverride map[string]interface{}) error {
 	if len(paramOverride) == 0 {
 		return nil
@@ -235,24 +334,159 @@ func ValidateFinalErrorOverride(paramOverride map[string]interface{}) error {
 	if !ok {
 		return fmt.Errorf("final error override must use operations format")
 	}
-
-	catchAllSeen := false
 	for _, operation := range operations {
 		if normalizeParamOverridePhase(operation.Phase) != paramOverridePhaseFinalError {
+			return fmt.Errorf("default final error override only supports final_error phase")
+		}
+	}
+	return ValidateParamOverride(paramOverride)
+}
+
+// HasResponseOverride reports whether the raw configuration contains a response operation.
+// It intentionally does not require the whole document to be valid so malformed
+// runtime configuration can still install the buffer and fail open with an audit.
+func HasResponseOverride(paramOverride map[string]interface{}) bool {
+	operations, ok := getParamOverrideOperationMaps(paramOverride)
+	if !ok {
+		return false
+	}
+	return lo.SomeBy(operations, func(operation map[string]interface{}) bool {
+		phase, ok := operation["phase"].(string)
+		return ok && normalizeParamOverridePhase(phase) == paramOverridePhaseResponse
+	})
+}
+
+// BufferedRelayResponse contains one complete, uncommitted client response and
+// the provider facts collected before client protocol conversion.
+type BufferedRelayResponse struct {
+	Body                []byte
+	UpstreamStatusCode  int
+	CandidateStatusCode int
+	Headers             http.Header
+	UpstreamFormat      types.RelayFormat
+	CandidateFormat     types.RelayFormat
+	Semantics           ResponseSemantics
+}
+
+// ResponseOverrideDisposition is the only response-stage action exposed by the
+// parameter engine.
+type ResponseOverrideDisposition string
+
+const (
+	ResponseOverridePass         ResponseOverrideDisposition = "pass"
+	ResponseOverrideReplaceError ResponseOverrideDisposition = "replace_error"
+)
+
+// ResponseOverrideResult describes one of the two response-stage dispositions.
+// The replacement payload remains independent from types.NewAPIError.
+type ResponseOverrideResult struct {
+	Disposition ResponseOverrideDisposition
+	Error       *ParamOverrideReturnError
+	RuleIndex   int
+	RuleID      string
+	Description string
+}
+
+// ApplyResponseOverride evaluates response rules against a buffered, uncommitted response.
+func ApplyResponseOverride(paramOverride map[string]interface{}, info *RelayInfo, input BufferedRelayResponse) (ResponseOverrideResult, error) {
+	result := ResponseOverrideResult{Disposition: ResponseOverridePass}
+	if !HasResponseOverride(paramOverride) {
+		return result, nil
+	}
+
+	semantics := input.Semantics
+	if info != nil {
+		semantics = MergeResponseSemantics(info.ResponseSemantics, semantics)
+	}
+	candidateFormat := input.CandidateFormat
+	candidateSemantics := ClassifyResponseSemantics(candidateFormat, input.Body)
+	// Usage provenance belongs to the provider parser. The converted client body
+	// may contain usage injected by the gateway after local estimation.
+	candidateSemantics.Response.UsageState = ResponseUsageAbsent
+	semantics = MergeResponseSemantics(semantics, candidateSemantics)
+	semantics = completeResponseOverrideSemantics(input, semantics)
+	if info != nil {
+		semantics.Upstream.Model = info.GetAttemptModelName()
+		if info.ChannelMeta != nil && info.UpstreamModelName != "" {
+			semantics.Upstream.Model = info.UpstreamModelName
+		}
+		info.ResponseSemantics = semantics
+	}
+	if err := ValidateParamOverride(paramOverride); err != nil {
+		return result, err
+	}
+
+	context := BuildParamOverrideContext(info)
+	if context == nil {
+		context = make(map[string]interface{})
+	}
+	context["phase"] = paramOverridePhaseResponse
+	context["response"] = buildResponseOverrideContext(input, semantics)
+	context[conditionSourceSemantic] = semantics
+
+	operations, _ := tryParseOperations(paramOverride)
+	contextJSON, err := marshalContextJSON(context)
+	if err != nil {
+		return result, fmt.Errorf("failed to marshal response override context: %w", err)
+	}
+	for index, operation := range operations {
+		if normalizeParamOverridePhase(operation.Phase) != paramOverridePhaseResponse {
 			continue
 		}
-		if catchAllSeen {
-			return fmt.Errorf("unconditional final_error rule must be last")
+		matched, err := checkConditions(input.Body, contextJSON, operation.Conditions, operation.Logic)
+		if err != nil {
+			return result, fmt.Errorf("response operation %d conditions: %w", index, err)
 		}
-		if operation.Mode != "return_error" {
-			return fmt.Errorf("final_error phase only supports return_error")
+		if !matched {
+			continue
 		}
-		if _, err := parseParamOverrideReturnError(operation.Value); err != nil {
-			return err
+		returnErr, err := parseParamOverrideReturnErrorForPhase(operation.Value, paramOverridePhaseResponse)
+		if err != nil {
+			return result, fmt.Errorf("response operation %d: %w", index, err)
 		}
-		catchAllSeen = len(operation.Conditions) == 0
+		result.Error = returnErr
+		result.Disposition = ResponseOverrideReplaceError
+		result.RuleIndex = index + 1
+		result.RuleID = operation.ID
+		if result.RuleID == "" {
+			result.RuleID = fmt.Sprintf("response:%d", result.RuleIndex)
+		}
+		result.Description = operation.Description
+		return result, nil
 	}
-	return nil
+	return result, nil
+}
+
+func buildResponseOverrideContext(input BufferedRelayResponse, semantics ResponseSemantics) map[string]interface{} {
+	header := make(map[string]interface{}, len(input.Headers))
+	for key, values := range input.Headers {
+		header[strings.ToLower(key)] = strings.Join(values, ", ")
+	}
+	return map[string]interface{}{
+		"http_status":          input.UpstreamStatusCode,
+		"upstream_http_status": input.UpstreamStatusCode,
+		"client_http_status":   input.CandidateStatusCode,
+		"format":               semantics.Client.Format,
+		"headers":              header,
+		"semantics":            semantics.Response,
+	}
+}
+
+func completeResponseOverrideSemantics(input BufferedRelayResponse, semantics ResponseSemantics) ResponseSemantics {
+	candidateFormat := input.CandidateFormat
+	if semantics.Upstream.HTTPStatus == 0 {
+		semantics.Upstream.HTTPStatus = input.UpstreamStatusCode
+	}
+	if input.UpstreamFormat != "" {
+		semantics.Upstream.Format = input.UpstreamFormat
+	} else if semantics.Upstream.Format == "" {
+		semantics.Upstream.Format = candidateFormat
+	}
+	semantics.Client.HTTPStatus = input.CandidateStatusCode
+	semantics.Client.Format = candidateFormat
+	semantics.Client.ContentType = input.Headers.Get("Content-Type")
+	semantics.Response.TransportStatus = transportStatus(input.UpstreamStatusCode)
+	return semantics
 }
 
 func buildLegacyParamOverride(paramOverride map[string]interface{}) map[string]interface{} {
@@ -532,8 +766,7 @@ func GetEffectiveHeaderOverride(info *RelayInfo) map[string]interface{} {
 	return sanitizeHeaderOverrideMap(getHeaderOverrideMap(info))
 }
 
-func tryParseOperations(paramOverride map[string]interface{}) ([]ParamOperation, bool) {
-	// 检查是否包含 "operations" 字段
+func getParamOverrideOperationMaps(paramOverride map[string]interface{}) ([]map[string]interface{}, bool) {
 	opsValue, exists := paramOverride["operations"]
 	if !exists {
 		return nil, false
@@ -555,21 +788,50 @@ func tryParseOperations(paramOverride map[string]interface{}) ([]ParamOperation,
 	default:
 		return nil, false
 	}
+	return opMaps, true
+}
+
+func tryParseOperations(paramOverride map[string]interface{}) ([]ParamOperation, bool) {
+	opMaps, ok := getParamOverrideOperationMaps(paramOverride)
+	if !ok {
+		return nil, false
+	}
 
 	operations := make([]ParamOperation, 0, len(opMaps))
 	for _, opMap := range opMaps {
 		operation := ParamOperation{}
 
-		// 断言必要字段
-		if path, ok := opMap["path"].(string); ok {
+		if rawID, exists := opMap["id"]; exists {
+			id, ok := rawID.(string)
+			if !ok {
+				return nil, false
+			}
+			operation.ID = strings.TrimSpace(id)
+		}
+		if rawDescription, exists := opMap["description"]; exists {
+			description, ok := rawDescription.(string)
+			if !ok {
+				return nil, false
+			}
+			operation.Description = strings.TrimSpace(description)
+		}
+		if rawPath, exists := opMap["path"]; exists {
+			path, ok := rawPath.(string)
+			if !ok {
+				return nil, false
+			}
 			operation.Path = path
 		}
 		if mode, ok := opMap["mode"].(string); ok {
-			operation.Mode = mode
+			operation.Mode = strings.ToLower(strings.TrimSpace(mode))
 		} else {
 			return nil, false // mode 是必需的
 		}
-		if phase, ok := opMap["phase"].(string); ok {
+		if rawPhase, exists := opMap["phase"]; exists {
+			phase, ok := rawPhase.(string)
+			if !ok {
+				return nil, false
+			}
 			operation.Phase = normalizeParamOverridePhase(phase)
 		} else {
 			operation.Phase = paramOverridePhaseRequest
@@ -579,17 +841,33 @@ func tryParseOperations(paramOverride map[string]interface{}) ([]ParamOperation,
 		if value, exists := opMap["value"]; exists {
 			operation.Value = value
 		}
-		if keepOrigin, ok := opMap["keep_origin"].(bool); ok {
+		if rawKeepOrigin, exists := opMap["keep_origin"]; exists {
+			keepOrigin, ok := rawKeepOrigin.(bool)
+			if !ok {
+				return nil, false
+			}
 			operation.KeepOrigin = keepOrigin
 		}
-		if from, ok := opMap["from"].(string); ok {
+		if rawFrom, exists := opMap["from"]; exists {
+			from, ok := rawFrom.(string)
+			if !ok {
+				return nil, false
+			}
 			operation.From = from
 		}
-		if to, ok := opMap["to"].(string); ok {
+		if rawTo, exists := opMap["to"]; exists {
+			to, ok := rawTo.(string)
+			if !ok {
+				return nil, false
+			}
 			operation.To = to
 		}
-		if logic, ok := opMap["logic"].(string); ok {
-			operation.Logic = logic
+		if rawLogic, exists := opMap["logic"]; exists {
+			logic, ok := rawLogic.(string)
+			if !ok {
+				return nil, false
+			}
+			operation.Logic = strings.ToUpper(strings.TrimSpace(logic))
 		} else {
 			operation.Logic = "OR" // 默认为OR
 		}
@@ -628,11 +906,31 @@ func checkConditions(data []byte, contextJSON string, conditions []ConditionOper
 }
 
 func checkSingleCondition(data []byte, contextJSON string, condition ConditionOperation) (bool, error) {
-	// 处理负数索引
-	path := processNegativeIndex(data, condition.Path)
-	value := gjson.GetBytes(data, path)
-	if !value.Exists() && contextJSON != "" {
-		value = gjson.Get(contextJSON, condition.Path)
+	source := normalizeConditionSource(condition.Source)
+	if source == "" {
+		return false, fmt.Errorf("unsupported condition source: %s", condition.Source)
+	}
+
+	var value gjson.Result
+	switch source {
+	case conditionSourceBody:
+		path := processNegativeIndex(data, condition.Path)
+		value = gjson.GetBytes(data, path)
+	case conditionSourceContext:
+		if contextJSON != "" {
+			value = gjson.Get(contextJSON, condition.Path)
+		}
+	case conditionSourceSemantic:
+		if contextJSON != "" {
+			value = gjson.Get(contextJSON, conditionSourceSemantic+"."+condition.Path)
+		}
+	default:
+		// 兼容旧配置：省略 source 时保持 body 优先、context 回退。
+		path := processNegativeIndex(data, condition.Path)
+		value = gjson.GetBytes(data, path)
+		if !value.Exists() && contextJSON != "" {
+			value = gjson.Get(contextJSON, condition.Path)
+		}
 	}
 	if !value.Exists() {
 		if condition.PassMissingKey {
@@ -657,6 +955,17 @@ func checkSingleCondition(data []byte, contextJSON string, condition ConditionOp
 		result = !result
 	}
 	return result, nil
+}
+
+func normalizeConditionSource(source string) string {
+	switch strings.ToLower(strings.TrimSpace(source)) {
+	case "":
+		return "legacy"
+	case conditionSourceBody, conditionSourceSemantic, conditionSourceContext:
+		return strings.ToLower(strings.TrimSpace(source))
+	default:
+		return ""
+	}
 }
 
 func processNegativeIndex(data []byte, path string) string {
@@ -1142,6 +1451,7 @@ func parseParamOverrideReturnError(value interface{}) (*ParamOverrideReturnError
 		}
 		if skipRetry, ok := raw["skip_retry"].(bool); ok {
 			result.SkipRetry = skipRetry
+			result.skipSet = true
 		}
 
 		if statusCodeRaw, exists := raw["status_code"]; exists {
@@ -1150,12 +1460,14 @@ func parseParamOverrideReturnError(value interface{}) (*ParamOverrideReturnError
 				return nil, fmt.Errorf("return_error status_code must be an integer")
 			}
 			result.StatusCode = statusCode
+			result.statusSet = true
 		} else if statusRaw, exists := raw["status"]; exists {
 			statusCode, ok := parseOverrideInt(statusRaw)
 			if !ok {
 				return nil, fmt.Errorf("return_error status must be an integer")
 			}
 			result.StatusCode = statusCode
+			result.statusSet = true
 		}
 	default:
 		return nil, fmt.Errorf("return_error value must be string or object")
@@ -1164,10 +1476,31 @@ func parseParamOverrideReturnError(value interface{}) (*ParamOverrideReturnError
 	if result.Message == "" {
 		return nil, fmt.Errorf("return_error message is required")
 	}
-	if result.StatusCode < http.StatusContinue || result.StatusCode > http.StatusNetworkAuthenticationRequired {
+	if result.StatusCode < http.StatusContinue || result.StatusCode > 599 {
 		return nil, fmt.Errorf("return_error status code out of range: %d", result.StatusCode)
 	}
 
+	return result, nil
+}
+
+func parseParamOverrideReturnErrorForPhase(value interface{}, phase string) (*ParamOverrideReturnError, error) {
+	result, err := parseParamOverrideReturnError(value)
+	if err != nil {
+		return nil, err
+	}
+	if normalizeParamOverridePhase(phase) != paramOverridePhaseResponse {
+		return result, nil
+	}
+	if !result.statusSet {
+		result.StatusCode = http.StatusForbidden
+	}
+	if result.StatusCode < http.StatusBadRequest || result.StatusCode > 599 {
+		return nil, fmt.Errorf("response return_error status code out of range: %d", result.StatusCode)
+	}
+	if result.skipSet && !result.SkipRetry {
+		return nil, fmt.Errorf("response return_error skip_retry must be true")
+	}
+	result.SkipRetry = true
 	return result, nil
 }
 
@@ -2049,16 +2382,31 @@ func parseConditionOperations(raw interface{}) ([]ConditionOperation, error) {
 				return nil, fmt.Errorf("condition path/mode is required")
 			}
 			condition := ConditionOperation{
-				Path: path,
-				Mode: mode,
+				Path: strings.TrimSpace(path),
+				Mode: strings.ToLower(strings.TrimSpace(mode)),
+			}
+			if rawSource, exists := itemMap["source"]; exists {
+				source, ok := rawSource.(string)
+				if !ok {
+					return nil, fmt.Errorf("condition source must be a string")
+				}
+				condition.Source = strings.ToLower(strings.TrimSpace(source))
 			}
 			if value, exists := itemMap["value"]; exists {
 				condition.Value = value
 			}
-			if invert, ok := itemMap["invert"].(bool); ok {
+			if rawInvert, exists := itemMap["invert"]; exists {
+				invert, ok := rawInvert.(bool)
+				if !ok {
+					return nil, fmt.Errorf("condition invert must be a boolean")
+				}
 				condition.Invert = invert
 			}
-			if passMissingKey, ok := itemMap["pass_missing_key"].(bool); ok {
+			if rawPassMissingKey, exists := itemMap["pass_missing_key"]; exists {
+				passMissingKey, ok := rawPassMissingKey.(bool)
+				if !ok {
+					return nil, fmt.Errorf("condition pass_missing_key must be a boolean")
+				}
 				condition.PassMissingKey = passMissingKey
 			}
 			result = append(result, condition)
@@ -2196,6 +2544,24 @@ func BuildParamOverrideContext(info *RelayInfo) map[string]interface{} {
 		"index":     info.RetryIndex,
 		"is_retry":  info.RetryIndex > 0,
 		"exhausted": false,
+	}
+	ctx["attempt"] = map[string]interface{}{
+		"index": info.RetryIndex,
+	}
+	if info.ChannelMeta != nil {
+		ctx["channel"] = map[string]interface{}{
+			"id":   info.ChannelMeta.ChannelId,
+			"type": info.ChannelMeta.ChannelType,
+			"name": info.ChannelMeta.ChannelName,
+		}
+	}
+	ctx["request"] = map[string]interface{}{
+		"path":            info.RequestURLPath,
+		"model":           info.GetRequestedModelName(),
+		"routing_model":   info.GetRoutingModelName(),
+		"attempt_model":   info.GetAttemptModelName(),
+		"upstream_model":  ctx["upstream_model"],
+		"is_channel_test": info.IsChannelTest,
 	}
 
 	if info.LastError != nil {

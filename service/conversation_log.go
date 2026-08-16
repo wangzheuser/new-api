@@ -42,6 +42,11 @@ func RecordConversationLog(c *gin.Context, info *relaycommon.RelayInfo, relayErr
 		"request_conversion_chain":   info.RequestConversionChain,
 		"final_request_relay_format": info.GetFinalRequestRelayFormat(),
 	}
+	if decision := info.ResponseOverride; decision != nil {
+		metadata["response_override"] = decision
+		metadata["upstream_status_code"] = decision.UpstreamStatusCode
+		metadata["client_status_code"] = decision.ClientStatusCode
+	}
 	if relayErr != nil {
 		metadata["error_code"] = relayErr.GetErrorCode()
 	}

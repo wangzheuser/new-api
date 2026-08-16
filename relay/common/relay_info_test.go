@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -60,4 +61,36 @@ func TestRelayInfoResponsesCompactionKeepsClientAndRoutingModelsSeparate(t *test
 	require.Equal(t, routingModel, info.GetRoutingModelName())
 	require.Equal(t, routingModel, info.OriginModelName)
 	require.Equal(t, "public-model", request.Model)
+}
+
+// TestRelayInfoInitChannelMetaResetsAttemptState verifies retry attempts do not reuse response or tool billing facts.
+func TestRelayInfoInitChannelMetaResetsAttemptState(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
+	common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
+	common.SetContextKey(c, constant.ContextKeyAdminRejectReason, "openai_finish_reason=content_filter")
+	c.Set("claude_web_search_requests", 2)
+	c.Set("image_generation_call", true)
+	c.Set("image_generation_call_quality", "high")
+	c.Set("image_generation_call_size", "1024x1024")
+	tool := &BuildInToolInfo{ToolName: dto.BuildInToolWebSearchPreview, CallCount: 3, SearchContextSize: "medium"}
+	info := &RelayInfo{
+		RelayFormat: types.RelayFormatOpenAIResponses,
+		ResponsesUsageInfo: &ResponsesUsageInfo{BuiltInTools: map[string]*BuildInToolInfo{
+			dto.BuildInToolWebSearchPreview: tool,
+		}},
+	}
+
+	info.InitChannelMeta(c)
+
+	assert.False(t, common.GetContextKeyBool(c, constant.ContextKeyLocalCountTokens))
+	assert.Empty(t, common.GetContextKeyString(c, constant.ContextKeyAdminRejectReason))
+	assert.Zero(t, c.GetInt("claude_web_search_requests"))
+	assert.False(t, c.GetBool("image_generation_call"))
+	assert.Empty(t, c.GetString("image_generation_call_quality"))
+	assert.Empty(t, c.GetString("image_generation_call_size"))
+	assert.Zero(t, tool.CallCount)
+	assert.Equal(t, dto.BuildInToolWebSearchPreview, tool.ToolName)
+	assert.Equal(t, "medium", tool.SearchContextSize)
 }

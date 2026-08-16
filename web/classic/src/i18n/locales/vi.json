@@ -2912,6 +2912,7 @@
     "第 {{line}} 条操作缺少来源字段": "Quy tắc #{{line}} thao tác thiếu trường nguồn",
     "第 {{line}} 条操作缺少目标字段": "Quy tắc #{{line}} thao tác thiếu trường đích",
     "第 {{line}} 条操作缺少目标路径": "Quy tắc #{{line}} thao tác thiếu đường dẫn đích",
+    "第 {{line}} 条操作的第 {{condition}} 个条件缺少路径": "Điều kiện #{{condition}} trong quy tắc #{{line}} thiếu đường dẫn",
     "第 {{line}} 条请求头透传格式无效": "Quy tắc #{{line}} định dạng truyền header không hợp lệ",
     "第 {{line}} 条请求头透传缺少请求头名称": "Quy tắc #{{line}} truyền header thiếu tên header",
     "第三方支付配置": "Cấu hình thanh toán bên thứ ba",
@@ -4314,6 +4315,23 @@
     "默认折叠侧边栏": "Mặc định thu gọn thanh bên",
     "默认测试模型": "Mô hình kiểm tra mặc định",
     "默认用户消息": "Xin chào",
-    "默认补全倍率": "Tỷ lệ hoàn thành mặc định"
+    "默认补全倍率": "Tỷ lệ hoàn thành mặc định",
+    "上游请求前": "Trước yêu cầu thượng nguồn",
+    "客户端响应前（非流式）": "Trước phản hồi máy khách (không phát trực tuyến)",
+    "最终错误响应前": "Trước phản hồi lỗi cuối cùng",
+    "自动（兼容旧版查找）": "Tự động (tra cứu kiểu cũ)",
+    "响应 / 请求正文": "Nội dung phản hồi / yêu cầu",
+    "语义响应": "Phản hồi ngữ nghĩa",
+    "执行上下文": "Ngữ cảnh thực thi",
+    "应用阶段": "Giai đoạn áp dụng",
+    "条件来源": "Nguồn điều kiện",
+    "当前配置包含可视化编辑器暂不支持的字段，已保留原始 JSON。": "Cấu hình này chứa các trường chưa được trình chỉnh sửa trực quan hỗ trợ. JSON thô ban đầu đã được giữ nguyên.",
+    "响应阶段仅支持返回自定义错误": "Giai đoạn phản hồi chỉ hỗ trợ trả về lỗi tùy chỉnh",
+    "最终错误阶段仅支持返回自定义错误": "Giai đoạn lỗi cuối cùng chỉ hỗ trợ trả về lỗi tùy chỉnh",
+    "无条件响应规则必须位于该阶段最后": "Quy tắc phản hồi không điều kiện phải nằm cuối giai đoạn này",
+    "无条件最终错误规则必须位于该阶段最后": "Quy tắc lỗi cuối cùng không điều kiện phải nằm cuối giai đoạn này",
+    "第 {{line}} 条操作的状态码无效": "Quy tắc {{line}} có mã trạng thái không hợp lệ",
+    "响应阶段始终停止内部重试": "Giai đoạn phản hồi luôn dừng thử lại nội bộ",
+    "语义条件仅可用于响应阶段": "Điều kiện ngữ nghĩa chỉ khả dụng trong giai đoạn phản hồi"
   }
 }

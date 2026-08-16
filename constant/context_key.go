@@ -72,6 +72,9 @@ const (
 	// ContextKeyLanguage stores the user's language preference for i18n
 	ContextKeyLanguage ContextKey = "language"
 	ContextKeyIsStream ContextKey = "is_stream"
+	// ContextKeyRelayUpstreamSucceeded records that the final relay attempt
+	// completed successfully, independently from the client-facing HTTP status.
+	ContextKeyRelayUpstreamSucceeded ContextKey = "relay_upstream_succeeded"
 
 	// ContextKeyAuditLogged marks that the current request has already recorded
 	// a manage/operation audit log inside the handler. When set, the admin-audit

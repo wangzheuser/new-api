@@ -52,8 +52,10 @@ func TestConversationCaptureEligibility(t *testing.T) {
 	}{
 		{name: "chat", info: RelayInfo{RelayFormat: types.RelayFormatOpenAI, RelayMode: relayconstant.RelayModeChatCompletions}, expected: true},
 		{name: "image", info: RelayInfo{RelayFormat: types.RelayFormatOpenAI, RelayMode: relayconstant.RelayModeImagesGenerations}, expected: false},
-		{name: "claude", info: RelayInfo{RelayFormat: types.RelayFormatClaude}, expected: true},
+		{name: "claude messages", info: RelayInfo{RelayFormat: types.RelayFormatClaude, RelayMode: relayconstant.RelayModeUnknown, RequestURLPath: "/v1/messages"}, expected: true},
 		{name: "gemini generation", info: RelayInfo{RelayFormat: types.RelayFormatGemini, RequestURLPath: "/v1beta/models/gemini:generateContent"}, expected: true},
+		{name: "gemini streaming generation", info: RelayInfo{RelayFormat: types.RelayFormatGemini, RequestURLPath: "/v1beta/models/gemini:streamGenerateContent?alt=sse"}, expected: true},
+		{name: "gemini converted chat", info: RelayInfo{RelayFormat: types.RelayFormatGemini, RelayMode: relayconstant.RelayModeChatCompletions, RequestURLPath: "/v1/chat/completions"}, expected: true},
 		{name: "gemini embedding", info: RelayInfo{RelayFormat: types.RelayFormatGemini, RequestURLPath: "/v1beta/models/text:embedContent"}, expected: false},
 	}
 

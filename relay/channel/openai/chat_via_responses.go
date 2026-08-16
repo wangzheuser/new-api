@@ -40,6 +40,7 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if oaiError := responsesResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
+	info.MergeResponseSemantics(types.RelayFormatOpenAIResponses, body)
 
 	chatResult, err := relayconvert.ConvertResponse(c, info, types.RelayFormatOpenAI, &responsesResp)
 	if err != nil {
@@ -122,6 +123,18 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 				}
 			}
 		case "error", "response.failed", "response.error", "response.cancelled":
+			// Preserve the provider terminal state for audit and response semantics
+			// even though failed terminal events return through the relay error path.
+			finalResponse = streamResp.Response
+			if finalResponse == nil {
+				finalResponse = &dto.OpenAIResponsesResponse{}
+			}
+			if len(finalResponse.Status) == 0 {
+				finalResponse.Status = []byte(`"failed"`)
+				if streamResp.Type == "response.cancelled" {
+					finalResponse.Status = []byte(`"cancelled"`)
+				}
+			}
 			if oaiErr := streamResp.GetOpenAIError(); oaiErr != nil {
 				streamErr = types.WithOpenAIError(*oaiErr, http.StatusBadGateway)
 				break
@@ -132,11 +145,19 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 			break
 		}
 	}
-	if streamErr != nil {
-		return nil, streamErr
-	}
 	if err := scanner.Err(); err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+	}
+	if finalResponse != nil {
+		accumulator.SupplementResponseOutput(finalResponse)
+		providerBody, err := common.Marshal(finalResponse)
+		if err != nil {
+			return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+		}
+		info.MergeResponseSemantics(types.RelayFormatOpenAIResponses, providerBody)
+	}
+	if streamErr != nil {
+		return nil, streamErr
 	}
 	if finalResponse == nil {
 		return nil, types.NewOpenAIError(
@@ -145,7 +166,6 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 			http.StatusBadGateway,
 		)
 	}
-	accumulator.SupplementResponseOutput(finalResponse)
 
 	chatResult, err := relayconvert.ConvertResponse(c, info, types.RelayFormatOpenAI, finalResponse)
 	if err != nil {
@@ -178,6 +198,12 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 		return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
 	}
 
+	// The upstream SSE representation has been converted to one JSON document.
+	// Do not expose stale entity headers or let response rules treat it as a stream.
+	for _, key := range []string{"Content-Encoding", "Content-Range", "ETag", "Last-Modified", "Transfer-Encoding"} {
+		resp.Header.Del(key)
+	}
+	resp.Header.Set("Content-Type", "application/json")
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 	return usage, nil
 }

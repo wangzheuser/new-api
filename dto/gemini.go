@@ -466,6 +466,18 @@ type GeminiChatResponse struct {
 	HasUsageMetadata bool                      `json:"-"`
 }
 
+// GeminiErrorResponse follows the Google API error envelope returned by Gemini endpoints.
+type GeminiErrorResponse struct {
+	Error GeminiError `json:"error"`
+}
+
+// GeminiError contains the HTTP code and canonical Google RPC status.
+type GeminiError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Status  string `json:"status"`
+}
+
 // UnmarshalJSON records whether Gemini returned usageMetadata while preserving
 // the historical wire shape that always marshals the usageMetadata field.
 //

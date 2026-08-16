@@ -104,6 +104,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 		}
 	}
 	AppendContextFallbackAdminInfo(relayInfo, adminInfo)
+	AppendResponseOverrideAdminInfo(relayInfo, adminInfo)
 	isMultiKey := common.GetContextKeyBool(ctx, constant.ContextKeyChannelIsMultiKey)
 	if isMultiKey {
 		adminInfo["is_multi_key"] = true
@@ -126,6 +127,14 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	appendParamOverrideInfo(relayInfo, other)
 	AppendStreamStatus(relayInfo, other)
 	return other
+}
+
+// AppendResponseOverrideAdminInfo records the response-stage decision without exposing response bodies.
+func AppendResponseOverrideAdminInfo(relayInfo *relaycommon.RelayInfo, adminInfo map[string]interface{}) {
+	if relayInfo == nil || relayInfo.ResponseOverride == nil || adminInfo == nil {
+		return
+	}
+	adminInfo["response_override"] = relayInfo.ResponseOverride
 }
 
 func appendChannelRoutePlan(relayInfo *relaycommon.RelayInfo, adminInfo map[string]interface{}) {

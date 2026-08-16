@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -14,6 +15,30 @@ type contextFallbackResponseWriter struct {
 	gin.ResponseWriter
 	requestedModel string
 	pendingSSE     []byte
+}
+
+// RebindResponseWriter preserves pending transform state while replacing an
+// attempt-scoped response buffer with its stable downstream writer.
+func (w *contextFallbackResponseWriter) RebindResponseWriter(writer gin.ResponseWriter) {
+	if w == nil || writer == nil {
+		return
+	}
+	w.ResponseWriter = writer
+}
+
+// FinishResponseWriter either forwards the remaining transformed bytes or
+// discards them together with the failed candidate response.
+func (w *contextFallbackResponseWriter) FinishResponseWriter(commit bool) error {
+	if w == nil || len(w.pendingSSE) == 0 {
+		return nil
+	}
+	pending := w.pendingSSE
+	w.pendingSSE = nil
+	if !commit {
+		return nil
+	}
+	_, err := w.ResponseWriter.Write(rewriteContextFallbackResponseModels(pending, w.requestedModel))
+	return err
 }
 
 // WriteHeader 移除重写后已失效的上游内容长度，交由 HTTP 层重新计算或分块发送。
@@ -126,8 +151,11 @@ func installContextFallbackResponseWriter(c *gin.Context, requestedModel string)
 	if _, installed := c.Writer.(*contextFallbackResponseWriter); installed {
 		return
 	}
-	c.Writer = &contextFallbackResponseWriter{
-		ResponseWriter: c.Writer,
-		requestedModel: requestedModel,
+	wrap := func(writer gin.ResponseWriter) relaycommon.FinalResponseWriter {
+		return &contextFallbackResponseWriter{
+			ResponseWriter: writer,
+			requestedModel: requestedModel,
+		}
 	}
+	relaycommon.SetFinalResponseWriterFactory(c, wrap)
 }

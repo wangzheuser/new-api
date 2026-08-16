@@ -175,6 +175,7 @@ func handleConvertedTextResponse(c *gin.Context, info *relaycommon.RelayInfo, re
 	if apiError != nil {
 		return nil, apiError
 	}
+	info.MergeResponseSemantics(info.ChannelRoutePlan.UpstreamRelayFormat, body)
 	result, err := relayconvert.ConvertResponseByID(c, info, info.ChannelRoutePlan.ResponseConverter, upstreamResponse)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
@@ -297,6 +298,7 @@ func HandleNativeTextResponse(c *gin.Context, info *relaycommon.RelayInfo, resp 
 		if err := validateNativeTextResponse(format, decoded); err != nil {
 			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 		}
+		info.MergeResponseSemantics(format, body)
 		result, err := relayconvert.ConvertResponse(c, info, format, decoded)
 		if err != nil {
 			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)

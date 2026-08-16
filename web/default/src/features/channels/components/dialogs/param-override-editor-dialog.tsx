@@ -56,34 +56,32 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  buildDuplicateParamOverrideOperation,
+  buildParamOverrideConditionPayload,
+  classifyParamOverrideEditorDocument,
+  getParamOverrideConditionValidationIssue,
+  getParamOverridePhaseValidationIssue,
+  getParamOverrideReturnErrorPolicy,
+  isParamOverrideOperationDraftBlank,
+  normalizeParamOverrideConditionSource,
+  parseParamOverrideReturnErrorValue,
+  serializeParamOverrideSimpleErrorMessage,
+  serializeParamOverridePhase,
+  type ParamOverrideConditionDraft,
+  type ParamOverrideConditionSource,
+  type ParamOverrideOperationDraft,
+  type ParamOverridePhase,
+} from '@/features/channels/lib/param-override-editor'
 import { cn } from '@/lib/utils'
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-type ParamOverrideCondition = {
-  id: string
-  path: string
-  mode: string
-  value_text: string
-  invert: boolean
-  pass_missing_key: boolean
-}
+type ParamOverrideCondition = ParamOverrideConditionDraft
 
-type ParamOverrideOperation = {
-  id: string
-  phase: 'request' | 'final_error'
-  description: string
-  path: string
-  mode: string
-  from: string
-  to: string
-  value_text: string
-  keep_origin: boolean
-  logic: string
-  conditions: ParamOverrideCondition[]
-}
+type ParamOverrideOperation = ParamOverrideOperationDraft
 
 export type ParamOverrideEditorDialogProps = {
   open: boolean
@@ -124,8 +122,19 @@ const OPERATION_MODE_OPTIONS = [
 
 const OPERATION_PHASE_OPTIONS = [
   { label: 'Before Upstream Request', value: 'request' },
+  { label: 'Before Client Response (Non-stream)', value: 'response' },
   { label: 'Before Final Error Response', value: 'final_error' },
 ] as const
+
+const CONDITION_SOURCE_OPTIONS: Array<{
+  label: string
+  value: ParamOverrideConditionSource
+}> = [
+  { label: 'Auto (Legacy Lookup)', value: 'auto' },
+  { label: 'Response / Request Body', value: 'body' },
+  { label: 'Semantic Response', value: 'semantic' },
+  { label: 'Execution Context', value: 'context' },
+]
 
 const OPERATION_MODE_VALUES = new Set(
   OPERATION_MODE_OPTIONS.map((o) => o.value)
@@ -489,6 +498,7 @@ const normalizeCondition = (
   condition: Record<string, unknown> = {}
 ): ParamOverrideCondition => ({
   id: nextLocalId(),
+  source: normalizeParamOverrideConditionSource(condition.source),
   path: typeof condition.path === 'string' ? condition.path : '',
   mode: CONDITION_MODE_VALUES.has(condition.mode as string)
     ? (condition.mode as string)
@@ -505,14 +515,18 @@ const normalizeOperation = (
   operation: Record<string, unknown> = {}
 ): ParamOverrideOperation => ({
   id: nextLocalId(),
-  phase: operation.phase === 'final_error' ? 'final_error' : 'request',
+  wire_id: typeof operation.id === 'string' ? operation.id : undefined,
+  phase: (operation.phase || 'request') as ParamOverridePhase,
   description:
     typeof operation.description === 'string' ? operation.description : '',
   path: typeof operation.path === 'string' ? operation.path : '',
   mode: OPERATION_MODE_VALUES.has(operation.mode as string)
     ? (operation.mode as string)
     : 'set',
-  value_text: toValueText(operation.value),
+  value_text:
+    operation.mode === 'return_error' && typeof operation.value === 'string'
+      ? JSON.stringify(operation.value)
+      : toValueText(operation.value),
   keep_origin: operation.keep_origin === true,
   from: typeof operation.from === 'string' ? operation.from : '',
   to: typeof operation.to === 'string' ? operation.to : '',
@@ -545,26 +559,6 @@ const reorderOperations = (
   return next
 }
 
-const isOperationBlank = (operation: ParamOverrideOperation): boolean => {
-  const hasCondition = operation.conditions.some(
-    (c) =>
-      c.path.trim() ||
-      c.value_text.trim() ||
-      c.mode !== 'full' ||
-      c.invert ||
-      c.pass_missing_key
-  )
-  return (
-    operation.mode === 'set' &&
-    !operation.path.trim() &&
-    !operation.from.trim() &&
-    !operation.to.trim() &&
-    operation.value_text.trim() === '' &&
-    !operation.keep_origin &&
-    !hasCondition
-  )
-}
-
 const getOperationSummary = (
   operation: ParamOverrideOperation,
   index: number
@@ -583,16 +577,21 @@ const getOperationSummary = (
 }
 
 const getModeTagTailwind = (mode: string): string => {
-  if (mode.includes('header'))
+  if (mode.includes('header')) {
     return 'bg-cyan-500/15 text-cyan-700 dark:text-cyan-300 border-cyan-500/20'
-  if (mode.includes('replace') || mode.includes('trim'))
+  }
+  if (mode.includes('replace') || mode.includes('trim')) {
     return 'bg-violet-500/15 text-violet-700 dark:text-violet-300 border-violet-500/20'
-  if (mode.includes('copy') || mode.includes('move'))
+  }
+  if (mode.includes('copy') || mode.includes('move')) {
     return 'bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/20'
-  if (mode.includes('error') || mode.includes('prune'))
+  }
+  if (mode.includes('error') || mode.includes('prune')) {
     return 'bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/20'
-  if (mode.includes('sync'))
+  }
+  if (mode.includes('sync')) {
     return 'bg-green-500/15 text-green-700 dark:text-green-300 border-green-500/20'
+  }
   return 'bg-muted text-muted-foreground'
 }
 
@@ -637,17 +636,20 @@ const getModeToPlaceholder = (mode: string): string => {
 }
 
 const getModeValueLabel = (mode: string): string => {
-  if (mode === 'set_header')
+  if (mode === 'set_header') {
     return 'Header Value (supports string or JSON mapping)'
-  if (mode === 'pass_headers')
+  }
+  if (mode === 'pass_headers') {
     return 'Pass-through Headers (comma-separated or JSON array)'
+  }
   if (
     mode === 'trim_prefix' ||
     mode === 'trim_suffix' ||
     mode === 'ensure_prefix' ||
     mode === 'ensure_suffix'
-  )
+  ) {
     return 'Prefix/Suffix Text'
+  }
   if (mode === 'prune_objects') return 'Prune Rule (string or JSON object)'
   return 'Value (supports JSON or plain text)'
 }
@@ -660,8 +662,9 @@ const getModeValuePlaceholder = (mode: string): string => {
     mode === 'trim_suffix' ||
     mode === 'ensure_prefix' ||
     mode === 'ensure_suffix'
-  )
+  ) {
     return 'openai/'
+  }
   if (mode === 'prune_objects') return '{"type":"redacted_thinking"}'
   return '0.7'
 }
@@ -694,10 +697,14 @@ type ReturnErrorDraft = {
   simpleMode: boolean
 }
 
-const parseReturnErrorDraft = (valueText: string): ReturnErrorDraft => {
+const parseReturnErrorDraft = (
+  valueText: string,
+  phase: ParamOverridePhase = 'request'
+): ReturnErrorDraft => {
+  const policy = getParamOverrideReturnErrorPolicy(phase)
   const defaults: ReturnErrorDraft = {
     message: '',
-    statusCode: 400,
+    statusCode: policy.defaultStatusCode,
     code: '',
     type: '',
     skipRetry: true,
@@ -706,25 +713,31 @@ const parseReturnErrorDraft = (valueText: string): ReturnErrorDraft => {
   const raw = String(valueText ?? '').trim()
   if (!raw) return defaults
   try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>
+    const parsed = JSON.parse(raw) as unknown
+    if (typeof parsed === 'string') {
+      return { ...defaults, message: parsed.trim(), simpleMode: true }
+    }
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const errorValue = parsed as Record<string, unknown>
       const statusRaw =
-        parsed.status_code !== undefined ? parsed.status_code : parsed.status
+        errorValue.status_code !== undefined
+          ? errorValue.status_code
+          : errorValue.status
       const statusValue = Number(statusRaw)
       return {
         ...defaults,
         message: String(
-          (parsed.message as string) || (parsed.msg as string) || ''
+          (errorValue.message as string) || (errorValue.msg as string) || ''
         ).trim(),
         statusCode:
           Number.isInteger(statusValue) &&
           statusValue >= 100 &&
           statusValue <= 599
             ? statusValue
-            : 400,
-        code: String((parsed.code as string) || '').trim(),
-        type: String((parsed.type as string) || '').trim(),
-        skipRetry: parsed.skip_retry !== false,
+            : policy.defaultStatusCode,
+        code: String((errorValue.code as string) || '').trim(),
+        type: String((errorValue.type as string) || '').trim(),
+        skipRetry: errorValue.skip_retry !== false,
         simpleMode: false,
       }
     }
@@ -735,23 +748,31 @@ const parseReturnErrorDraft = (valueText: string): ReturnErrorDraft => {
 }
 
 const buildReturnErrorValueText = (
-  draft: Partial<ReturnErrorDraft>
+  draft: Partial<ReturnErrorDraft>,
+  phase: ParamOverridePhase = 'request'
 ): string => {
+  const policy = getParamOverrideReturnErrorPolicy(phase)
   const message = String(draft.message || '').trim()
-  if (draft.simpleMode) return message
+  if (draft.simpleMode) {
+    return serializeParamOverrideSimpleErrorMessage(message)
+  }
   const statusCode = Number(draft.statusCode)
   const payload: Record<string, unknown> = {
     message,
     status_code:
-      Number.isInteger(statusCode) && statusCode >= 100 && statusCode <= 599
+      Number.isInteger(statusCode) &&
+      statusCode >= policy.minStatusCode &&
+      statusCode <= policy.maxStatusCode
         ? statusCode
-        : 400,
+        : policy.defaultStatusCode,
   }
   const code = String(draft.code || '').trim()
   const type = String(draft.type || '').trim()
   if (code) payload.code = code
   if (type) payload.type = type
-  if (draft.skipRetry === false) payload.skip_retry = false
+  if (!policy.retryLocked && draft.skipRetry === false) {
+    payload.skip_retry = false
+  }
   return JSON.stringify(payload)
 }
 
@@ -797,8 +818,9 @@ const parsePruneObjectsDraft = (valueText: string): PruneObjectsDraft => {
   if (!raw) return defaults
   try {
     const parsed = JSON.parse(raw)
-    if (typeof parsed === 'string')
+    if (typeof parsed === 'string') {
       return { ...defaults, typeText: parsed.trim() }
+    }
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       const rules: PruneRule[] = []
       if (
@@ -814,8 +836,9 @@ const parsePruneObjectsDraft = (valueText: string): PruneObjectsDraft => {
       }
       if (Array.isArray(parsed.conditions)) {
         for (const item of parsed.conditions) {
-          if (item && typeof item === 'object')
+          if (item && typeof item === 'object') {
             rules.push(normalizePruneRule(item))
+          }
         }
       } else if (
         parsed.conditions &&
@@ -874,48 +897,36 @@ const buildPruneObjectsValueText = (draft: PruneObjectsDraft): string => {
       return conditionPayload
     })
   if (conditions.length > 0) payload.conditions = conditions
-  if (!payload.type && !payload.conditions)
+  if (!payload.type && !payload.conditions) {
     return JSON.stringify({ logic: 'AND' })
+  }
   return JSON.stringify(payload)
 }
 
 // pass_headers helpers
 
 const parsePassHeaderNames = (rawValue: unknown): string[] => {
-  if (Array.isArray(rawValue))
+  if (Array.isArray(rawValue)) {
     return rawValue.map((i) => String(i ?? '').trim()).filter(Boolean)
+  }
   if (rawValue && typeof rawValue === 'object') {
     const obj = rawValue as Record<string, unknown>
-    if (Array.isArray(obj.headers))
+    if (Array.isArray(obj.headers)) {
       return obj.headers.map((i) => String(i ?? '').trim()).filter(Boolean)
+    }
     if (obj.header !== undefined) {
       const single = String(obj.header ?? '').trim()
       return single ? [single] : []
     }
     return []
   }
-  if (typeof rawValue === 'string')
+  if (typeof rawValue === 'string') {
     return rawValue
       .split(',')
       .map((i) => i.trim())
       .filter(Boolean)
-  return []
-}
-
-// Condition payload builder
-const buildConditionPayload = (
-  condition: ParamOverrideCondition
-): Record<string, unknown> | null => {
-  const path = condition.path.trim()
-  if (!path) return null
-  const payload: Record<string, unknown> = {
-    path,
-    mode: condition.mode || 'full',
-    value: parseLooseValue(condition.value_text),
   }
-  if (condition.invert) payload.invert = true
-  if (condition.pass_missing_key) payload.pass_missing_key = true
-  return payload
+  return []
 }
 
 // Validation
@@ -924,6 +935,26 @@ const validateOperations = (
   operations: ParamOverrideOperation[],
   t: (key: string, options?: Record<string, unknown>) => string
 ): string => {
+  const conditionIssue = getParamOverrideConditionValidationIssue(operations)
+  if (conditionIssue) {
+    return t('Rule {{line}} condition {{condition}} is missing path', {
+      line: conditionIssue.line,
+      condition: conditionIssue.condition,
+    })
+  }
+
+  const phaseIssue = getParamOverridePhaseValidationIssue(operations)
+  if (phaseIssue?.kind === 'unsupported_mode') {
+    return phaseIssue.phase === 'response'
+      ? t('Response phase only supports Return Custom Error')
+      : t('Final error phase only supports Return Custom Error')
+  }
+  if (phaseIssue?.kind === 'unconditional_not_last') {
+    return phaseIssue.phase === 'response'
+      ? t('Unconditional response rule must be last')
+      : t('Unconditional final error rule must be last')
+  }
+
   for (let i = 0; i < operations.length; i++) {
     const op = operations[i]
     const mode = op.mode || 'set'
@@ -933,40 +964,62 @@ const validateOperations = (
     const fromValue = op.from.trim()
     const toValue = op.to.trim()
 
-    if (op.phase === 'final_error' && mode !== 'return_error') {
-      return t('Final error phase only supports Return Custom Error')
-    }
     if (
-      op.phase === 'final_error' &&
-      op.conditions.length === 0 &&
-      operations.slice(i + 1).some((item) => item.phase === 'final_error')
+      op.phase !== 'response' &&
+      op.conditions.some((condition) => condition.source === 'semantic')
     ) {
-      return t('Unconditional final error rule must be last')
+      return t('Semantic conditions are only available in response phase')
     }
 
-    if (meta.path && !pathValue)
+    if (meta.path && !pathValue) {
       return t('Rule {{line}} is missing target path', { line })
+    }
     if (FROM_REQUIRED_MODES.has(mode) && !fromValue) {
-      if (!(meta.pathAlias && pathValue))
+      if (!(meta.pathAlias && pathValue)) {
         return t('Rule {{line}} is missing source field', { line })
+      }
     }
     if (TO_REQUIRED_MODES.has(mode) && !toValue) {
-      if (!(meta.pathAlias && pathValue))
+      if (!(meta.pathAlias && pathValue)) {
         return t('Rule {{line}} is missing target field', { line })
+      }
     }
-    if (VALUE_REQUIRED_MODES.has(mode) && op.value_text.trim() === '')
+    if (VALUE_REQUIRED_MODES.has(mode) && op.value_text.trim() === '') {
       return t('Rule {{line}} is missing value', { line })
+    }
 
     if (mode === 'return_error') {
       const raw = op.value_text.trim()
       if (!raw) return t('Rule {{line}} is missing value', { line })
       try {
         const parsed = JSON.parse(raw)
+        if (typeof parsed === 'string' && !parsed.trim()) {
+          return t('Rule {{line}} is missing value', { line })
+        }
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          if (!String((parsed as Record<string, unknown>).message || '').trim())
+          if (
+            !String((parsed as Record<string, unknown>).message || '').trim()
+          ) {
             return t('Rule {{line}} return_error requires a message field', {
               line,
             })
+          }
+          const errorValue = parsed as Record<string, unknown>
+          const statusRaw = errorValue.status_code ?? errorValue.status
+          if (statusRaw !== undefined) {
+            const policy = getParamOverrideReturnErrorPolicy(op.phase)
+            const statusCode = Number(statusRaw)
+            if (
+              !Number.isInteger(statusCode) ||
+              statusCode < policy.minStatusCode ||
+              statusCode > policy.maxStatusCode
+            ) {
+              return t('Rule {{line}} has an invalid status code', { line })
+            }
+          }
+          if (op.phase === 'response' && errorValue.skip_retry === false) {
+            return t('Response phase always stops internal retry')
+          }
         }
       } catch {
         /* plain string is allowed */
@@ -975,18 +1028,21 @@ const validateOperations = (
 
     if (mode === 'prune_objects') {
       const raw = op.value_text.trim()
-      if (!raw)
+      if (!raw) {
         return t('Rule {{line}} prune_objects is missing conditions', { line })
+      }
     }
 
     if (mode === 'pass_headers') {
       const raw = op.value_text.trim()
-      if (!raw)
+      if (!raw) {
         return t('Rule {{line}} pass_headers is missing header names', { line })
+      }
       const parsed = parseLooseValue(raw)
       const headers = parsePassHeaderNames(parsed)
-      if (headers.length === 0)
+      if (headers.length === 0) {
         return t('Rule {{line}} pass_headers format is invalid', { line })
+      }
     }
   }
   return ''
@@ -1005,8 +1061,8 @@ type EditorState = {
 
 const parseInitialState = (rawValue: string): EditorState => {
   const text = typeof rawValue === 'string' ? rawValue : ''
-  const trimmed = text.trim()
-  if (!trimmed) {
+  const document = classifyParamOverrideEditorDocument(text)
+  if (document.kind === 'empty') {
     return {
       editMode: 'visual',
       visualMode: 'operations',
@@ -1017,7 +1073,7 @@ const parseInitialState = (rawValue: string): EditorState => {
     }
   }
 
-  if (!verifyJSON(trimmed)) {
+  if (document.kind === 'invalid') {
     return {
       editMode: 'json',
       visualMode: 'operations',
@@ -1028,15 +1084,22 @@ const parseInitialState = (rawValue: string): EditorState => {
     }
   }
 
-  const parsed = JSON.parse(trimmed) as Record<string, unknown>
+  const parsed = document.parsed as Record<string, unknown>
   const pretty = JSON.stringify(parsed, null, 2)
 
-  if (
-    parsed &&
-    typeof parsed === 'object' &&
-    !Array.isArray(parsed) &&
-    Array.isArray(parsed.operations)
-  ) {
+  if (document.kind === 'unsupported') {
+    return {
+      editMode: 'json',
+      visualMode: 'operations',
+      legacyValue: '',
+      operations: [createDefaultOperation()],
+      jsonText: text,
+      jsonError:
+        'This configuration contains fields unsupported by the visual editor. The original Raw JSON has been preserved.',
+    }
+  }
+
+  if (document.kind === 'operations') {
     return {
       editMode: 'visual',
       visualMode: 'operations',
@@ -1052,7 +1115,7 @@ const parseInitialState = (rawValue: string): EditorState => {
     }
   }
 
-  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+  if (document.kind === 'legacy') {
     return {
       editMode: 'visual',
       visualMode: 'legacy',
@@ -1080,7 +1143,9 @@ const buildOperationsJson = (
   options: { validate: boolean },
   t: (key: string, options?: Record<string, unknown>) => string
 ): string => {
-  const filteredOps = sourceOperations.filter((o) => !isOperationBlank(o))
+  const filteredOps = sourceOperations.filter(
+    (operation) => !isParamOverrideOperationDraftBlank(operation)
+  )
   if (filteredOps.length === 0) return ''
 
   if (options.validate) {
@@ -1096,11 +1161,18 @@ const buildOperationsJson = (
     const fromValue = operation.from.trim()
     const toValue = operation.to.trim()
     const payload: Record<string, unknown> = { mode }
-    if (operation.phase === 'final_error') payload.phase = 'final_error'
+    if (operation.wire_id) payload.id = operation.wire_id
+    const phase = serializeParamOverridePhase(operation.phase)
+    if (phase) payload.phase = phase
     if (descriptionValue) payload.description = descriptionValue
     if (meta.path) payload.path = pathValue
     if (meta.pathOptional && pathValue) payload.path = pathValue
-    if (meta.value) payload.value = parseLooseValue(operation.value_text)
+    if (meta.value) {
+      payload.value =
+        mode === 'return_error'
+          ? parseParamOverrideReturnErrorValue(operation.value_text)
+          : parseLooseValue(operation.value_text)
+    }
     if (meta.keepOrigin && operation.keep_origin) payload.keep_origin = true
     if (meta.from) payload.from = fromValue
     if (!meta.to && operation.to.trim()) payload.to = toValue
@@ -1109,9 +1181,9 @@ const buildOperationsJson = (
       if (!payload.from && pathValue) payload.from = pathValue
       if (!payload.to && pathValue) payload.to = pathValue
     }
-    const conditions = operation.conditions
-      .map(buildConditionPayload)
-      .filter(Boolean)
+    const conditions = operation.conditions.map(
+      buildParamOverrideConditionPayload
+    )
     if (conditions.length > 0) {
       payload.conditions = conditions
       payload.logic = operation.logic === 'AND' ? 'AND' : 'OR'
@@ -1141,6 +1213,7 @@ export function ParamOverrideEditorDialog(
   ])
   const [jsonText, setJsonText] = useState('')
   const [jsonError, setJsonError] = useState('')
+  const [preserveRawJson, setPreserveRawJson] = useState(false)
   const [operationSearch, setOperationSearch] = useState('')
   const [selectedOperationId, setSelectedOperationId] = useState('')
   const [expandedConditions, setExpandedConditions] = useState<
@@ -1163,7 +1236,10 @@ export function ParamOverrideEditorDialog(
     setLegacyValue(state.legacyValue)
     setOperations(state.operations)
     setJsonText(state.jsonText)
-    setJsonError(state.jsonError)
+    setJsonError(state.jsonError ? t(state.jsonError) : '')
+    setPreserveRawJson(
+      classifyParamOverrideEditorDocument(props.value).kind === 'unsupported'
+    )
     setOperationSearch('')
     setSelectedOperationId(state.operations[0]?.id || '')
     setExpandedConditions({})
@@ -1175,7 +1251,7 @@ export function ParamOverrideEditorDialog(
     } else {
       setTemplatePresetKey('operations_default')
     }
-  }, [props.open, props.value])
+  }, [props.open, props.value, t])
 
   // Keep selectedOperationId valid
   useEffect(() => {
@@ -1199,7 +1275,10 @@ export function ParamOverrideEditorDialog(
   )
 
   const operationCount = useMemo(
-    () => operations.filter((o) => !isOperationBlank(o)).length,
+    () =>
+      operations.filter(
+        (operation) => !isParamOverrideOperationDraftBlank(operation)
+      ).length,
     [operations]
   )
 
@@ -1233,14 +1312,19 @@ export function ParamOverrideEditorDialog(
   )
 
   const returnErrorDraft = useMemo(() => {
-    if (!selectedOperation || selectedOperation.mode !== 'return_error')
+    if (!selectedOperation || selectedOperation.mode !== 'return_error') {
       return null
-    return parseReturnErrorDraft(selectedOperation.value_text)
+    }
+    return parseReturnErrorDraft(
+      selectedOperation.value_text,
+      selectedOperation.phase
+    )
   }, [selectedOperation])
 
   const pruneObjectsDraft = useMemo(() => {
-    if (!selectedOperation || selectedOperation.mode !== 'prune_objects')
+    if (!selectedOperation || selectedOperation.mode !== 'prune_objects') {
       return null
+    }
     return parsePruneObjectsDraft(selectedOperation.value_text)
   }, [selectedOperation])
 
@@ -1280,23 +1364,9 @@ export function ParamOverrideEditorDialog(
       const idx = prev.findIndex((o) => o.id === operationId)
       if (idx < 0) return prev
       const source = prev[idx]
-      const cloned = normalizeOperation({
-        description: source.description,
-        path: source.path,
-        mode: source.mode,
-        value: parseLooseValue(source.value_text),
-        keep_origin: source.keep_origin,
-        from: source.from,
-        to: source.to,
-        logic: source.logic,
-        conditions: source.conditions.map((c) => ({
-          path: c.path,
-          mode: c.mode,
-          value: parseLooseValue(c.value_text),
-          invert: c.invert,
-          pass_missing_key: c.pass_missing_key,
-        })),
-      })
+      const cloned = normalizeOperation(
+        buildDuplicateParamOverrideOperation(source)
+      )
       insertedId = cloned.id
       const next = [...prev]
       next.splice(idx + 1, 0, cloned)
@@ -1369,11 +1439,18 @@ export function ParamOverrideEditorDialog(
       setOperations((prev) =>
         prev.map((op) => {
           if (op.id !== operationId) return op
-          const draft = parseReturnErrorDraft(op.value_text)
-          const nextDraft = { ...draft, ...draftPatch }
+          const policy = getParamOverrideReturnErrorPolicy(op.phase)
+          const draft = parseReturnErrorDraft(op.value_text, op.phase)
+          const nextDraft = {
+            ...draft,
+            ...draftPatch,
+            skipRetry: policy.retryLocked
+              ? true
+              : (draftPatch.skipRetry ?? draft.skipRetry),
+          }
           return {
             ...op,
-            value_text: buildReturnErrorValueText(nextDraft),
+            value_text: buildReturnErrorValueText(nextDraft, op.phase),
           }
         })
       )
@@ -1497,11 +1574,13 @@ export function ParamOverrideEditorDialog(
     if (visualMode === 'legacy') {
       const trimmed = legacyValue.trim()
       if (!trimmed) return ''
-      if (!verifyJSON(trimmed))
+      if (!verifyJSON(trimmed)) {
         throw new Error(t('Parameter override must be valid JSON format'))
+      }
       const parsed = JSON.parse(trimmed) as unknown
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
         throw new Error(t('Legacy format must be a JSON object'))
+      }
       return JSON.stringify(parsed, null, 2)
     }
     return buildOperationsJson(operations, { validate: true }, t)
@@ -1512,6 +1591,7 @@ export function ParamOverrideEditorDialog(
     try {
       setJsonText(buildVisualJson())
       setJsonError('')
+      setPreserveRawJson(false)
     } catch (error) {
       toast.error((error as Error).message)
       if (visualMode === 'legacy') {
@@ -1522,6 +1602,7 @@ export function ParamOverrideEditorDialog(
       setJsonError(
         (error as Error).message || t('Parameter configuration error')
       )
+      setPreserveRawJson(false)
     }
     setEditMode('json')
   }, [buildVisualJson, editMode, legacyValue, operations, t, visualMode])
@@ -1536,20 +1617,26 @@ export function ParamOverrideEditorDialog(
       setSelectedOperationId(fallback.id)
       setLegacyValue('')
       setJsonError('')
+      setPreserveRawJson(false)
       setEditMode('visual')
       return
     }
-    if (!verifyJSON(trimmed)) {
+    const document = classifyParamOverrideEditorDocument(jsonText)
+    if (document.kind === 'invalid') {
       toast.error(t('Parameter override must be valid JSON format'))
       return
     }
-    const parsed = JSON.parse(trimmed) as Record<string, unknown>
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      !Array.isArray(parsed) &&
-      Array.isArray(parsed.operations)
-    ) {
+    if (document.kind === 'unsupported') {
+      const message = t(
+        'This configuration contains fields unsupported by the visual editor. The original Raw JSON has been preserved.'
+      )
+      setJsonError(message)
+      setPreserveRawJson(true)
+      toast.error(message)
+      return
+    }
+    const parsed = document.parsed as Record<string, unknown>
+    if (document.kind === 'operations') {
       const nextOps =
         (parsed.operations as Record<string, unknown>[]).length > 0
           ? (parsed.operations as Record<string, unknown>[]).map(
@@ -1561,17 +1648,19 @@ export function ParamOverrideEditorDialog(
       setSelectedOperationId(nextOps[0]?.id || '')
       setLegacyValue('')
       setJsonError('')
+      setPreserveRawJson(false)
       setEditMode('visual')
       setTemplatePresetKey('operations_default')
       return
     }
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    if (document.kind === 'legacy') {
       const fallback = createDefaultOperation()
       setVisualMode('legacy')
       setLegacyValue(JSON.stringify(parsed, null, 2))
       setOperations([fallback])
       setSelectedOperationId(fallback.id)
       setJsonError('')
+      setPreserveRawJson(false)
       setEditMode('visual')
       setTemplatePresetKey('legacy_default')
       return
@@ -1597,13 +1686,14 @@ export function ParamOverrideEditorDialog(
             }
             parsedCurrent = JSON.parse(trimmed) as Record<string, unknown>
           }
-          const merged = { ...(payload || {}), ...parsedCurrent }
+          const merged = { ...payload, ...parsedCurrent }
           const text = JSON.stringify(merged, null, 2)
           setVisualMode('legacy')
           setLegacyValue(text)
           setOperations([createDefaultOperation()])
           setJsonText(text)
           setJsonError('')
+          setPreserveRawJson(false)
           setEditMode('visual')
         } else {
           const text = JSON.stringify(payload, null, 2)
@@ -1612,6 +1702,7 @@ export function ParamOverrideEditorDialog(
           setOperations([createDefaultOperation()])
           setJsonText(text)
           setJsonError('')
+          setPreserveRawJson(false)
           setEditMode('visual')
         }
         return
@@ -1624,7 +1715,9 @@ export function ParamOverrideEditorDialog(
         const appended = operationsPayload.map(normalizeOperation)
         const existing =
           visualMode === 'operations'
-            ? operations.filter((o) => !isOperationBlank(o))
+            ? operations.filter(
+                (operation) => !isParamOverrideOperationDraftBlank(operation)
+              )
             : []
         const nextOps = [...existing, ...appended]
         setVisualMode('operations')
@@ -1632,6 +1725,7 @@ export function ParamOverrideEditorDialog(
         setSelectedOperationId(nextOps[0]?.id || appended[0]?.id || '')
         setLegacyValue('')
         setJsonError('')
+        setPreserveRawJson(false)
         setEditMode('visual')
         setJsonText('')
       } else {
@@ -1643,6 +1737,7 @@ export function ParamOverrideEditorDialog(
         setSelectedOperationId(finalOps[0]?.id || '')
         setJsonText(JSON.stringify({ operations: operationsPayload }, null, 2))
         setJsonError('')
+        setPreserveRawJson(false)
         setEditMode('visual')
       }
     },
@@ -1657,6 +1752,7 @@ export function ParamOverrideEditorDialog(
     setSelectedOperationId(fallback.id)
     setJsonText('')
     setJsonError('')
+    setPreserveRawJson(false)
     setTemplatePresetKey('operations_default')
     setEditMode('visual')
   }, [])
@@ -1665,6 +1761,7 @@ export function ParamOverrideEditorDialog(
   const handleJsonChange = useCallback(
     (nextValue: string) => {
       setJsonText(nextValue)
+      setPreserveRawJson(false)
       const trimmed = nextValue.trim()
       if (!trimmed) {
         setJsonError('')
@@ -1684,6 +1781,7 @@ export function ParamOverrideEditorDialog(
     }
     setJsonText(JSON.stringify(JSON.parse(trimmed), null, 2))
     setJsonError('')
+    setPreserveRawJson(false)
   }, [jsonText, t])
 
   const visualValidationError = useMemo(() => {
@@ -1703,9 +1801,12 @@ export function ParamOverrideEditorDialog(
       if (editMode === 'json') {
         const trimmed = jsonText.trim()
         if (trimmed) {
-          if (!verifyJSON(trimmed))
+          if (!verifyJSON(trimmed)) {
             throw new Error(t('Parameter override must be valid JSON format'))
-          result = JSON.stringify(JSON.parse(trimmed), null, 2)
+          }
+          result = preserveRawJson
+            ? jsonText
+            : JSON.stringify(JSON.parse(trimmed), null, 2)
         }
       } else {
         result = buildVisualJson()
@@ -1715,7 +1816,7 @@ export function ParamOverrideEditorDialog(
     } catch (error) {
       toast.error((error as Error).message)
     }
-  }, [buildVisualJson, editMode, jsonText, props, t])
+  }, [buildVisualJson, editMode, jsonText, preserveRawJson, props, t])
 
   // Expand/collapse all conditions
   const expandAllConditions = useCallback(() => {
@@ -1742,7 +1843,7 @@ export function ParamOverrideEditorDialog(
       onOpenChange={props.onOpenChange}
       title={t('Parameter Override')}
       description={t(
-        'Create request parameter override rules with a visual editor or raw JSON.'
+        'Create parameter override rules for requests and responses with a visual editor or Raw JSON.'
       )}
       contentClassName='flex max-h-[90vh] flex-col gap-0 p-0 sm:max-w-5xl'
       headerClassName='border-b px-6 py-4'
@@ -1793,12 +1894,10 @@ export function ParamOverrideEditorDialog(
             {t('Template')}
           </span>
           <Select
-            items={[
-              ...templatePresetOptions.map((o) => ({
-                value: o.value,
-                label: t(o.label),
-              })),
-            ]}
+            items={templatePresetOptions.map((o) => ({
+              value: o.value,
+              label: t(o.label),
+            }))}
             value={templatePresetKey}
             onValueChange={(v) =>
               setTemplatePresetKey(v || 'operations_default')
@@ -1845,221 +1944,219 @@ export function ParamOverrideEditorDialog(
       </div>
       {/* Content */}
       <div className='min-h-0 flex-1 overflow-hidden'>
-        {editMode === 'visual' ? (
-          visualMode === 'legacy' ? (
-            <div className='p-4'>
-              <p className='text-muted-foreground mb-2 text-sm'>
-                {t('Legacy Format (JSON Object)')}
-              </p>
-              <Textarea
-                value={legacyValue}
-                onChange={(e) => setLegacyValue(e.target.value)}
-                placeholder={JSON.stringify(LEGACY_TEMPLATE, null, 2)}
-                rows={14}
-                className='font-mono text-xs'
-              />
-              <p className='text-muted-foreground mt-2 text-xs'>
-                {t(
-                  'Edit JSON object directly. Suitable for simple parameter overrides.'
-                )}
-              </p>
-            </div>
-          ) : (
-            <div className='flex h-full'>
-              {/* Left sidebar */}
-              <div className='flex w-[280px] flex-shrink-0 flex-col border-r'>
-                <div className='flex items-center justify-between border-b px-3 py-2'>
-                  <div className='flex items-center gap-2'>
-                    <span className='text-sm font-medium'>{t('Rules')}</span>
-                    <Badge variant='secondary'>
-                      {operationCount}/{operations.length}
-                    </Badge>
-                  </div>
-                  <Button
-                    type='button'
-                    variant='ghost'
-                    size='sm'
-                    onClick={addOperation}
-                  >
-                    <Plus className='h-4 w-4' />
-                  </Button>
+        {editMode === 'visual' && visualMode === 'legacy' && (
+          <div className='p-4'>
+            <p className='text-muted-foreground mb-2 text-sm'>
+              {t('Legacy Format (JSON Object)')}
+            </p>
+            <Textarea
+              value={legacyValue}
+              onChange={(e) => setLegacyValue(e.target.value)}
+              placeholder={JSON.stringify(LEGACY_TEMPLATE, null, 2)}
+              rows={14}
+              className='font-mono text-xs'
+            />
+            <p className='text-muted-foreground mt-2 text-xs'>
+              {t(
+                'Edit JSON object directly. Suitable for simple parameter overrides.'
+              )}
+            </p>
+          </div>
+        )}
+        {editMode === 'visual' && visualMode === 'operations' && (
+          <div className='flex h-full'>
+            {/* Left sidebar */}
+            <div className='flex w-[280px] flex-shrink-0 flex-col border-r'>
+              <div className='flex items-center justify-between border-b px-3 py-2'>
+                <div className='flex items-center gap-2'>
+                  <span className='text-sm font-medium'>{t('Rules')}</span>
+                  <Badge variant='secondary'>
+                    {operationCount}/{operations.length}
+                  </Badge>
                 </div>
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='sm'
+                  onClick={addOperation}
+                >
+                  <Plus className='h-4 w-4' />
+                </Button>
+              </div>
 
-                {topOperationModes.length > 0 && (
-                  <div className='flex flex-wrap gap-1 border-b px-3 py-2'>
-                    {topOperationModes.map(([mode, count]) => (
-                      <span
-                        key={`mode_stat_${mode}`}
-                        className={cn(
-                          'inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium',
-                          getModeTagTailwind(mode)
-                        )}
-                      >
-                        {t(OPERATION_MODE_LABEL_MAP[mode] || mode)} · {count}
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                <div className='px-3 py-2'>
-                  <div className='relative'>
-                    <Search className='text-muted-foreground absolute top-2.5 left-2.5 h-3.5 w-3.5' />
-                    <Input
-                      value={operationSearch}
-                      onChange={(e) => setOperationSearch(e.target.value)}
-                      placeholder={t('Search rules...')}
-                      className='h-8 pl-8 text-xs'
-                    />
-                  </div>
+              {topOperationModes.length > 0 && (
+                <div className='flex flex-wrap gap-1 border-b px-3 py-2'>
+                  {topOperationModes.map(([mode, count]) => (
+                    <span
+                      key={`mode_stat_${mode}`}
+                      className={cn(
+                        'inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium',
+                        getModeTagTailwind(mode)
+                      )}
+                    >
+                      {t(OPERATION_MODE_LABEL_MAP[mode] || mode)} · {count}
+                    </span>
+                  ))}
                 </div>
+              )}
 
-                <ScrollArea className='flex-1'>
-                  <div className='flex flex-col gap-1 px-3 pb-3'>
-                    {filteredOperations.length === 0 ? (
-                      <p className='text-muted-foreground py-4 text-center text-xs'>
-                        {t('No matching rules')}
-                      </p>
-                    ) : (
-                      filteredOperations.map((operation) => {
-                        const index = operations.findIndex(
-                          (o) => o.id === operation.id
-                        )
-                        const isActive = operation.id === selectedOperationId
-                        const isDragging = operation.id === draggedOperationId
-                        const isDropTarget =
-                          operation.id === dragOverOperationId &&
-                          draggedOperationId !== '' &&
-                          draggedOperationId !== operation.id
-                        return (
-                          <div
-                            key={operation.id}
-                            role='button'
-                            tabIndex={0}
-                            draggable={operations.length > 1}
-                            onClick={() => setSelectedOperationId(operation.id)}
-                            onDragStart={(e) =>
-                              handleDragStart(e, operation.id)
+              <div className='px-3 py-2'>
+                <div className='relative'>
+                  <Search className='text-muted-foreground absolute top-2.5 left-2.5 h-3.5 w-3.5' />
+                  <Input
+                    value={operationSearch}
+                    onChange={(e) => setOperationSearch(e.target.value)}
+                    placeholder={t('Search rules...')}
+                    className='h-8 pl-8 text-xs'
+                  />
+                </div>
+              </div>
+
+              <ScrollArea className='flex-1'>
+                <div className='flex flex-col gap-1 px-3 pb-3'>
+                  {filteredOperations.length === 0 ? (
+                    <p className='text-muted-foreground py-4 text-center text-xs'>
+                      {t('No matching rules')}
+                    </p>
+                  ) : (
+                    filteredOperations.map((operation) => {
+                      const index = operations.findIndex(
+                        (o) => o.id === operation.id
+                      )
+                      const isActive = operation.id === selectedOperationId
+                      const isDragging = operation.id === draggedOperationId
+                      const isDropTarget =
+                        operation.id === dragOverOperationId &&
+                        draggedOperationId !== '' &&
+                        draggedOperationId !== operation.id
+                      return (
+                        <div
+                          key={operation.id}
+                          role='button'
+                          tabIndex={0}
+                          draggable={operations.length > 1}
+                          onClick={() => setSelectedOperationId(operation.id)}
+                          onDragStart={(e) => handleDragStart(e, operation.id)}
+                          onDragOver={(e) => handleDragOver(e, operation.id)}
+                          onDrop={(e) => handleDrop(e, operation.id)}
+                          onDragEnd={resetDragState}
+                          onKeyDown={(e: KeyboardEvent) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault()
+                              setSelectedOperationId(operation.id)
                             }
-                            onDragOver={(e) => handleDragOver(e, operation.id)}
-                            onDrop={(e) => handleDrop(e, operation.id)}
-                            onDragEnd={resetDragState}
-                            onKeyDown={(e: KeyboardEvent) => {
-                              if (e.key === 'Enter' || e.key === ' ') {
-                                e.preventDefault()
-                                setSelectedOperationId(operation.id)
-                              }
-                            }}
-                            className={cn(
-                              'cursor-pointer rounded-lg border p-2.5 transition-colors',
-                              isActive
-                                ? 'border-primary bg-primary/5'
-                                : 'hover:bg-muted/50',
-                              isDragging && 'opacity-50',
-                              isDropTarget &&
-                                dragOverPosition === 'before' &&
-                                'border-t-primary border-t-2',
-                              isDropTarget &&
-                                dragOverPosition === 'after' &&
-                                'border-b-primary border-b-2'
-                            )}
-                          >
-                            <div className='flex items-start gap-2'>
-                              <GripVertical
-                                className={cn(
-                                  'text-muted-foreground mt-0.5 h-3.5 w-3.5 flex-shrink-0',
-                                  operations.length > 1
-                                    ? 'cursor-grab'
-                                    : 'cursor-default'
-                                )}
-                              />
-                              <div className='min-w-0 flex-1'>
-                                <div className='flex items-center justify-between gap-1'>
-                                  <span className='text-xs font-semibold'>
-                                    #{index + 1}
-                                  </span>
-                                  <Badge
-                                    variant='outline'
-                                    className='text-[10px]'
-                                  >
-                                    {operation.conditions.length}
-                                  </Badge>
-                                </div>
-                                <p className='text-muted-foreground mt-0.5 line-clamp-1 text-[11px]'>
-                                  {getOperationSummary(operation, index)}
-                                </p>
-                                {operation.description.trim() && (
-                                  <p className='text-muted-foreground mt-0.5 line-clamp-2 text-[10px]'>
-                                    {operation.description}
-                                  </p>
-                                )}
-                                <span
-                                  className={cn(
-                                    'mt-1 inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium',
-                                    getModeTagTailwind(operation.mode || 'set')
-                                  )}
-                                >
-                                  {t(
-                                    OPERATION_MODE_LABEL_MAP[
-                                      operation.mode || 'set'
-                                    ] ||
-                                      operation.mode ||
-                                      'set'
-                                  )}
+                          }}
+                          className={cn(
+                            'cursor-pointer rounded-lg border p-2.5 transition-colors',
+                            isActive
+                              ? 'border-primary bg-primary/5'
+                              : 'hover:bg-muted/50',
+                            isDragging && 'opacity-50',
+                            isDropTarget &&
+                              dragOverPosition === 'before' &&
+                              'border-t-primary border-t-2',
+                            isDropTarget &&
+                              dragOverPosition === 'after' &&
+                              'border-b-primary border-b-2'
+                          )}
+                        >
+                          <div className='flex items-start gap-2'>
+                            <GripVertical
+                              className={cn(
+                                'text-muted-foreground mt-0.5 h-3.5 w-3.5 flex-shrink-0',
+                                operations.length > 1
+                                  ? 'cursor-grab'
+                                  : 'cursor-default'
+                              )}
+                            />
+                            <div className='min-w-0 flex-1'>
+                              <div className='flex items-center justify-between gap-1'>
+                                <span className='text-xs font-semibold'>
+                                  #{index + 1}
                                 </span>
+                                <Badge
+                                  variant='outline'
+                                  className='text-[10px]'
+                                >
+                                  {operation.conditions.length}
+                                </Badge>
                               </div>
+                              <p className='text-muted-foreground mt-0.5 line-clamp-1 text-[11px]'>
+                                {getOperationSummary(operation, index)}
+                              </p>
+                              {operation.description.trim() && (
+                                <p className='text-muted-foreground mt-0.5 line-clamp-2 text-[10px]'>
+                                  {operation.description}
+                                </p>
+                              )}
+                              <span
+                                className={cn(
+                                  'mt-1 inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium',
+                                  getModeTagTailwind(operation.mode || 'set')
+                                )}
+                              >
+                                {t(
+                                  OPERATION_MODE_LABEL_MAP[
+                                    operation.mode || 'set'
+                                  ] ||
+                                    operation.mode ||
+                                    'set'
+                                )}
+                              </span>
                             </div>
                           </div>
-                        )
-                      })
-                    )}
-                  </div>
-                </ScrollArea>
-              </div>
-
-              {/* Right panel - Rule editor */}
-              <div className='flex min-w-0 flex-1 flex-col overflow-y-auto'>
-                {selectedOperation ? (
-                  <RuleEditor
-                    operation={selectedOperation}
-                    operationIndex={selectedOperationIndex}
-                    operations={operations}
-                    returnErrorDraft={returnErrorDraft}
-                    pruneObjectsDraft={pruneObjectsDraft}
-                    expandedConditions={expandedConditions}
-                    setExpandedConditions={setExpandedConditions}
-                    updateOperation={updateOperation}
-                    duplicateOperation={duplicateOperation}
-                    removeOperation={removeOperation}
-                    addCondition={addCondition}
-                    updateCondition={updateCondition}
-                    removeCondition={removeCondition}
-                    updateReturnErrorDraft={updateReturnErrorDraft}
-                    updatePruneObjectsDraft={updatePruneObjectsDraft}
-                    addPruneRule={addPruneRule}
-                    updatePruneRule={updatePruneRule}
-                    removePruneRule={removePruneRule}
-                    expandAllConditions={expandAllConditions}
-                    collapseAllConditions={collapseAllConditions}
-                  />
-                ) : (
-                  <div className='flex flex-1 items-center justify-center'>
-                    <p className='text-muted-foreground text-sm'>
-                      {t('Select a rule to edit.')}
-                    </p>
-                  </div>
-                )}
-
-                {visualValidationError && (
-                  <div className='border-t px-4 py-2'>
-                    <p className='text-destructive text-xs'>
-                      {visualValidationError}
-                    </p>
-                  </div>
-                )}
-              </div>
+                        </div>
+                      )
+                    })
+                  )}
+                </div>
+              </ScrollArea>
             </div>
-          )
-        ) : (
+
+            {/* Right panel - Rule editor */}
+            <div className='flex min-w-0 flex-1 flex-col overflow-y-auto'>
+              {selectedOperation ? (
+                <RuleEditor
+                  operation={selectedOperation}
+                  operationIndex={selectedOperationIndex}
+                  operations={operations}
+                  returnErrorDraft={returnErrorDraft}
+                  pruneObjectsDraft={pruneObjectsDraft}
+                  expandedConditions={expandedConditions}
+                  setExpandedConditions={setExpandedConditions}
+                  updateOperation={updateOperation}
+                  duplicateOperation={duplicateOperation}
+                  removeOperation={removeOperation}
+                  addCondition={addCondition}
+                  updateCondition={updateCondition}
+                  removeCondition={removeCondition}
+                  updateReturnErrorDraft={updateReturnErrorDraft}
+                  updatePruneObjectsDraft={updatePruneObjectsDraft}
+                  addPruneRule={addPruneRule}
+                  updatePruneRule={updatePruneRule}
+                  removePruneRule={removePruneRule}
+                  expandAllConditions={expandAllConditions}
+                  collapseAllConditions={collapseAllConditions}
+                />
+              ) : (
+                <div className='flex flex-1 items-center justify-center'>
+                  <p className='text-muted-foreground text-sm'>
+                    {t('Select a rule to edit.')}
+                  </p>
+                </div>
+              )}
+
+              {visualValidationError && (
+                <div className='border-t px-4 py-2'>
+                  <p className='text-destructive text-xs'>
+                    {visualValidationError}
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        {editMode === 'json' && (
           /* JSON mode */
           <div className='p-4'>
             <div className='mb-2 flex items-center gap-2'>
@@ -2149,7 +2246,7 @@ function RuleEditor(ruleEditorProps: RuleEditorProps) {
   const operation = ruleEditorProps.operation
   const mode = operation.mode || 'set'
   const availableOperationModes =
-    operation.phase === 'final_error'
+    operation.phase !== 'request'
       ? OPERATION_MODE_OPTIONS.filter(
           (option) => option.value === 'return_error'
         )
@@ -2160,6 +2257,18 @@ function RuleEditor(ruleEditorProps: RuleEditorProps) {
     mode === 'sync_fields' ? parseSyncTargetSpec(operation.from) : null
   const syncToTarget =
     mode === 'sync_fields' ? parseSyncTargetSpec(operation.to) : null
+  const showReturnErrorEditor =
+    meta.value && mode === 'return_error' && ruleEditorProps.returnErrorDraft
+  const showPruneObjectsEditor =
+    meta.value && mode === 'prune_objects' && ruleEditorProps.pruneObjectsDraft
+  const showGenericValueEditor =
+    meta.value && !showReturnErrorEditor && !showPruneObjectsEditor
+  const showSyncFieldsEditor =
+    mode === 'sync_fields' && syncFromTarget && syncToTarget
+  const showSourceTargetEditor =
+    !showSyncFieldsEditor &&
+    mode !== 'sync_fields' &&
+    (meta.from || meta.to !== undefined)
 
   return (
     <ScrollArea className='flex-1'>
@@ -2212,9 +2321,40 @@ function RuleEditor(ruleEditorProps: RuleEditorProps) {
               if (nextPhase === null) {
                 return
               }
+              const targetPhase = nextPhase as ParamOverridePhase
+              const currentErrorDraft = parseReturnErrorDraft(
+                operation.value_text,
+                operation.phase
+              )
+              let valueText = operation.value_text
+              if (mode === 'return_error') {
+                valueText = buildReturnErrorValueText(
+                  {
+                    ...currentErrorDraft,
+                    statusCode:
+                      nextPhase === 'response'
+                        ? getParamOverrideReturnErrorPolicy('response')
+                            .defaultStatusCode
+                        : currentErrorDraft.statusCode,
+                    skipRetry: true,
+                  },
+                  targetPhase
+                )
+              } else if (nextPhase !== 'request') {
+                valueText = serializeParamOverrideSimpleErrorMessage(
+                  operation.value_text,
+                  'Request rejected'
+                )
+              }
               ruleEditorProps.updateOperation(operation.id, {
-                phase: nextPhase as ParamOverrideOperation['phase'],
-                mode: nextPhase === 'final_error' ? 'return_error' : mode,
+                phase: targetPhase,
+                mode: nextPhase === 'request' ? mode : 'return_error',
+                conditions: operation.conditions.map((condition) =>
+                  nextPhase !== 'response' && condition.source === 'semantic'
+                    ? { ...condition, source: 'auto' }
+                    : condition
+                ),
+                value_text: valueText,
               })
             }}
           >
@@ -2316,62 +2456,64 @@ function RuleEditor(ruleEditorProps: RuleEditorProps) {
         </div>
 
         {/* Value section */}
-        {meta.value &&
-          (mode === 'return_error' && ruleEditorProps.returnErrorDraft ? (
-            <ReturnErrorEditor
-              operationId={operation.id}
-              draft={ruleEditorProps.returnErrorDraft}
-              updateDraft={ruleEditorProps.updateReturnErrorDraft}
-            />
-          ) : mode === 'prune_objects' && ruleEditorProps.pruneObjectsDraft ? (
-            <PruneObjectsEditor
-              operationId={operation.id}
-              draft={ruleEditorProps.pruneObjectsDraft}
-              updateDraft={ruleEditorProps.updatePruneObjectsDraft}
-              addRule={ruleEditorProps.addPruneRule}
-              updateRule={ruleEditorProps.updatePruneRule}
-              removeRule={ruleEditorProps.removePruneRule}
-            />
-          ) : (
-            <div className='space-y-1.5'>
-              <div className='flex items-center justify-between'>
-                <label className='text-xs font-medium'>
-                  {t(getModeValueLabel(mode))}
-                </label>
-                {operation.value_text.trim().startsWith('{') && (
-                  <Button
-                    type='button'
-                    variant='ghost'
-                    size='sm'
-                    className='text-muted-foreground h-auto px-1.5 py-0.5 text-xs'
-                    onClick={() => {
-                      try {
-                        const parsed = JSON.parse(operation.value_text)
-                        ruleEditorProps.updateOperation(operation.id, {
-                          value_text: JSON.stringify(parsed, null, 2),
-                        })
-                      } catch (_e) {
-                        /* not valid JSON */
-                      }
-                    }}
-                  >
-                    {t('Format')}
-                  </Button>
-                )}
-              </div>
-              <Textarea
-                value={operation.value_text}
-                onChange={(e) =>
-                  ruleEditorProps.updateOperation(operation.id, {
-                    value_text: e.target.value,
-                  })
-                }
-                placeholder={getModeValuePlaceholder(mode)}
-                rows={3}
-                className='max-h-[200px] resize-y overflow-y-auto font-mono text-xs'
-              />
+        {showReturnErrorEditor && ruleEditorProps.returnErrorDraft && (
+          <ReturnErrorEditor
+            operationId={operation.id}
+            phase={operation.phase}
+            draft={ruleEditorProps.returnErrorDraft}
+            updateDraft={ruleEditorProps.updateReturnErrorDraft}
+          />
+        )}
+        {showPruneObjectsEditor && ruleEditorProps.pruneObjectsDraft && (
+          <PruneObjectsEditor
+            operationId={operation.id}
+            draft={ruleEditorProps.pruneObjectsDraft}
+            updateDraft={ruleEditorProps.updatePruneObjectsDraft}
+            addRule={ruleEditorProps.addPruneRule}
+            updateRule={ruleEditorProps.updatePruneRule}
+            removeRule={ruleEditorProps.removePruneRule}
+          />
+        )}
+        {showGenericValueEditor && (
+          <div className='space-y-1.5'>
+            <div className='flex items-center justify-between'>
+              <label className='text-xs font-medium'>
+                {t(getModeValueLabel(mode))}
+              </label>
+              {operation.value_text.trim().startsWith('{') && (
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='sm'
+                  className='text-muted-foreground h-auto px-1.5 py-0.5 text-xs'
+                  onClick={() => {
+                    try {
+                      const parsed = JSON.parse(operation.value_text)
+                      ruleEditorProps.updateOperation(operation.id, {
+                        value_text: JSON.stringify(parsed, null, 2),
+                      })
+                    } catch {
+                      /* not valid JSON */
+                    }
+                  }}
+                >
+                  {t('Format')}
+                </Button>
+              )}
             </div>
-          ))}
+            <Textarea
+              value={operation.value_text}
+              onChange={(e) =>
+                ruleEditorProps.updateOperation(operation.id, {
+                  value_text: e.target.value,
+                })
+              }
+              placeholder={getModeValuePlaceholder(mode)}
+              rows={3}
+              className='max-h-[200px] resize-y overflow-y-auto font-mono text-xs'
+            />
+          </div>
+        )}
 
         {/* keep_origin */}
         {meta.keepOrigin && (
@@ -2391,14 +2533,15 @@ function RuleEditor(ruleEditorProps: RuleEditorProps) {
         )}
 
         {/* sync_fields */}
-        {mode === 'sync_fields' && syncFromTarget && syncToTarget ? (
+        {showSyncFieldsEditor && syncFromTarget && syncToTarget && (
           <SyncFieldsEditor
             operationId={operation.id}
             syncFromTarget={syncFromTarget}
             syncToTarget={syncToTarget}
             updateOperation={ruleEditorProps.updateOperation}
           />
-        ) : (meta.from || meta.to !== undefined) && mode !== 'sync_fields' ? (
+        )}
+        {showSourceTargetEditor && (
           <div className='grid gap-3 sm:grid-cols-2'>
             {(meta.from || meta.to === false) && (
               <div className='space-y-1.5'>
@@ -2435,7 +2578,7 @@ function RuleEditor(ruleEditorProps: RuleEditorProps) {
               </div>
             )}
           </div>
-        ) : null}
+        )}
 
         {/* Conditions */}
         <div className='rounded-lg border p-3'>
@@ -2516,6 +2659,7 @@ function RuleEditor(ruleEditorProps: RuleEditorProps) {
                   condition={condition}
                   conditionIndex={conditionIndex}
                   operationId={operation.id}
+                  operationPhase={operation.phase}
                   expanded={
                     ruleEditorProps.expandedConditions[condition.id] ?? false
                   }
@@ -2545,6 +2689,7 @@ type ConditionEditorProps = {
   condition: ParamOverrideCondition
   conditionIndex: number
   operationId: string
+  operationPhase: ParamOverridePhase
   expanded: boolean
   onExpandedChange: (expanded: boolean) => void
   updateCondition: (
@@ -2558,6 +2703,11 @@ type ConditionEditorProps = {
 function ConditionEditor(conditionEditorProps: ConditionEditorProps) {
   const { t } = useTranslation()
   const condition = conditionEditorProps.condition
+  const conditionSourceOptions = CONDITION_SOURCE_OPTIONS.filter(
+    (option) =>
+      option.value !== 'semantic' ||
+      conditionEditorProps.operationPhase === 'response'
+  )
 
   return (
     <Collapsible
@@ -2602,7 +2752,40 @@ function ConditionEditor(conditionEditorProps: ConditionEditorProps) {
                 {t('Delete Condition')}
               </Button>
             </div>
-            <div className='grid gap-2 sm:grid-cols-3'>
+            <div className='grid gap-2 sm:grid-cols-2 lg:grid-cols-4'>
+              <div className='space-y-1'>
+                <label className='text-[10px] font-medium'>
+                  {t('Condition Source')}
+                </label>
+                <Select
+                  items={conditionSourceOptions.map((option) => ({
+                    value: option.value,
+                    label: t(option.label),
+                  }))}
+                  value={condition.source}
+                  onValueChange={(value) =>
+                    value !== null &&
+                    conditionEditorProps.updateCondition(
+                      conditionEditorProps.operationId,
+                      condition.id,
+                      { source: value as ParamOverrideConditionSource }
+                    )
+                  }
+                >
+                  <SelectTrigger className='h-8 text-xs'>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent alignItemWithTrigger={false}>
+                    <SelectGroup>
+                      {conditionSourceOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {t(option.label)}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </div>
               <div className='space-y-1'>
                 <label className='text-[10px] font-medium'>
                   {t('Field Path')}
@@ -2625,12 +2808,10 @@ function ConditionEditor(conditionEditorProps: ConditionEditorProps) {
                   {t('Match Mode')}
                 </label>
                 <Select
-                  items={[
-                    ...CONDITION_MODE_OPTIONS.map((o) => ({
-                      value: o.value,
-                      label: t(o.label),
-                    })),
-                  ]}
+                  items={CONDITION_MODE_OPTIONS.map((o) => ({
+                    value: o.value,
+                    label: t(o.label),
+                  }))}
                   value={condition.mode}
                   onValueChange={(v) =>
                     v !== null &&
@@ -2714,6 +2895,7 @@ function ConditionEditor(conditionEditorProps: ConditionEditorProps) {
 
 type ReturnErrorEditorProps = {
   operationId: string
+  phase: ParamOverridePhase
   draft: ReturnErrorDraft
   updateDraft: (
     operationId: string,
@@ -2724,6 +2906,7 @@ type ReturnErrorEditorProps = {
 function ReturnErrorEditor(returnErrorEditorProps: ReturnErrorEditorProps) {
   const { t } = useTranslation()
   const draft = returnErrorEditorProps.draft
+  const policy = getParamOverrideReturnErrorPolicy(returnErrorEditorProps.phase)
 
   return (
     <div className='rounded-lg border p-3'>
@@ -2798,10 +2981,17 @@ function ReturnErrorEditor(returnErrorEditorProps: ReturnErrorEditorProps) {
                 onChange={(e) =>
                   returnErrorEditorProps.updateDraft(
                     returnErrorEditorProps.operationId,
-                    { statusCode: parseInt(e.target.value, 10) || 400 }
+                    {
+                      statusCode:
+                        Number.parseInt(e.target.value, 10) ||
+                        policy.defaultStatusCode,
+                    }
                   )
                 }
-                placeholder='400'
+                placeholder={String(policy.defaultStatusCode)}
+                min={policy.minStatusCode}
+                max={policy.maxStatusCode}
+                type='number'
                 className='h-8 text-xs'
               />
             </div>
@@ -2856,20 +3046,27 @@ function ReturnErrorEditor(returnErrorEditorProps: ReturnErrorEditorProps) {
             >
               {t('Stop Retry')}
             </Button>
-            <Button
-              type='button'
-              variant={draft.skipRetry ? 'outline' : 'default'}
-              size='sm'
-              className='h-7 text-xs'
-              onClick={() =>
-                returnErrorEditorProps.updateDraft(
-                  returnErrorEditorProps.operationId,
-                  { skipRetry: false }
-                )
-              }
-            >
-              {t('Allow Retry')}
-            </Button>
+            {!policy.retryLocked && (
+              <Button
+                type='button'
+                variant={draft.skipRetry ? 'outline' : 'default'}
+                size='sm'
+                className='h-7 text-xs'
+                onClick={() =>
+                  returnErrorEditorProps.updateDraft(
+                    returnErrorEditorProps.operationId,
+                    { skipRetry: false }
+                  )
+                }
+              >
+                {t('Allow Retry')}
+              </Button>
+            )}
+            {policy.retryLocked && (
+              <span className='text-muted-foreground text-xs'>
+                {t('Response phase always stops internal retry')}
+              </span>
+            )}
           </div>
           <div className='mt-2 flex flex-wrap gap-1'>
             {[
@@ -3145,12 +3342,10 @@ function PruneObjectsEditor(pruneObjectsEditorProps: PruneObjectsEditorProps) {
                           {t('Match Mode')}
                         </label>
                         <Select
-                          items={[
-                            ...CONDITION_MODE_OPTIONS.map((o) => ({
-                              value: o.value,
-                              label: t(o.label),
-                            })),
-                          ]}
+                          items={CONDITION_MODE_OPTIONS.map((o) => ({
+                            value: o.value,
+                            label: t(o.label),
+                          }))}
                           value={rule.mode}
                           onValueChange={(v) =>
                             v !== null &&
@@ -3258,12 +3453,10 @@ function SyncFieldsEditor(syncFieldsEditorProps: SyncFieldsEditorProps) {
           </label>
           <div className='flex gap-2'>
             <Select
-              items={[
-                ...SYNC_TARGET_TYPE_OPTIONS.map((o) => ({
-                  value: o.value,
-                  label: t(o.label),
-                })),
-              ]}
+              items={SYNC_TARGET_TYPE_OPTIONS.map((o) => ({
+                value: o.value,
+                label: t(o.label),
+              }))}
               value={syncFieldsEditorProps.syncFromTarget.type || 'json'}
               onValueChange={(v) =>
                 v !== null &&
@@ -3315,12 +3508,10 @@ function SyncFieldsEditor(syncFieldsEditorProps: SyncFieldsEditorProps) {
           </label>
           <div className='flex gap-2'>
             <Select
-              items={[
-                ...SYNC_TARGET_TYPE_OPTIONS.map((o) => ({
-                  value: o.value,
-                  label: t(o.label),
-                })),
-              ]}
+              items={SYNC_TARGET_TYPE_OPTIONS.map((o) => ({
+                value: o.value,
+                label: t(o.label),
+              }))}
               value={syncFieldsEditorProps.syncToTarget.type || 'json'}
               onValueChange={(v) =>
                 v !== null &&

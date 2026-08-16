@@ -2688,6 +2688,7 @@
     "第 {{line}} 条操作缺少来源字段": "Règle n°{{line}} opération manque un champ source",
     "第 {{line}} 条操作缺少目标字段": "Règle n°{{line}} opération manque un champ cible",
     "第 {{line}} 条操作缺少目标路径": "Règle n°{{line}} opération manque un chemin cible",
+    "第 {{line}} 条操作的第 {{condition}} 个条件缺少路径": "La condition n°{{condition}} de la règle n°{{line}} ne contient aucun chemin",
     "第 {{line}} 条请求头透传格式无效": "Règle n°{{line}} format de transmission d'en-tête invalide",
     "第 {{line}} 条请求头透传缺少请求头名称": "Règle n°{{line}} transmission d'en-tête manque le nom de l'en-tête",
     "第三方支付配置": "Configuration des paiements tiers",
@@ -3781,6 +3782,23 @@
     "默认折叠侧边栏": "Réduire la barre latérale par défaut",
     "默认测试模型": "Modèle de test par défaut",
     "默认用户消息": "Bonjour",
-    "默认补全倍率": "Taux de complétion par défaut"
+    "默认补全倍率": "Taux de complétion par défaut",
+    "上游请求前": "Avant la requête en amont",
+    "客户端响应前（非流式）": "Avant la réponse client (hors streaming)",
+    "最终错误响应前": "Avant la réponse d'erreur finale",
+    "自动（兼容旧版查找）": "Auto (recherche héritée)",
+    "响应 / 请求正文": "Corps de réponse / requête",
+    "语义响应": "Réponse sémantique",
+    "执行上下文": "Contexte d'exécution",
+    "应用阶段": "Phase d'application",
+    "条件来源": "Source de la condition",
+    "当前配置包含可视化编辑器暂不支持的字段，已保留原始 JSON。": "Cette configuration contient des champs non pris en charge par l'éditeur visuel. Le JSON brut d'origine a été conservé.",
+    "响应阶段仅支持返回自定义错误": "La phase de réponse prend uniquement en charge le retour d'une erreur personnalisée",
+    "最终错误阶段仅支持返回自定义错误": "La phase d'erreur finale prend uniquement en charge le retour d'une erreur personnalisée",
+    "无条件响应规则必须位于该阶段最后": "La règle de réponse sans condition doit être la dernière de cette phase",
+    "无条件最终错误规则必须位于该阶段最后": "La règle d'erreur finale sans condition doit être la dernière de cette phase",
+    "第 {{line}} 条操作的状态码无效": "La règle {{line}} contient un code d'état non valide",
+    "响应阶段始终停止内部重试": "La phase de réponse arrête toujours les nouvelles tentatives internes",
+    "语义条件仅可用于响应阶段": "Les conditions sémantiques sont uniquement disponibles pendant la phase de réponse"
   }
 }

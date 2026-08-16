@@ -67,6 +67,138 @@ func TestGeminiResponsesHandlerReturnsOpenAIResponsesJSON(t *testing.T) {
 	assert.NotContains(t, got, `"candidates"`)
 }
 
+// TestGeminiResponsesHandlerAppliesResponseOverrideToPromptBlock verifies a provider-level block is billed as success while the client response is replaced.
+func TestGeminiResponsesHandlerAppliesResponseOverrideToPromptBlock(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	info := newGeminiResponsesRelayInfo(false)
+	info.ChannelMeta.ParamOverride = map[string]interface{}{
+		"operations": []interface{}{
+			map[string]interface{}{
+				"phase": "response",
+				"mode":  "return_error",
+				"conditions": []interface{}{
+					map[string]interface{}{
+						"source": "semantic",
+						"path":   "response.rejection_state",
+						"mode":   "full",
+						"value":  "all",
+					},
+				},
+				"value": map[string]interface{}{
+					"status_code": http.StatusForbidden,
+					"code":        "response_rejected",
+					"type":        "upstream_response_error",
+					"message":     "模型拒绝执行该指令",
+				},
+			},
+		},
+	}
+	relaycommon.StartResponseOverrideBuffer(c, info)
+
+	blockReason := "SAFETY"
+	payload := dto.GeminiChatResponse{
+		PromptFeedback: &dto.GeminiChatPromptFeedback{BlockReason: &blockReason},
+		UsageMetadata: dto.GeminiUsageMetadata{
+			PromptTokenCount: 7,
+			TotalTokenCount:  7,
+		},
+	}
+	body, err := common.Marshal(payload)
+	require.NoError(t, err)
+
+	usage, newAPIError := GeminiResponsesHandler(c, info, &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(bytes.NewReader(body)),
+	})
+	require.Nil(t, newAPIError)
+	require.NotNil(t, usage)
+	assert.Equal(t, 7, usage.PromptTokens)
+	require.NotNil(t, info.ResponseOverride)
+	assert.True(t, info.ResponseOverride.Applied)
+	assert.Equal(t, relaycommon.ResponseRejectionAll, info.ResponseOverride.Semantics.Response.RejectionState)
+	assert.Equal(t, relaycommon.ResponseUsageUpstream, info.ResponseOverride.Semantics.Response.UsageState)
+	assert.Equal(t, http.StatusOK, info.ResponseOverride.UpstreamStatusCode)
+	assert.Equal(t, http.StatusForbidden, info.ResponseOverride.ClientStatusCode)
+	assert.True(t, info.ResponseOverride.Billable)
+	assert.False(t, info.ResponseOverride.Retryable)
+	assert.False(t, info.ResponseOverride.AffectsChannelHealth)
+
+	buffer := relaycommon.CurrentResponseOverrideBuffer(c)
+	require.NotNil(t, buffer)
+	statusCode, _, candidateBody := buffer.Snapshot()
+	assert.Equal(t, http.StatusBadRequest, statusCode)
+	assert.Contains(t, string(candidateBody), "request blocked by Gemini API")
+	assert.Empty(t, recorder.Body.String())
+	buffer.Discard(c)
+	assert.Nil(t, relaycommon.CurrentResponseOverrideBuffer(c))
+	assert.Empty(t, recorder.Body.String())
+}
+
+// TestGeminiResponsesHandlerPreservesUnmatchedPromptBlock verifies a configured
+// response rule that does not match leaves the legacy relay error intact.
+func TestGeminiResponsesHandlerPreservesUnmatchedPromptBlock(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	info := newGeminiResponsesRelayInfo(false)
+	info.ChannelMeta.ParamOverride = map[string]interface{}{
+		"operations": []interface{}{
+			map[string]interface{}{
+				"phase": "response",
+				"mode":  "return_error",
+				"conditions": []interface{}{
+					map[string]interface{}{
+						"source": "semantic",
+						"path":   "response.rejection_state",
+						"mode":   "full",
+						"value":  "partial",
+					},
+				},
+				"value": map[string]interface{}{"message": "not used"},
+			},
+		},
+	}
+	relaycommon.StartResponseOverrideBuffer(c, info)
+
+	blockReason := "SAFETY"
+	payload := dto.GeminiChatResponse{
+		PromptFeedback: &dto.GeminiChatPromptFeedback{BlockReason: &blockReason},
+		UsageMetadata: dto.GeminiUsageMetadata{
+			PromptTokenCount: 7,
+			TotalTokenCount:  7,
+		},
+	}
+	body, err := common.Marshal(payload)
+	require.NoError(t, err)
+
+	usage, newAPIError := GeminiResponsesHandler(c, info, &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(bytes.NewReader(body)),
+	})
+	require.NotNil(t, usage)
+	require.NotNil(t, newAPIError)
+	assert.Equal(t, http.StatusBadRequest, newAPIError.StatusCode)
+	require.NotNil(t, info.ResponseOverride)
+	assert.True(t, info.ResponseOverride.Evaluated)
+	assert.False(t, info.ResponseOverride.Applied)
+	assert.Equal(t, relaycommon.ResponseOverrideNotAppliedNoMatch, info.ResponseOverride.NotAppliedReason)
+	assert.Equal(t, relaycommon.ResponseRejectionAll, info.ResponseOverride.Semantics.Response.RejectionState)
+	assert.Equal(t, relaycommon.ResponseUsageUpstream, info.ResponseOverride.Semantics.Response.UsageState)
+
+	buffer := relaycommon.CurrentResponseOverrideBuffer(c)
+	require.NotNil(t, buffer)
+	buffer.MarkRelayError()
+	buffer.Discard(c)
+	assert.Nil(t, relaycommon.CurrentResponseOverrideBuffer(c))
+	assert.Empty(t, recorder.Body.String())
+}
+
 func TestGeminiResponsesHandlerClosesBodyOnReadError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()

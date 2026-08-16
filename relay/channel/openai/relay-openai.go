@@ -234,6 +234,7 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	if oaiError := simpleResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
+	info.MergeResponseSemantics(types.RelayFormatOpenAI, responseBody)
 
 	for _, choice := range simpleResponse.Choices {
 		if choice.FinishReason == constant.FinishReasonContentFilter {
@@ -262,6 +263,7 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 			TotalTokens:      info.GetEstimatePromptTokens() + completionTokens,
 		}
 		usageModified = true
+		common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
 	}
 
 	applyUsagePostProcessing(info, &simpleResponse.Usage, responseBody)
