@@ -33,6 +33,35 @@ func TestWriteRelayErrorResponse_OpenAICommittedStreamUsesSSE(t *testing.T) {
 	assert.Contains(t, recorder.Body.String(), `"message":"upstream timeout"`)
 }
 
+func TestWriteRelayErrorResponse_CommittedStreamWritesErrorOnceWithoutSuccessTerminal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	helper.SetEventStreamHeaders(ctx)
+	require.NoError(t, helper.FlushWriter(ctx))
+	info := &relaycommon.RelayInfo{
+		IsStream:     true,
+		StreamStatus: relaycommon.NewStreamStatus(),
+	}
+	relayErr := types.WithOpenAIError(types.OpenAIError{
+		Type:    "upstream_timeout",
+		Code:    "deadline_exceeded",
+		Message: "upstream generation expired",
+	}, http.StatusBadGateway)
+
+	writeRelayErrorResponse(ctx, types.RelayFormatOpenAI, nil, info, relayErr)
+	writeRelayErrorResponse(ctx, types.RelayFormatOpenAI, nil, info, relayErr)
+
+	body := recorder.Body.String()
+	assert.Equal(t, 1, strings.Count(body, `"deadline_exceeded"`))
+	assert.NotContains(t, body, "[DONE]")
+	assert.True(t, info.StreamStatus.ErrorFrameIsWritten())
+	event, status := info.StreamStatus.Terminal()
+	assert.Equal(t, "error", event)
+	assert.Equal(t, "failed", status)
+}
+
 func TestWriteRelayErrorResponse_ClaudeCommittedStreamUsesSSEEvent(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()

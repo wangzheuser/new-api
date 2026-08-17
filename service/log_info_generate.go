@@ -231,11 +231,28 @@ func AppendStreamStatus(relayInfo *relaycommon.RelayInfo, other map[string]inter
 		status = "error"
 	}
 	streamInfo := map[string]interface{}{
-		"status":               status,
-		"phase":                "streaming",
-		"end_reason":           string(reason),
-		"received_event_count": relayInfo.ReceivedResponseCount,
-		"terminal_seen":        terminalEvent != "",
+		"status":                     status,
+		"phase":                      "streaming",
+		"end_reason":                 string(reason),
+		"received_event_count":       relayInfo.ReceivedResponseCount,
+		"terminal_seen":              terminalEvent != "",
+		"app_http_committed":         ss.AppHTTPIsCommitted(),
+		"client_payload_committed":   ss.ClientPayloadIsCommitted(),
+		"error_frame_written":        ss.ErrorFrameIsWritten(),
+		"stream_policy_version":      ss.StreamPolicyVersion(),
+		"billing_finalization":       ss.GetBillingFinalization(),
+		"first_meaningful_byte_ms":   ss.FirstMeaningfulByteDuration(relayInfo.StartTime).Milliseconds(),
+		"request_upload_duration_ms": relayInfo.RequestUploadDuration.Milliseconds(),
+		"request_body_bytes":         relayInfo.IncomingRequestBodyBytes,
+		"origin_handler_started":     !relayInfo.OriginHandlerStartedAt.IsZero(),
+	}
+	toolNameBytes, toolArgumentBytes := ss.ToolPayloadBytes()
+	streamInfo["partial_tool_name_bytes"] = toolNameBytes
+	streamInfo["partial_tool_argument_bytes"] = toolArgumentBytes
+	if partialUsage, ok, estimated := ss.PartialUsageSnapshot(); ok {
+		streamInfo["partial_usage_estimated"] = estimated
+		streamInfo["partial_prompt_tokens"] = partialUsage.PromptTokens
+		streamInfo["partial_completion_tokens"] = partialUsage.CompletionTokens
 	}
 	if endErr != nil {
 		streamInfo["end_error"] = endErr.Error()

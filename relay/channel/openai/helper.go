@@ -52,7 +52,9 @@ func handleClaudeFormat(c *gin.Context, data string, info *relaycommon.RelayInfo
 		return fmt.Errorf("expected Claude stream responses, got %T", result.Value)
 	}
 	for _, resp := range claudeResponses {
-		helper.ClaudeData(c, *resp)
+		if err := helper.ClaudeData(c, *resp); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -107,16 +109,12 @@ func ProcessStreamResponse(streamResponse dto.ChatCompletionsStreamResponse, res
 	return nil
 }
 
-// processTokenData accumulates usage text and returns any semantic terminal
-// carried by an OpenAI-compatible stream chunk.
-func processTokenData(relayMode int, data string, responseTextBuilder *strings.Builder, toolCount *int) (string, string, error) {
+// inspectStreamData validates one upstream chunk and returns any semantic terminal it carries.
+func inspectStreamData(relayMode int, data string) (string, string, error) {
 	switch relayMode {
 	case relayconstant.RelayModeChatCompletions:
 		var streamResponse dto.ChatCompletionsStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
-			return "", "", err
-		}
-		if err := ProcessStreamResponse(streamResponse, responseTextBuilder, toolCount); err != nil {
 			return "", "", err
 		}
 		for _, choice := range streamResponse.Choices {
@@ -134,7 +132,6 @@ func processTokenData(relayMode int, data string, responseTextBuilder *strings.B
 		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
 			return "", "", err
 		}
-		processCompletionsStreamResponse(streamResponse, responseTextBuilder)
 		for _, choice := range streamResponse.Choices {
 			if strings.TrimSpace(choice.FinishReason) == "" {
 				continue
@@ -143,6 +140,25 @@ func processTokenData(relayMode int, data string, responseTextBuilder *strings.B
 		}
 	}
 	return "", "", nil
+}
+
+// accumulateFlushedStreamOutput adds only a chunk that was successfully flushed downstream.
+func accumulateFlushedStreamOutput(relayMode int, data string, responseTextBuilder *strings.Builder, toolCount *int) error {
+	switch relayMode {
+	case relayconstant.RelayModeChatCompletions:
+		var streamResponse dto.ChatCompletionsStreamResponse
+		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
+			return err
+		}
+		return ProcessStreamResponse(streamResponse, responseTextBuilder, toolCount)
+	case relayconstant.RelayModeCompletions:
+		var streamResponse dto.CompletionsStreamResponse
+		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
+			return err
+		}
+		processCompletionsStreamResponse(streamResponse, responseTextBuilder)
+	}
+	return nil
 }
 
 func processCompletionsStreamResponse(streamResponse dto.CompletionsStreamResponse, responseTextBuilder *strings.Builder) {

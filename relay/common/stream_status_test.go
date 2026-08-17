@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestStreamStatus_SetEndReason_FirstWins(t *testing.T) {
@@ -18,6 +21,74 @@ func TestStreamStatus_SetEndReason_FirstWins(t *testing.T) {
 
 	assert.Equal(t, StreamEndReasonDone, s.EndReason)
 	assert.Nil(t, s.EndError)
+}
+
+func TestStreamStatus_PartialUsageFillsMissingFieldsThenPrefersUpstream(t *testing.T) {
+	t.Parallel()
+	status := NewStreamStatus()
+
+	status.ObservePartialUsage(&dto.Usage{PromptTokens: 12, TotalTokens: 12}, true, false)
+	status.ObservePartialUsage(&dto.Usage{PromptTokens: 12, CompletionTokens: 5, TotalTokens: 17}, false, true)
+
+	usage, ok, estimated := status.PartialUsageSnapshot()
+	require.True(t, ok)
+	assert.True(t, estimated)
+	assert.Equal(t, 12, usage.PromptTokens)
+	assert.Equal(t, 5, usage.CompletionTokens)
+	assert.Equal(t, 17, usage.TotalTokens)
+
+	status.ObservePartialUsage(&dto.Usage{PromptTokens: 12, CompletionTokens: 4, TotalTokens: 16}, true, false)
+	usage, ok, estimated = status.PartialUsageSnapshot()
+	require.True(t, ok)
+	assert.False(t, estimated)
+	assert.Equal(t, 4, usage.CompletionTokens, "authoritative upstream usage replaces the local estimate")
+	assert.Equal(t, 16, usage.TotalTokens)
+}
+
+func TestStreamStatus_FirstMeaningfulByteRecordedOnce(t *testing.T) {
+	t.Parallel()
+	status := NewStreamStatus()
+	start := time.Now().Add(-time.Second)
+
+	status.MarkClientPayloadCommitted()
+	first := status.FirstMeaningfulByteDuration(start)
+	status.MarkClientPayloadCommitted()
+
+	assert.Greater(t, first, time.Duration(0))
+	assert.Equal(t, first, status.FirstMeaningfulByteDuration(start))
+}
+
+func TestStreamStatus_ToolPayloadBytesAccumulateAndRemainConcurrentSafe(t *testing.T) {
+	t.Parallel()
+	status := NewStreamStatus()
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			status.ObserveToolPayloadBytes(2, 3)
+		}()
+	}
+	wg.Wait()
+
+	nameBytes, argumentBytes := status.ToolPayloadBytes()
+	assert.Equal(t, int64(40), nameBytes)
+	assert.Equal(t, int64(60), argumentBytes)
+}
+
+func TestStreamStatus_CommitErrorAndBillingFinalizationAreIdempotent(t *testing.T) {
+	t.Parallel()
+	status := NewStreamStatus()
+
+	status.MarkAppHTTPCommitted()
+	status.MarkClientPayloadCommitted()
+	assert.True(t, status.AppHTTPIsCommitted())
+	assert.True(t, status.ClientPayloadIsCommitted())
+	assert.True(t, status.TryMarkErrorFrameWritten())
+	assert.False(t, status.TryMarkErrorFrameWritten())
+	assert.True(t, status.SetBillingFinalization(BillingSettledPartial))
+	assert.False(t, status.SetBillingFinalization(BillingRefunded))
+	assert.Equal(t, BillingSettledPartial, status.GetBillingFinalization())
 }
 
 func TestStreamStatus_SetEndReason_WithError(t *testing.T) {

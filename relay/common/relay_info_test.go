@@ -46,6 +46,48 @@ func TestRelayInfoGetFinalRequestRelayFormatNilReceiver(t *testing.T) {
 	require.Equal(t, types.RelayFormat(""), info.GetFinalRequestRelayFormat())
 }
 
+func TestRelayInfoAcceptStreamPolicyVersionOnlyForNativeChatAndClaude(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		info     *RelayInfo
+		expected string
+	}{
+		{
+			name:     "native chat",
+			info:     &RelayInfo{IsStream: true, RelayFormat: types.RelayFormatOpenAI},
+			expected: "progressive-v1",
+		},
+		{
+			name:     "native claude",
+			info:     &RelayInfo{IsStream: true, RelayFormat: types.RelayFormatClaude},
+			expected: "progressive-v1",
+		},
+		{
+			name: "responses excluded",
+			info: &RelayInfo{IsStream: true, RelayFormat: types.RelayFormatOpenAIResponses},
+		},
+		{
+			name: "conversion excluded",
+			info: &RelayInfo{
+				IsStream:                true,
+				RelayFormat:             types.RelayFormatClaude,
+				FinalRequestRelayFormat: types.RelayFormatOpenAI,
+			},
+		},
+		{
+			name: "non stream excluded",
+			info: &RelayInfo{RelayFormat: types.RelayFormatOpenAI},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, tt.info.AcceptStreamPolicyVersion("progressive-v1"))
+		})
+	}
+}
+
 func TestRelayInfoResponsesCompactionKeepsClientAndRoutingModelsSeparate(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())

@@ -356,6 +356,15 @@ func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 }
 
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {
+	if relayInfo != nil && relayInfo.IsStream && relayInfo.StreamStatus != nil {
+		if relayInfo.StreamStatus.GetBillingFinalization() == "" {
+			relayInfo.StreamStatus.SetBillingFinalization(relaycommon.BillingSettled)
+		}
+		if relayInfo.StreamStatus.GetBillingFinalization() == relaycommon.BillingRefunded ||
+			!relayInfo.StreamStatus.TryBeginBillingApplication() {
+			return
+		}
+	}
 	EvaluateResponseOverrideBeforeSettlement(ctx, relayInfo, usage, http.StatusOK)
 	originUsage := usage
 	billingUsage := effectiveBillingUsage(usage)
@@ -524,4 +533,75 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	gopool.Go(func() {
 		perfmetrics.RecordRelaySample(relayInfo, true, int64(summary.CompletionTokens))
 	})
+}
+
+func textBillingFinalization(
+	relayInfo *relaycommon.RelayInfo,
+	relayErr *types.NewAPIError,
+) relaycommon.BillingFinalization {
+	if relayErr == nil {
+		return relaycommon.BillingSettled
+	}
+	if relayInfo != nil && relayInfo.StreamStatus != nil &&
+		relayInfo.StreamStatus.StreamPolicyVersion() == "progressive-v1" &&
+		relayInfo.StreamStatus.ClientPayloadIsCommitted() {
+		return relaycommon.BillingSettledPartial
+	}
+	return relaycommon.BillingRefunded
+}
+
+// FinalizeTextBilling selects one idempotent settle, partial settle, or refund outcome.
+func FinalizeTextBilling(
+	ctx *gin.Context,
+	relayInfo *relaycommon.RelayInfo,
+	finalUsage *dto.Usage,
+	relayErr *types.NewAPIError,
+) (relaycommon.BillingFinalization, error) {
+	if relayInfo == nil {
+		return "", nil
+	}
+	status := relayInfo.StreamStatus
+	finalization := textBillingFinalization(relayInfo, relayErr)
+	if status != nil && !status.SetBillingFinalization(finalization) {
+		return status.GetBillingFinalization(), nil
+	}
+	partialUsageEstimated := false
+	if status != nil {
+		_, _, partialUsageEstimated = status.PartialUsageSnapshot()
+	}
+	defer logger.LogInfo(ctx, fmt.Sprintf(
+		"text billing finalized: result=%s partial_usage_estimated=%t",
+		finalization,
+		partialUsageEstimated,
+	))
+	if finalization == relaycommon.BillingSettled {
+		PostTextConsumeQuota(ctx, relayInfo, finalUsage, nil)
+		return relaycommon.BillingSettled, nil
+	}
+
+	if finalization == relaycommon.BillingSettledPartial {
+		usage := finalUsage
+		if partial, ok, _ := status.PartialUsageSnapshot(); ok {
+			usage = &partial
+		}
+		if usage == nil {
+			usage = &dto.Usage{
+				PromptTokens: relayInfo.GetEstimatePromptTokens(),
+				TotalTokens:  relayInfo.GetEstimatePromptTokens(),
+			}
+			status.ObservePartialUsage(usage, false, true)
+		}
+		PostTextConsumeQuota(ctx, relayInfo, usage, []string{"部分流失败结算"})
+		return status.GetBillingFinalization(), nil
+	}
+
+	if status != nil {
+		if !status.TryBeginBillingApplication() {
+			return status.GetBillingFinalization(), nil
+		}
+	}
+	if relayInfo.Billing != nil {
+		relayInfo.Billing.Refund(ctx)
+	}
+	return relaycommon.BillingRefunded, nil
 }

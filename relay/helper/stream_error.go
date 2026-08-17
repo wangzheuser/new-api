@@ -25,7 +25,13 @@ func StreamStatusError(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAP
 		statusCode = http.StatusGatewayTimeout
 	}
 	options := make([]types.NewAPIErrorOptions, 0, 1)
-	if c != nil && c.Writer != nil && c.Writer.Written() {
+	progressive := info.StreamStatus.StreamPolicyVersion() == "progressive-v1"
+	clientCommitted := info.StreamStatus.ClientPayloadIsCommitted() ||
+		info.StreamStatus.ErrorFrameIsWritten()
+	if !progressive && c != nil && c.Writer != nil {
+		clientCommitted = c.Writer.Written()
+	}
+	if clientCommitted {
 		options = append(options, types.ErrOptionWithSkipRetry())
 	}
 	return types.NewOpenAIError(endErr, types.ErrorCodeBadResponse, statusCode, options...)

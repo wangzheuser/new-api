@@ -15,11 +15,57 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDoApiRequest_StreamPingsWhileWaitingForUpstreamHeaders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service.InitHttpClient()
+	settings := operation_setting.GetGeneralSetting()
+	oldEnabled := settings.PingIntervalEnabled
+	oldSeconds := settings.PingIntervalSeconds
+	settings.PingIntervalEnabled = true
+	settings.PingIntervalSeconds = 1
+	t.Cleanup(func() {
+		settings.PingIntervalEnabled = oldEnabled
+		settings.PingIntervalSeconds = oldSeconds
+	})
+
+	releaseUpstream := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		<-releaseUpstream
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer upstream.Close()
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test","stream":true}`))
+	info := openAIRelayInfo(upstream.URL, true)
+	resultCh := make(chan error, 1)
+	go func() {
+		resp, err := channel.DoApiRequest(&openai.Adaptor{}, c, info, strings.NewReader(`{"model":"test","stream":true}`))
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		resultCh <- err
+	}()
+	time.Sleep(1500 * time.Millisecond)
+	assert.Contains(t, recorder.Body.String(), ": PING\n\n")
+	close(releaseUpstream)
+	select {
+	case err := <-resultCh:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("relay did not finish after upstream response headers arrived")
+	}
+	info.StopStreamPinger()
+}
 
 func TestDoApiRequest_StreamCommitsHeadersBeforeUpstreamResponse(t *testing.T) {
 	gin.SetMode(gin.TestMode)

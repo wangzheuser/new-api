@@ -55,6 +55,61 @@ func buildSSEBody(n int) string {
 	return b.String()
 }
 
+func TestBoundedStreamDataQueueRejectsOversizedEvent(t *testing.T) {
+	t.Parallel()
+	queue := newBoundedStreamDataQueue(1, 3)
+
+	assert.False(t, queue.put(context.Background(), make(chan bool), "four"))
+	assert.Equal(t, 0, queue.queuedBytes)
+}
+
+func TestBoundedStreamDataQueueByteWaitIsCancelled(t *testing.T) {
+	t.Parallel()
+	queue := newBoundedStreamDataQueue(2, 3)
+	stop := make(chan bool)
+	require.True(t, queue.put(context.Background(), stop, "one"))
+
+	result := make(chan bool, 1)
+	go func() {
+		result <- queue.put(context.Background(), stop, "x")
+	}()
+	time.Sleep(20 * time.Millisecond)
+	queue.cancel()
+
+	select {
+	case inserted := <-result:
+		assert.False(t, inserted)
+	case <-time.After(time.Second):
+		t.Fatal("byte-budget wait did not stop after queue cancellation")
+	}
+	assert.Equal(t, 3, queue.queuedBytes)
+	queue.release(len(<-queue.items))
+	assert.Equal(t, 0, queue.queuedBytes)
+}
+
+func TestBoundedStreamDataQueueEventWaitIsCancelled(t *testing.T) {
+	t.Parallel()
+	queue := newBoundedStreamDataQueue(1, 0)
+	stop := make(chan bool)
+	require.True(t, queue.put(context.Background(), stop, "first"))
+
+	result := make(chan bool, 1)
+	go func() {
+		result <- queue.put(context.Background(), stop, "second")
+	}()
+	time.Sleep(20 * time.Millisecond)
+	close(stop)
+
+	select {
+	case inserted := <-result:
+		assert.False(t, inserted)
+	case <-time.After(time.Second):
+		t.Fatal("event-count wait did not stop after cancellation")
+	}
+	queue.release(len(<-queue.items))
+	assert.Equal(t, 0, queue.queuedBytes)
+}
+
 // ---------- Basic correctness ----------
 
 func TestStreamScannerHandler_NilInputs(t *testing.T) {
@@ -605,7 +660,7 @@ func TestStreamScannerHandler_StreamStatus_InitializedIfNil(t *testing.T) {
 	assert.NotNil(t, info.StreamStatus)
 }
 
-func TestStreamScannerHandler_StreamStatus_ReplacesPreInitialized(t *testing.T) {
+func TestStreamScannerHandler_StreamStatus_ReusesRequestLifecycleState(t *testing.T) {
 	t.Parallel()
 
 	body := buildSSEBody(5)
@@ -617,5 +672,5 @@ func TestStreamScannerHandler_StreamStatus_ReplacesPreInitialized(t *testing.T) 
 	StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {})
 
 	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.EndReason)
-	assert.Equal(t, 0, info.StreamStatus.TotalErrorCount())
+	assert.Equal(t, 1, info.StreamStatus.TotalErrorCount())
 }

@@ -26,8 +26,8 @@ type GeneralSetting struct {
 // 默认配置
 var generalSetting = GeneralSetting{
 	DocsLink:                   "https://docs.newapi.pro",
-	PingIntervalEnabled:        false,
-	PingIntervalSeconds:        60,
+	PingIntervalEnabled:        true,
+	PingIntervalSeconds:        20,
 	DefaultFinalErrorOverride:  map[string]interface{}{},
 	QuotaDisplayType:           QuotaDisplayTypeUSD,
 	CustomCurrencySymbol:       "¤",

@@ -15,7 +15,6 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
 
@@ -36,6 +35,67 @@ const (
 // StreamScannerOptions controls how a stream without an explicit terminal marker is classified.
 type StreamScannerOptions struct {
 	RequireExplicitTerminal bool
+	RequiredTerminalEvent   string
+}
+
+type boundedStreamDataQueue struct {
+	items       chan string
+	maxBytes    int
+	queuedBytes int
+	closed      bool
+	mu          sync.Mutex
+	cond        *sync.Cond
+}
+
+func newBoundedStreamDataQueue(maxEvents int, maxBytes int) *boundedStreamDataQueue {
+	queue := &boundedStreamDataQueue{
+		items:    make(chan string, maxEvents),
+		maxBytes: maxBytes,
+	}
+	queue.cond = sync.NewCond(&queue.mu)
+	return queue
+}
+
+func (q *boundedStreamDataQueue) put(ctx context.Context, stop <-chan bool, data string) bool {
+	size := len(data)
+	if q.maxBytes > 0 && size > q.maxBytes {
+		return false
+	}
+	q.mu.Lock()
+	for !q.closed && q.maxBytes > 0 && q.queuedBytes+size > q.maxBytes {
+		q.cond.Wait()
+	}
+	if q.closed {
+		q.mu.Unlock()
+		return false
+	}
+	q.queuedBytes += size
+	q.mu.Unlock()
+	select {
+	case q.items <- data:
+		return true
+	case <-ctx.Done():
+	case <-stop:
+	}
+	q.release(size)
+	return false
+}
+
+func (q *boundedStreamDataQueue) release(size int) {
+	q.mu.Lock()
+	q.queuedBytes -= size
+	if q.queuedBytes < 0 {
+		q.queuedBytes = 0
+	}
+	q.cond.Broadcast()
+	q.mu.Unlock()
+}
+
+func (q *boundedStreamDataQueue) cancel() {
+	q.mu.Lock()
+	q.closed = true
+	q.cond.Broadcast()
+	q.mu.Unlock()
 }
 
 func getScannerBufferSize() int {
@@ -46,8 +106,12 @@ func getScannerBufferSize() int {
 }
 
 func NewStreamScanner(reader io.Reader) *bufio.Scanner {
+	return newStreamScannerWithLimit(reader, getScannerBufferSize())
+}
+
+func newStreamScannerWithLimit(reader io.Reader, maxBytes int) *bufio.Scanner {
 	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, InitialScannerBufferSize), getScannerBufferSize())
+	scanner.Buffer(make([]byte, InitialScannerBufferSize), maxBytes)
 	return scanner
 }
 
@@ -91,8 +155,12 @@ func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *
 		return
 	}
 
-	// 无条件新建 StreamStatus
-	info.StreamStatus = relaycommon.NewStreamStatus()
+	if info.StreamStatus == nil {
+		info.StreamStatus = relaycommon.NewStreamStatus()
+	}
+	info.StreamStatus.SetStreamPolicyVersion(
+		info.AcceptStreamPolicyVersion(resp.Header.Get("X-Stream-Policy")),
+	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -100,41 +168,42 @@ func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *
 
 	var (
 		stopChan    = make(chan bool, 3) // 增加缓冲区避免阻塞
-		scanner     = NewStreamScanner(resp.Body)
 		ticker      = time.NewTicker(streamingTimeout)
-		pingTicker  *time.Ticker
-		writeMutex  sync.Mutex     // Mutex to protect concurrent writes
-		wg          sync.WaitGroup // 用于等待所有 goroutine 退出
+		writeMutex  = info.StreamWriterMutex() // 与请求级 pinger 共用写锁
+		wg          sync.WaitGroup             // 用于等待所有 goroutine 退出
 		cleanupOnce sync.Once
 		stopOnce    sync.Once
 		scanErr     error
 	)
+	progressiveTarget := info.StreamStatus.StreamPolicyVersion() == "progressive-v1"
+	queueMaxEvents := 10
+	queueMaxBytes := 0
+	maxEventBytes := getScannerBufferSize()
+	if progressiveTarget {
+		options.RequireExplicitTerminal = true
+		queueMaxEvents = 16
+		queueMaxBytes = 1 << 20
+		maxEventBytes = 1 << 20
+	}
+	scanner := newStreamScannerWithLimit(resp.Body, maxEventBytes)
+	dataQueue := newBoundedStreamDataQueue(queueMaxEvents, queueMaxBytes)
 
 	stop := func() {
 		stopOnce.Do(func() {
+			dataQueue.cancel()
 			close(stopChan)
 		})
-	}
-
-	generalSettings := operation_setting.GetGeneralSetting()
-	pingEnabled := generalSettings.PingIntervalEnabled && !info.DisablePing
-	pingInterval := time.Duration(generalSettings.PingIntervalSeconds) * time.Second
-	if pingInterval <= 0 {
-		pingInterval = DefaultPingInterval
-	}
-
-	if pingEnabled {
-		pingTicker = time.NewTicker(pingInterval)
 	}
 
 	logger.LogDebug(c, "relay timeout seconds: %d", common.RelayTimeout)
 	logger.LogDebug(c, "relay max idle conns: %d", common.RelayMaxIdleConns)
 	logger.LogDebug(c, "relay max idle conns per host: %d", common.RelayMaxIdleConnsPerHost)
 	logger.LogDebug(c, "streaming timeout seconds: %d", int64(streamingTimeout.Seconds()))
-	logger.LogDebug(c, "ping interval seconds: %d", int64(pingInterval.Seconds()))
+	EnsureConfiguredStreamPinger(c, info)
 
 	cleanup := func() {
 		cleanupOnce.Do(func() {
+			info.StopStreamPinger()
 			cancel()
 			stop()
 			if resp.Body != nil {
@@ -142,10 +211,6 @@ func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *
 			}
 
 			ticker.Stop()
-			if pingTicker != nil {
-				pingTicker.Stop()
-			}
-
 			wg.Wait()
 		})
 	}
@@ -158,58 +223,6 @@ func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *
 
 	ctx = context.WithValue(ctx, "stop_chan", stopChan)
 
-	// Handle ping data sending with improved error handling
-	if pingEnabled && pingTicker != nil {
-		wg.Add(1)
-		gopool.Go(func() {
-			defer func() {
-				if r := recover(); r != nil {
-					logger.LogError(c, fmt.Sprintf("ping goroutine panic: %v", r))
-					info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonPanic, fmt.Errorf("ping panic: %v", r))
-					stop()
-				}
-				logger.LogDebug(c, "ping goroutine exited")
-				wg.Done()
-			}()
-
-			// 添加超时保护，防止 goroutine 无限运行
-			maxPingDuration := 30 * time.Minute // 最大 ping 持续时间
-			pingTimeout := time.NewTimer(maxPingDuration)
-			defer pingTimeout.Stop()
-
-			for {
-				select {
-				case <-pingTicker.C:
-					var err error
-					func() {
-						writeMutex.Lock()
-						defer writeMutex.Unlock()
-						ExtendWriteDeadline(c)
-						err = PingData(c)
-					}()
-					if err != nil {
-						logger.LogError(c, "ping data error: "+err.Error())
-						info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonPingFail, err)
-						return
-					}
-					logger.LogDebug(c, "ping data sent")
-				case <-ctx.Done():
-					return
-				case <-stopChan:
-					return
-				case <-c.Request.Context().Done():
-					// 监听客户端断开连接
-					return
-				case <-pingTimeout.C:
-					logger.LogError(c, "ping goroutine max duration reached")
-					return
-				}
-			}
-		})
-	}
-
-	dataChan := make(chan string, 10)
-
 	wg.Add(1)
 	gopool.Go(func() {
 		defer func() {
@@ -221,7 +234,8 @@ func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *
 			wg.Done()
 		}()
 		sr := newStreamResult(info.StreamStatus)
-		for data := range dataChan {
+		for data := range dataQueue.items {
+			dataQueue.release(len(data))
 			sr.reset()
 			func() {
 				writeMutex.Lock()
@@ -239,7 +253,7 @@ func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *
 	wg.Add(1)
 	common.RelayCtxGo(ctx, func() {
 		defer func() {
-			close(dataChan)
+			close(dataQueue.items)
 			if r := recover(); r != nil {
 				logger.LogError(c, fmt.Sprintf("scanner goroutine panic: %v", r))
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonPanic, fmt.Errorf("scanner panic: %v", r))
@@ -278,11 +292,7 @@ func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *
 				info.SetFirstResponseTime()
 				info.ReceivedResponseCount++
 
-				select {
-				case dataChan <- data:
-				case <-ctx.Done():
-					return
-				case <-stopChan:
+				if !dataQueue.put(ctx, stopChan, data) {
 					return
 				}
 			} else {
@@ -322,10 +332,14 @@ func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *
 			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, scanErr)
 		case options.RequireExplicitTerminal:
 			terminalEvent, _ := info.StreamStatus.Terminal()
-			if terminalEvent != "" {
+			expectedTerminal := strings.TrimSpace(options.RequiredTerminalEvent)
+			if terminalEvent != "" && (expectedTerminal == "" || terminalEvent == expectedTerminal) {
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
 			} else {
 				err := fmt.Errorf("stream ended before terminal event")
+				if expectedTerminal != "" {
+					err = fmt.Errorf("stream ended before terminal event %s", expectedTerminal)
+				}
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonUnexpectedEOF, err)
 			}
 		default:

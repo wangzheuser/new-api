@@ -223,6 +223,22 @@ func TestFormatClaudeResponseInfo_ContentBlockDelta(t *testing.T) {
 	}
 }
 
+func TestFormatClaudeResponseInfo_IncludesToolNameAndArgumentsInUsageText(t *testing.T) {
+	arguments := `{"city":"深圳"}`
+	claudeInfo := &ClaudeResponseInfo{Usage: &dto.Usage{}}
+
+	require.True(t, FormatClaudeResponseInfo(&dto.ClaudeResponse{
+		Type:         "content_block_start",
+		ContentBlock: &dto.ClaudeMediaMessage{Type: "tool_use", Name: "get_weather"},
+	}, nil, claudeInfo))
+	require.True(t, FormatClaudeResponseInfo(&dto.ClaudeResponse{
+		Type:  "content_block_delta",
+		Delta: &dto.ClaudeMediaMessage{Type: "input_json_delta", PartialJson: &arguments},
+	}, nil, claudeInfo))
+
+	assert.Equal(t, `get_weather{"city":"深圳"}`, claudeInfo.ResponseText.String())
+}
+
 func TestBuildOpenAIStyleUsageFromClaudeUsage(t *testing.T) {
 	usage := &dto.Usage{
 		PromptTokens:     100,

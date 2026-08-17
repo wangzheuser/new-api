@@ -105,6 +105,7 @@ func TestAppendStreamStatusIncludesProtocolTerminalAndTransportEnd(t *testing.T)
 	streamStatus.SetTerminal("response.failed", "failed")
 	streamStatus.SetEndReason(relaycommon.StreamEndReasonHandlerStop, errors.New("mid stream aborted"))
 	streamStatus.RecordError("malformed event")
+	streamStatus.ObserveToolPayloadBytes(8, 21)
 	info := &relaycommon.RelayInfo{
 		IsStream:              true,
 		ReceivedResponseCount: 7,
@@ -126,6 +127,8 @@ func TestAppendStreamStatusIncludesProtocolTerminalAndTransportEnd(t *testing.T)
 	assert.Equal(t, "failed", streamInfo["terminal_status"])
 	assert.Equal(t, 1, streamInfo["error_count"])
 	assert.Equal(t, []string{"malformed event"}, streamInfo["errors"])
+	assert.Equal(t, int64(8), streamInfo["partial_tool_name_bytes"])
+	assert.Equal(t, int64(21), streamInfo["partial_tool_argument_bytes"])
 }
 
 func TestAppendStreamStatusMarksUnexpectedEOFWithoutTerminal(t *testing.T) {

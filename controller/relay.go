@@ -66,18 +66,20 @@ func geminiRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewA
 }
 
 func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+	handlerStartedAt := time.Now()
 
 	requestId := c.GetString(common.RequestIdKey)
 	//group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
 	//originalModel := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 
 	var (
-		newAPIError         *types.NewAPIError
-		clientResponseError *types.NewAPIError
-		rawFinalError       *types.NewAPIError
-		ws                  *websocket.Conn
-		relayInfo           *relaycommon.RelayInfo
-		relayStarted        bool
+		newAPIError           *types.NewAPIError
+		clientResponseError   *types.NewAPIError
+		rawFinalError         *types.NewAPIError
+		ws                    *websocket.Conn
+		relayInfo             *relaycommon.RelayInfo
+		relayStarted          bool
+		billingFinalizerArmed bool
 	)
 
 	if relayFormat == types.RelayFormatOpenAIRealtime {
@@ -91,6 +93,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	defer func() {
+		if relayInfo != nil {
+			relayInfo.StopStreamPinger()
+		}
+		if newAPIError != nil && billingFinalizerArmed {
+			newAPIError = service.NormalizeViolationFeeError(newAPIError)
+		}
 		if newAPIError != nil {
 			if c.Request.Context().Err() != nil {
 				logger.LogInfo(c, "relay canceled by client")
@@ -106,6 +114,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			clientResponseError.SetMessage(common.MessageWithRequestId(clientResponseError.Error(), requestId))
 			writeRelayErrorResponse(c, relayFormat, ws, relayInfo, clientResponseError)
 		}
+		if newAPIError != nil && billingFinalizerArmed {
+			// 错误帧写入后再结算，使同一条消费日志记录最终客户端终止状态。
+			if _, finalizeErr := service.FinalizeTextBilling(c, relayInfo, nil, newAPIError); finalizeErr != nil {
+				logger.LogError(c, "error finalizing failed stream billing: "+finalizeErr.Error())
+			}
+			service.ChargeViolationFeeIfNeeded(c, relayInfo, newAPIError)
+		}
 		conversationError := newAPIError
 		if conversationError == nil {
 			conversationError = clientResponseError
@@ -114,6 +129,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}()
 
 	request, err := helper.GetAndValidateRequest(c, relayFormat)
+	requestReadFinishedAt := time.Now()
 	if err != nil {
 		// Map "request body too large" to 413 so clients can handle it correctly
 		if common.IsRequestBodyTooLargeError(err) || errors.Is(err, common.ErrRequestBodyTooLarge) {
@@ -128,6 +144,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	if err != nil {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
+	}
+	relayInfo.OriginHandlerStartedAt = handlerStartedAt
+	relayInfo.RequestUploadDuration = requestReadFinishedAt.Sub(handlerStartedAt)
+	if c.Request.ContentLength > 0 {
+		relayInfo.IncomingRequestBodyBytes = c.Request.ContentLength
 	}
 
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
@@ -182,16 +203,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 	}
 
-	defer func() {
-		// Only return quota if downstream failed and quota was actually pre-consumed
-		if newAPIError != nil {
-			newAPIError = service.NormalizeViolationFeeError(newAPIError)
-			if relayInfo.Billing != nil {
-				relayInfo.Billing.Refund(c)
-			}
-			service.ChargeViolationFeeIfNeeded(c, relayInfo, newAPIError)
-		}
-	}()
+	// 失败结算由最外层 defer 在协议错误帧写入后统一执行。
+	billingFinalizerArmed = true
 
 	retryGroup := relayRetryGroup(relayInfo)
 	if relayInfo.IsContextFallbackActive() {
@@ -285,9 +298,16 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		} else {
 			processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 		}
-		// 流一旦向客户端提交任何字节，切换渠道会拼接两个不相关的响应。
-		if relayInfo.IsStream && c.Writer.Written() {
-			willRetry = false
+		if relayInfo.IsStream {
+			clientCommitted := c.Writer.Written()
+			if relayInfo.StreamStatus != nil &&
+				relayInfo.StreamStatus.StreamPolicyVersion() == "progressive-v1" {
+				// 渐进策略仅在业务 payload 提交后停止透明重试；HTTP 头和 APP Ping 不消耗重试资格。
+				clientCommitted = relayInfo.StreamStatus.ClientPayloadIsCommitted()
+			}
+			if clientCommitted {
+				willRetry = false
+			}
 		}
 		if willRetry {
 			recordRelayErrorLog(c, relayInfo, newAPIError, "", nil, true)
@@ -348,6 +368,13 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, ws *
 		// 客户端已断开时无需继续写错误帧，也避免产生无意义的写失败日志。
 		if c.Request.Context().Err() != nil {
 			return
+		}
+		if relayInfo.StreamStatus != nil && !relayInfo.StreamStatus.TryMarkErrorFrameWritten() {
+			return
+		}
+		if relayInfo.StreamStatus != nil {
+			relayInfo.StreamStatus.SetTerminal("error", "failed")
+			relayInfo.StreamStatus.SetEndReason(relaycommon.StreamEndReasonHandlerStop, newAPIError)
 		}
 		if relayFormat == types.RelayFormatClaude {
 			_ = helper.ClaudeData(c, dto.ClaudeResponse{

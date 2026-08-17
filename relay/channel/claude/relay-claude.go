@@ -100,8 +100,6 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		maybeMarkClaudeRefusal(c, *claudeResponse.Delta.StopReason)
 	}
 	if info.RelayFormat == types.RelayFormatClaude {
-		FormatClaudeResponseInfo(&claudeResponse, nil, claudeInfo)
-
 		if claudeResponse.Type == "message_start" {
 			// message_start, 获取usage
 			if claudeResponse.Message != nil {
@@ -114,7 +112,20 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 				data = patchClaudeMessageDeltaUsageData(data, buildMessageDeltaPatchUsage(&claudeResponse, claudeInfo))
 			}
 		}
-		helper.ClaudeChunkData(c, claudeResponse, data)
+		if err = helper.ClaudeChunkData(c, claudeResponse, data); err != nil {
+			return types.NewError(err, types.ErrorCodeBadResponse)
+		}
+		FormatClaudeResponseInfo(&claudeResponse, nil, claudeInfo)
+		if info.StreamStatus != nil {
+			observation := helper.ObserveStreamDataPayload(data, info.RelayFormat)
+			if observation.Meaningful {
+				info.StreamStatus.MarkClientPayloadCommitted()
+			}
+			info.StreamStatus.ObserveToolPayloadBytes(
+				observation.ToolNameBytes,
+				observation.ToolArgumentBytes,
+			)
+		}
 	} else if info.RelayFormat == types.RelayFormatOpenAI {
 		response := StreamResponseClaude2OpenAI(&claudeResponse)
 
@@ -126,6 +137,9 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		if err != nil {
 			logger.LogError(c, "send_stream_response_failed: "+err.Error())
 		}
+	}
+	if info.StreamStatus != nil && claudeInfo.Usage != nil {
+		info.StreamStatus.ObservePartialUsage(claudeInfo.Usage, claudeResponse.Usage != nil, claudeResponse.Usage == nil)
 	}
 	return nil
 }
@@ -180,14 +194,51 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		Usage:        &dto.Usage{},
 	}
 	var err *types.NewAPIError
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+	helper.StreamScannerHandlerWithOptions(c, resp, info, helper.StreamScannerOptions{
+		RequireExplicitTerminal: true,
+		RequiredTerminalEvent:   "message_stop",
+	}, func(data string, sr *helper.StreamResult) {
 		err = HandleStreamResponseData(c, info, claudeInfo, data)
 		if err != nil {
 			sr.Stop(err)
+			return
+		}
+		var event struct {
+			Type string `json:"type"`
+		}
+		if common.UnmarshalJsonStr(data, &event) == nil && event.Type == "message_stop" {
+			sr.DoneWithTerminal("message_stop", "completed")
 		}
 	})
 	if err != nil {
-		return nil, err
+		fallback := service.ResponseText2Usage(c, claudeInfo.ResponseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+		if claudeInfo.Usage.CompletionTokens == 0 {
+			claudeInfo.Usage.CompletionTokens = fallback.CompletionTokens
+		}
+		if claudeInfo.Usage.PromptTokens == 0 {
+			claudeInfo.Usage.PromptTokens = fallback.PromptTokens
+		}
+		claudeInfo.Usage.TotalTokens = claudeInfo.Usage.PromptTokens + claudeInfo.Usage.CompletionTokens
+		claudeInfo.Usage.UsageSemantic = "anthropic"
+		if info.StreamStatus != nil {
+			info.StreamStatus.ObservePartialUsage(claudeInfo.Usage, false, true)
+		}
+		return claudeInfo.Usage, err
+	}
+	if statusErr := helper.StreamStatusError(c, info); statusErr != nil {
+		fallback := service.ResponseText2Usage(c, claudeInfo.ResponseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+		if claudeInfo.Usage.CompletionTokens == 0 {
+			claudeInfo.Usage.CompletionTokens = fallback.CompletionTokens
+		}
+		if claudeInfo.Usage.PromptTokens == 0 {
+			claudeInfo.Usage.PromptTokens = fallback.PromptTokens
+		}
+		claudeInfo.Usage.TotalTokens = claudeInfo.Usage.PromptTokens + claudeInfo.Usage.CompletionTokens
+		claudeInfo.Usage.UsageSemantic = "anthropic"
+		if info.StreamStatus != nil {
+			info.StreamStatus.ObservePartialUsage(claudeInfo.Usage, false, true)
+		}
+		return claudeInfo.Usage, statusErr
 	}
 
 	HandleStreamFinalResponse(c, info, claudeInfo)

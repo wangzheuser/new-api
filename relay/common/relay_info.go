@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -111,17 +112,30 @@ type ContextFallbackDecision struct {
 	TargetDemandTokens          int64
 }
 
+type streamLifecycleState struct {
+	mu             sync.Mutex
+	writeMu        sync.Mutex
+	pingerStop     func()
+	pingerDone     <-chan struct{}
+	upstreamCancel func()
+}
+
+var streamLifecycleInitMu sync.Mutex
+
 type RelayInfo struct {
-	TokenId           int
-	TokenKey          string
-	TokenGroup        string
-	UserId            int
-	UsingGroup        string // 使用的分组，当auto跨分组重试时，会变动
-	UserGroup         string // 用户所在分组
-	TokenUnlimited    bool
-	StartTime         time.Time
-	FirstResponseTime time.Time
-	isFirstResponse   bool
+	TokenId                  int
+	TokenKey                 string
+	TokenGroup               string
+	UserId                   int
+	UsingGroup               string // 使用的分组，当auto跨分组重试时，会变动
+	UserGroup                string // 用户所在分组
+	TokenUnlimited           bool
+	StartTime                time.Time
+	OriginHandlerStartedAt   time.Time
+	RequestUploadDuration    time.Duration
+	IncomingRequestBodyBytes int64
+	FirstResponseTime        time.Time
+	isFirstResponse          bool
 	//SendLastReasoningResponse bool
 	IsStream                 bool
 	IsGeminiBatchEmbedding   bool
@@ -219,7 +233,8 @@ type RelayInfo struct {
 	// 若为空，调用 GetFinalRequestRelayFormat 会回退到 RequestConversionChain 的最后一项或 RelayFormat。
 	FinalRequestRelayFormat types.RelayFormat
 
-	StreamStatus *StreamStatus
+	StreamStatus    *StreamStatus
+	streamLifecycle *streamLifecycleState
 
 	ThinkingContentInfo
 	TokenCountMeta
@@ -228,6 +243,110 @@ type RelayInfo struct {
 	*ResponsesUsageInfo
 	*ChannelMeta
 	*TaskRelayInfo
+}
+
+func (info *RelayInfo) getStreamLifecycle() *streamLifecycleState {
+	if info == nil {
+		return nil
+	}
+	streamLifecycleInitMu.Lock()
+	if info.streamLifecycle == nil {
+		info.streamLifecycle = &streamLifecycleState{}
+	}
+	state := info.streamLifecycle
+	streamLifecycleInitMu.Unlock()
+	return state
+}
+
+// StreamWriterMutex returns the shared lock used by APP Ping and business SSE frames.
+func (info *RelayInfo) StreamWriterMutex() *sync.Mutex {
+	state := info.getStreamLifecycle()
+	if state == nil {
+		return nil
+	}
+	return &state.writeMu
+}
+
+// SetStreamUpstreamCancel binds cancellation of the active TARGET request to the stream lifecycle.
+func (info *RelayInfo) SetStreamUpstreamCancel(cancel func()) {
+	state := info.getStreamLifecycle()
+	if state == nil {
+		return
+	}
+	state.mu.Lock()
+	previous := state.upstreamCancel
+	state.upstreamCancel = cancel
+	state.mu.Unlock()
+	if previous != nil {
+		previous()
+	}
+}
+
+// CancelStreamUpstream cancels the active TARGET request exactly once.
+func (info *RelayInfo) CancelStreamUpstream() {
+	state := info.getStreamLifecycle()
+	if state == nil {
+		return
+	}
+	state.mu.Lock()
+	cancel := state.upstreamCancel
+	state.upstreamCancel = nil
+	state.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// SetStreamPinger binds the request-level pinger to the complete upstream relay lifecycle.
+func (info *RelayInfo) SetStreamPinger(stop func(), done <-chan struct{}) {
+	state := info.getStreamLifecycle()
+	if state == nil {
+		return
+	}
+	state.mu.Lock()
+	previousStop := state.pingerStop
+	previousDone := state.pingerDone
+	state.pingerStop = stop
+	state.pingerDone = done
+	state.mu.Unlock()
+	if previousStop != nil {
+		previousStop()
+		if previousDone != nil {
+			<-previousDone
+		}
+	}
+}
+
+// HasStreamPinger reports whether a request-level pinger is active.
+func (info *RelayInfo) HasStreamPinger() bool {
+	state := info.getStreamLifecycle()
+	if state == nil {
+		return false
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.pingerStop != nil
+}
+
+// StopStreamPinger stops and joins the request-level pinger exactly once.
+func (info *RelayInfo) StopStreamPinger() {
+	state := info.getStreamLifecycle()
+	if state == nil {
+		return
+	}
+	state.mu.Lock()
+	stop := state.pingerStop
+	done := state.pingerDone
+	state.pingerStop = nil
+	state.pingerDone = nil
+	state.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
+	info.CancelStreamUpstream()
+	if done != nil {
+		<-done
+	}
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
@@ -714,6 +833,22 @@ func (info *RelayInfo) GetFinalRequestRelayFormat() types.RelayFormat {
 		return info.RequestConversionChain[n-1]
 	}
 	return info.RelayFormat
+}
+
+// AcceptStreamPolicyVersion limits progressive settlement and retry semantics to native Chat/Claude streams.
+func (info *RelayInfo) AcceptStreamPolicyVersion(version string) string {
+	version = strings.TrimSpace(version)
+	if info == nil || !info.IsStream || version != "progressive-v1" {
+		return ""
+	}
+	finalFormat := info.GetFinalRequestRelayFormat()
+	if info.RelayFormat != finalFormat {
+		return ""
+	}
+	if finalFormat != types.RelayFormatOpenAI && finalFormat != types.RelayFormatClaude {
+		return ""
+	}
+	return version
 }
 
 func GenRelayInfoResponsesCompaction(c *gin.Context, request *dto.OpenAIResponsesCompactionRequest) *RelayInfo {

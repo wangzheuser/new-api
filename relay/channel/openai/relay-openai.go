@@ -120,26 +120,56 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	var lastStreamData string
 	var secondLastStreamData string // 存储倒数第二个stream data，用于音频模型
 	var streamErr *types.NewAPIError
+	progressivePolicy := info.AcceptStreamPolicyVersion(resp.Header.Get("X-Stream-Policy")) == "progressive-v1"
+	flushStreamData := func(data string) *types.NewAPIError {
+		if err := HandleStreamFormat(c, info, data, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
+			return types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway)
+		}
+		if err := accumulateFlushedStreamOutput(info.RelayMode, data, &responseTextBuilder, &toolCount); err != nil {
+			return types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+		}
+		if info.StreamStatus != nil {
+			observation := helper.ObserveStreamDataPayload(data, info.RelayFormat)
+			if observation.Meaningful {
+				info.StreamStatus.MarkClientPayloadCommitted()
+			}
+			info.StreamStatus.ObserveToolPayloadBytes(
+				observation.ToolNameBytes,
+				observation.ToolArgumentBytes,
+			)
+		}
+		return nil
+	}
 
 	// 检查是否为音频模型
 	isAudioModel := strings.Contains(strings.ToLower(model), "audio")
 
-	helper.StreamScannerHandlerWithOptions(c, resp, info, helper.StreamScannerOptions{RequireExplicitTerminal: true}, func(data string, sr *helper.StreamResult) {
+	streamOptions := helper.StreamScannerOptions{RequireExplicitTerminal: true}
+	if progressivePolicy {
+		streamOptions.RequiredTerminalEvent = "[DONE]"
+	}
+	helper.StreamScannerHandlerWithOptions(c, resp, info, streamOptions, func(data string, sr *helper.StreamResult) {
 		if lastStreamData != "" {
-			if err := HandleStreamFormat(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
-				streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway)
+			if isAudioModel {
+				secondLastStreamData = lastStreamData
+			}
+			if streamErr = flushStreamData(lastStreamData); streamErr != nil {
 				sr.Stop(streamErr)
 				return
 			}
+			lastStreamData = ""
 		}
 		if len(data) > 0 {
-			// 对音频模型，保存倒数第二个stream data
-			if isAudioModel && lastStreamData != "" {
-				secondLastStreamData = lastStreamData
+			var upstreamResponse dto.SimpleResponse
+			if common.UnmarshalJsonStr(data, &upstreamResponse) == nil {
+				if upstreamError := upstreamResponse.GetOpenAIError(); upstreamError != nil {
+					streamErr = types.WithOpenAIError(*upstreamError, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+					sr.StopWithTerminal("error", "failed", streamErr)
+					return
+				}
 			}
-
 			lastStreamData = data
-			terminalEvent, terminalStatus, err := processTokenData(info.RelayMode, data, &responseTextBuilder, &toolCount)
+			terminalEvent, terminalStatus, err := inspectStreamData(info.RelayMode, data)
 			if err != nil {
 				logger.LogError(c, "error processing stream token data: "+err.Error())
 				streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
@@ -149,13 +179,37 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			if terminalEvent != "" {
 				sr.MarkTerminal(terminalEvent, terminalStatus)
 			}
+			var usageEvent struct {
+				Usage *dto.Usage `json:"usage"`
+			}
+			if common.UnmarshalJsonStr(data, &usageEvent) == nil && usageEvent.Usage != nil && info.StreamStatus != nil {
+				info.StreamStatus.ObservePartialUsage(usageEvent.Usage, true, false)
+			}
+			// TARGET 已经完成提交判断；APP 立即 Flush 非终止事件，避免额外的单事件预提交缓冲。
+			if progressivePolicy && terminalEvent == "" {
+				if streamErr = flushStreamData(lastStreamData); streamErr != nil {
+					sr.Stop(streamErr)
+					return
+				}
+				lastStreamData = ""
+			}
 		}
 	})
 	if streamErr != nil {
-		return nil, streamErr
+		partialUsage := service.ResponseText2Usage(c, responseTextBuilder.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+		partialUsage.CompletionTokens += toolCount * 7
+		if info.StreamStatus != nil {
+			info.StreamStatus.ObservePartialUsage(partialUsage, false, true)
+		}
+		return partialUsage, streamErr
 	}
 	if statusErr := helper.StreamStatusError(c, info); statusErr != nil {
-		return nil, statusErr
+		partialUsage := service.ResponseText2Usage(c, responseTextBuilder.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+		partialUsage.CompletionTokens += toolCount * 7
+		if info.StreamStatus != nil {
+			info.StreamStatus.ObservePartialUsage(partialUsage, false, true)
+		}
+		return partialUsage, statusErr
 	}
 
 	// 对音频模型，从倒数第二个stream data中提取usage信息
@@ -185,13 +239,36 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 
 	if info.RelayFormat == types.RelayFormatOpenAI {
 		if shouldSendLastResp {
-			_ = sendStreamData(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent)
+			if err := sendStreamData(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
+				partialUsage := service.ResponseText2Usage(c, responseTextBuilder.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+				partialUsage.CompletionTokens += toolCount * 7
+				if info.StreamStatus != nil {
+					info.StreamStatus.ObservePartialUsage(partialUsage, false, true)
+				}
+				return partialUsage, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway)
+			}
+			if err := accumulateFlushedStreamOutput(info.RelayMode, lastStreamData, &responseTextBuilder, &toolCount); err != nil {
+				return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+			}
+			if info.StreamStatus != nil {
+				observation := helper.ObserveStreamDataPayload(lastStreamData, info.RelayFormat)
+				if observation.Meaningful {
+					info.StreamStatus.MarkClientPayloadCommitted()
+				}
+				info.StreamStatus.ObserveToolPayloadBytes(
+					observation.ToolNameBytes,
+					observation.ToolArgumentBytes,
+				)
+			}
 		}
 	}
 
 	if !containStreamUsage {
 		usage = service.ResponseText2Usage(c, responseTextBuilder.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 		usage.CompletionTokens += toolCount * 7
+	}
+	if info.StreamStatus != nil {
+		info.StreamStatus.ObservePartialUsage(usage, containStreamUsage, !containStreamUsage)
 	}
 
 	applyUsagePostProcessing(info, usage, common.StringToByteSlice(lastStreamData))
