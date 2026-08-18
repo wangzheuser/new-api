@@ -339,8 +339,8 @@ export type MultiKeyConfirmAction = {
     | 'enable-all'
     | 'disable-all'
     | 'delete-disabled'
-    | 'disable-auth-failed'
-    | 'enable-recovered'
+    | 'disable-unavailable'
+    | 'enable-available'
   keyIndex?: number
   keyIndexes?: number[]
 }

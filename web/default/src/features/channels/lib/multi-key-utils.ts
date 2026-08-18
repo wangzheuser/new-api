@@ -20,7 +20,7 @@ import {
   MULTI_KEY_STATUS_CONFIG,
   MULTI_KEY_CONFIRM_MESSAGES,
 } from '../constants'
-import type { MultiKeyConfirmAction } from '../types'
+import type { MultiKeyConfirmAction, MultiKeyTestResult } from '../types'
 
 /**
  * Get status badge configuration for multi-key status
@@ -55,10 +55,10 @@ export function getMultiKeyConfirmMessage(
       return MULTI_KEY_CONFIRM_MESSAGES.DISABLE_ALL
     case 'delete-disabled':
       return MULTI_KEY_CONFIRM_MESSAGES.DELETE_DISABLED
-    case 'disable-auth-failed':
-      return 'Disable all keys that failed authentication? Keys with temporary upstream errors will not be changed.'
-    case 'enable-recovered':
-      return 'Enable all disabled keys that passed the latest test?'
+    case 'disable-unavailable':
+      return 'Disable all keys whose latest test result is unavailable?'
+    case 'enable-available':
+      return 'Enable all keys whose latest test result is available?'
     default:
       return ''
   }
@@ -75,6 +75,24 @@ export function isDestructiveAction(
     action.type === 'delete' ||
     action.type === 'delete-disabled' ||
     action.type === 'disable-all' ||
-    action.type === 'disable-auth-failed'
+    action.type === 'disable-unavailable'
   )
+}
+
+/** Selects batch action targets from completed test results. */
+export function getMultiKeyTestActionIndexes(
+  results: Iterable<MultiKeyTestResult>
+): { available: number[]; unavailable: number[] } {
+  const available: number[] = []
+  const unavailable: number[] = []
+
+  for (const result of results) {
+    if (result.classification === 'available') {
+      available.push(result.key_index)
+    } else {
+      unavailable.push(result.key_index)
+    }
+  }
+
+  return { available, unavailable }
 }

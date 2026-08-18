@@ -75,6 +75,7 @@ import {
   formatTimestamp,
   getMultiKeyStatusConfig,
   getMultiKeyConfirmMessage,
+  getMultiKeyTestActionIndexes,
   isDestructiveAction,
 } from '../../lib'
 import type {
@@ -117,10 +118,6 @@ export function MultiKeyManageDialog({
   const [enabledCount, setEnabledCount] = useState(0)
   const [manualDisabledCount, setManualDisabledCount] = useState(0)
   const [autoDisabledCount, setAutoDisabledCount] = useState(0)
-  const [knownKeyStatus, setKnownKeyStatus] = useState<Map<number, number>>(
-    () => new Map()
-  )
-
   // UI state
   const [statusFilter, setStatusFilter] = useState<number | null>(null)
   const [confirmAction, setConfirmAction] =
@@ -139,7 +136,6 @@ export function MultiKeyManageDialog({
     if (open && currentRow) {
       setCurrentPage(1)
       setStatusFilter(null)
-      setKnownKeyStatus(new Map())
       multiKeyTest.reset()
       loadKeyStatus(1, pageSize, null)
     }
@@ -171,13 +167,6 @@ export function MultiKeyManageDialog({
         setEnabledCount(response.data.enabled_count || 0)
         setManualDisabledCount(response.data.manual_disabled_count || 0)
         setAutoDisabledCount(response.data.auto_disabled_count || 0)
-        setKnownKeyStatus((current) => {
-          const next = new Map(current)
-          for (const key of response.data?.keys || []) {
-            next.set(key.index, key.status)
-          }
-          return next
-        })
       } else {
         toast.error(response.message || t('Failed to load key status'))
       }
@@ -231,14 +220,14 @@ export function MultiKeyManageDialog({
         response = await disableAllMultiKeys(currentRow.id)
       } else if (type === 'delete-disabled') {
         response = await deleteDisabledMultiKeys(currentRow.id)
-      } else if (type === 'disable-auth-failed') {
+      } else if (type === 'disable-unavailable') {
         const responses = await Promise.all(
           (confirmAction.keyIndexes || []).map((index) =>
             disableMultiKey(currentRow.id, index)
           )
         )
         response = responses.find((item) => !item.success) || { success: true }
-      } else if (type === 'enable-recovered') {
+      } else if (type === 'enable-available') {
         const responses = await Promise.all(
           (confirmAction.keyIndexes || []).map((index) =>
             enableMultiKey(currentRow.id, index)
@@ -250,26 +239,12 @@ export function MultiKeyManageDialog({
       if (response?.success) {
         toast.success(response.message || t('Operation successful'))
         queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
-        if (type === 'disable-auth-failed') {
-          setKnownKeyStatus((current) => {
-            const next = new Map(current)
-            for (const index of confirmAction.keyIndexes || []) {
-              next.set(index, 2)
-            }
-            return next
-          })
-        } else if (type === 'enable-recovered') {
-          setKnownKeyStatus((current) => {
-            const next = new Map(current)
-            for (const index of confirmAction.keyIndexes || []) {
-              next.set(index, 1)
-            }
-            return next
-          })
-        }
-
         // Reload data - reset to page 1 for bulk actions
-        const isBulkAction = type.includes('all') || type === 'delete-disabled'
+        const isBulkAction =
+          type.includes('all') ||
+          type === 'delete-disabled' ||
+          type === 'disable-unavailable' ||
+          type === 'enable-available'
         if (isBulkAction) {
           setCurrentPage(1)
           loadKeyStatus(1, pageSize)
@@ -309,14 +284,9 @@ export function MultiKeyManageDialog({
     return formatTimestamp(timestamp)
   }
 
-  const authFailedIndexes = [...multiKeyTest.results.values()]
-    .filter((result) => result.classification === 'auth_failed')
-    .map((result) => result.key_index)
-  const recoveredIndexes = [...multiKeyTest.results.values()]
-    .filter(
-      (result) => result.success && knownKeyStatus.get(result.key_index) !== 1
-    )
-    .map((result) => result.key_index)
+  const testActionIndexes = getMultiKeyTestActionIndexes(
+    multiKeyTest.results.values()
+  )
   const abnormalIndexes = [...multiKeyTest.results.values()]
     .filter((result) => !result.success)
     .map((result) => result.key_index)
@@ -349,16 +319,6 @@ export function MultiKeyManageDialog({
 
   const startAllKeyTests = async () => {
     if (!currentRow || keyCount <= 0) return
-    try {
-      const response = await getMultiKeyStatus(currentRow.id, 1, keyCount)
-      if (response.success && response.data) {
-        setKnownKeyStatus(
-          new Map(response.data.keys.map((key) => [key.index, key.status]))
-        )
-      }
-    } catch {
-      // Testing can continue because the key indexes come from channel metadata.
-    }
     await multiKeyTest.startBatch(
       Array.from({ length: keyCount }, (_, index) => index),
       true
@@ -396,7 +356,7 @@ export function MultiKeyManageDialog({
         description={t(
           'Manage multi-key status and configuration for this channel'
         )}
-        contentClassName='flex max-h-[90vh] max-w-5xl flex-col'
+        contentClassName='flex w-[calc(100vw-2rem)] max-w-[1400px] flex-col sm:max-w-[min(1400px,calc(100vw-2rem))]'
         titleClassName='flex items-center gap-2'
         contentHeight='min(72vh, 720px)'
         bodyClassName='space-y-4'
@@ -506,35 +466,35 @@ export function MultiKeyManageDialog({
                   </Button>
                 )}
 
-              {authFailedIndexes.length > 0 && (
+              {testActionIndexes.unavailable.length > 0 && (
                 <Button
                   variant='outline'
                   size='sm'
                   onClick={() =>
                     setConfirmAction({
-                      type: 'disable-auth-failed',
-                      keyIndexes: authFailedIndexes,
+                      type: 'disable-unavailable',
+                      keyIndexes: testActionIndexes.unavailable,
                     })
                   }
                 >
                   <ShieldOff className='h-4 w-4' />
-                  {t('Disable auth failures')}
+                  {t('Disable unavailable')}
                 </Button>
               )}
 
-              {recoveredIndexes.length > 0 && (
+              {testActionIndexes.available.length > 0 && (
                 <Button
                   variant='outline'
                   size='sm'
                   onClick={() =>
                     setConfirmAction({
-                      type: 'enable-recovered',
-                      keyIndexes: recoveredIndexes,
+                      type: 'enable-available',
+                      keyIndexes: testActionIndexes.available,
                     })
                   }
                 >
                   <CheckCircle2 className='h-4 w-4' />
-                  {t('Enable recovered')}
+                  {t('Enable available')}
                 </Button>
               )}
               <Button

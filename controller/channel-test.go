@@ -1278,6 +1278,25 @@ func classifyMultiKeyTestResult(result testResult) string {
 	if result.localErr == nil && result.newAPIError == nil && result.upstreamStatus >= http.StatusOK && result.upstreamStatus < http.StatusMultipleChoices {
 		return "available"
 	}
+	if result.newAPIError != nil {
+		switch result.newAPIError.GetErrorCode() {
+		case types.ErrorCodeDoRequestFailed:
+			return "network_error"
+		case types.ErrorCodeInsufficientUserQuota, types.ErrorCodePreConsumeTokenQuotaFailed:
+			return "quota_exhausted"
+		case types.ErrorCodeModelNotFound:
+			return "model_forbidden"
+		case types.ErrorCodeGetChannelFailed, types.ErrorCodeChannelParamOverrideInvalid, types.ErrorCodeChannelHeaderOverrideInvalid, types.ErrorCodeChannelModelMappedError:
+			return "configuration_error"
+		}
+		if classification := classifyMultiKeyErrorMessage(result.newAPIError.Error()); classification != "" {
+			return classification
+		}
+		switch result.newAPIError.GetErrorCode() {
+		case types.ErrorCodeBadResponse, types.ErrorCodeBadResponseBody, types.ErrorCodeEmptyResponse, types.ErrorCodeReadResponseBodyFailed:
+			return "response_error"
+		}
+	}
 	status := result.upstreamStatus
 	if status == 0 && result.newAPIError != nil {
 		status = result.newAPIError.StatusCode
@@ -1292,20 +1311,6 @@ func classifyMultiKeyTestResult(result testResult) string {
 	case http.StatusNotFound, http.StatusMethodNotAllowed:
 		return "configuration_error"
 	}
-	if result.newAPIError != nil {
-		switch result.newAPIError.GetErrorCode() {
-		case types.ErrorCodeDoRequestFailed:
-			return "network_error"
-		case types.ErrorCodeInsufficientUserQuota, types.ErrorCodePreConsumeTokenQuotaFailed:
-			return "quota_exhausted"
-		case types.ErrorCodeModelNotFound:
-			return "model_forbidden"
-		case types.ErrorCodeBadResponse, types.ErrorCodeBadResponseBody, types.ErrorCodeEmptyResponse, types.ErrorCodeReadResponseBodyFailed:
-			return "response_error"
-		case types.ErrorCodeGetChannelFailed, types.ErrorCodeChannelParamOverrideInvalid, types.ErrorCodeChannelHeaderOverrideInvalid, types.ErrorCodeChannelModelMappedError:
-			return "configuration_error"
-		}
-	}
 	if status >= http.StatusInternalServerError {
 		return "upstream_error"
 	}
@@ -1316,6 +1321,57 @@ func classifyMultiKeyTestResult(result testResult) string {
 		return "response_error"
 	}
 	return "upstream_error"
+}
+
+// classifyMultiKeyErrorMessage recognizes actionable credential and quota failures whose HTTP status is ambiguous.
+func classifyMultiKeyErrorMessage(message string) string {
+	lowerMessage := strings.ToLower(message)
+	quotaIndicators := []string{
+		"quota exhausted",
+		"quota_exhausted",
+		"quota exceeded",
+		"quota has been exhausted",
+		"quota has been exceeded",
+		"quota limit",
+		"quota will be refreshed",
+		"exceeded your quota",
+		"usage limit",
+		"billing limit",
+		"credit limit",
+		"credits exhausted",
+		"out of credits",
+		"insufficient credit",
+		"insufficient balance",
+		"balance is insufficient",
+	}
+	for _, indicator := range quotaIndicators {
+		if strings.Contains(lowerMessage, indicator) {
+			return "quota_exhausted"
+		}
+	}
+
+	authIndicators := []string{
+		"unable to verify your membership",
+		"membership is active",
+		"membership inactive",
+		"subscription is active",
+		"subscription inactive",
+		"invalid api key",
+		"incorrect api key",
+		"expired api key",
+		"revoked api key",
+		"invalid token",
+		"expired token",
+		"revoked token",
+		"authentication failed",
+		"unauthorized",
+	}
+	for _, indicator := range authIndicators {
+		if strings.Contains(lowerMessage, indicator) {
+			return "auth_failed"
+		}
+	}
+	return ""
 }
 
 func classifyNativeProbeResult(result testResult) string {
