@@ -107,7 +107,7 @@ export function ResponseConfigCard(props: ResponseConfigCardProps) {
             className='space-y-6'
             onSubmit={form.handleSubmit((values) => mutation.mutate(values))}
           >
-            <div className='grid gap-4 lg:grid-cols-[180px_180px_minmax(0,1fr)]'>
+            <div className='grid items-start gap-4 lg:grid-cols-[180px_180px_minmax(0,1fr)]'>
               <FormField
                 control={form.control}
                 name='delaySeconds'
