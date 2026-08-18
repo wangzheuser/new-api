@@ -114,6 +114,7 @@ const URL_TO_CONFIG_MAP: Record<string, { section: string; module: string }> = {
   '/models/metadata': { section: 'admin', module: 'models' },
   '/models/deployments': { section: 'admin', module: 'models' },
   '/users': { section: 'admin', module: 'user' },
+  '/user-rate-limits': { section: 'admin', module: 'setting' },
   '/redemption-codes': { section: 'admin', module: 'redemption' },
   '/registration-codes': { section: 'admin', module: 'registration' },
   '/conversation-logs': { section: 'admin', module: 'conversation' },

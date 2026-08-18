@@ -205,6 +205,16 @@ func SetApiRouter(router *gin.Engine) {
 			optionRoute.POST("/waffo-pancake/subscription-product", controller.CreateWaffoPancakeSubscriptionProduct)
 			optionRoute.GET("/waffo-pancake/subscription-product-options", controller.ListWaffoPancakeSubscriptionProductOptions)
 		}
+		userModelRateLimitRoute := apiRouter.Group("/user-model-rate-limits")
+		userModelRateLimitRoute.Use(middleware.RootAuth())
+		{
+			userModelRateLimitRoute.GET("/config", controller.GetUserModelRateLimitConfig)
+			userModelRateLimitRoute.PUT("/config", controller.UpdateUserModelRateLimitConfig)
+			userModelRateLimitRoute.GET("/rules", controller.GetUserModelRateLimitRules)
+			userModelRateLimitRoute.POST("/rules", controller.CreateUserModelRateLimitRule)
+			userModelRateLimitRoute.PUT("/rules/:id", controller.UpdateUserModelRateLimitRule)
+			userModelRateLimitRoute.DELETE("/rules/:id", controller.DeleteUserModelRateLimitRule)
+		}
 
 		// Custom OAuth provider management (root only)
 		customOAuthRoute := apiRouter.Group("/custom-oauth-provider")

@@ -498,15 +498,25 @@ func HardDeleteUserById(id int) error {
 		if err := tx.Where("user_id = ?", id).Delete(&UserGroupGrant{}).Error; err != nil {
 			return err
 		}
+		if err := deleteUserModelRateLimitsByUserId(tx, id); err != nil {
+			return err
+		}
 		return tx.Unscoped().Delete(&User{}, "id = ?", id).Error
 	}); err != nil {
 		return err
 	}
 	cacheErr := invalidateUserCache(id)
+	rateLimitCacheErr := InvalidateUserModelRateLimitCache(id)
+	if rateLimitCacheErr != nil {
+		common.SysError("failed to invalidate user model rate-limit cache after user deletion: " + rateLimitCacheErr.Error())
+	}
 	if err := RefreshUserAuthStateCache(id); err != nil {
 		return err
 	}
-	return cacheErr
+	if cacheErr != nil {
+		return cacheErr
+	}
+	return nil
 }
 
 func inviteUser(inviterId int) (err error) {

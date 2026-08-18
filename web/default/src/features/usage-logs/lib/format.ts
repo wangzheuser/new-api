@@ -345,6 +345,14 @@ const AUDIT_TEMPLATES: Record<string, string> = {
     'Viewed {{count}} API keys for user {{target_user_id}}',
   // System settings
   'option.update': 'Updated system setting {{key}}',
+  'user_rate_limit.config_update':
+    'Updated user rate-limit response configuration',
+  'user_rate_limit.rule_create':
+    'Created user rate-limit rule {{rule_id}} for {{group}}',
+  'user_rate_limit.rule_update':
+    'Updated user rate-limit rule {{rule_id}} for {{group}}',
+  'user_rate_limit.rule_delete':
+    'Deleted user rate-limit rule {{rule_id}} for {{group}}',
   'option.payment_compliance': 'Confirmed payment compliance',
   'option.reset_ratio': 'Reset model ratios',
   'option.clear_affinity_cache': 'Cleared channel affinity cache',
