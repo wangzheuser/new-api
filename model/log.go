@@ -390,7 +390,15 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	if !common.LogConsumeEnabled {
 		return
 	}
-	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
+	logger.LogInfo(c, fmt.Sprintf(
+		"record consume log: user_id=%d channel_id=%d model=%s quota=%d stream=%t duration_seconds=%d",
+		userId,
+		params.ChannelId,
+		params.ModelName,
+		params.Quota,
+		params.IsStream,
+		params.UseTimeSeconds,
+	))
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)

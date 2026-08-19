@@ -504,6 +504,183 @@ const newKeys = {
   },
 }
 
+const resourceMonitoringRows = [
+  [
+    'Automatic cleanup',
+    '自动清理',
+    '自動清理',
+    'Nettoyage automatique',
+    '自動クリーンアップ',
+    'Автоматическая очистка',
+    'Dọn dẹp tự động',
+  ],
+  [
+    'Automatic server log retention',
+    '服务器日志自动保留',
+    '伺服器日誌自動保留',
+    'Conservation automatique des journaux serveur',
+    'サーバーログの自動保持',
+    'Автоматическое хранение журналов сервера',
+    'Tự động lưu giữ nhật ký máy chủ',
+  ],
+  [
+    'Configured scope',
+    '配置口径',
+    '設定範圍',
+    'Périmètre configuré',
+    '設定された範囲',
+    'Настроенная область',
+    'Phạm vi đã cấu hình',
+  ],
+  [
+    'Container resources',
+    '容器资源',
+    '容器資源',
+    'Ressources du conteneur',
+    'コンテナリソース',
+    'Ресурсы контейнера',
+    'Tài nguyên container',
+  ],
+  ['cores', '核', '核心', 'cœurs', 'コア', 'ядер', 'lõi'],
+  [
+    'CPU limit',
+    'CPU 限额',
+    'CPU 限額',
+    'Limite CPU',
+    'CPU 上限',
+    'Лимит CPU',
+    'Giới hạn CPU',
+  ],
+  [
+    'CPU pressure (60s)',
+    'CPU 压力（60 秒）',
+    'CPU 壓力（60 秒）',
+    'Pression CPU (60 s)',
+    'CPU プレッシャー（60 秒）',
+    'Давление CPU (60 с)',
+    'Áp lực CPU (60 giây)',
+  ],
+  [
+    'CPU steal',
+    'CPU 窃取',
+    'CPU 竊取',
+    'Temps CPU volé',
+    'CPU スチール',
+    'Украденное время CPU',
+    'CPU bị chiếm dụng',
+  ],
+  [
+    'CPU throttling',
+    'CPU 限流',
+    'CPU 節流',
+    'Limitation CPU',
+    'CPU スロットリング',
+    'Троттлинг CPU',
+    'Giới hạn CPU theo thời gian',
+  ],
+  [
+    'Effective CPU scope',
+    '生效 CPU 口径',
+    '生效 CPU 範圍',
+    'Périmètre CPU effectif',
+    '有効な CPU 範囲',
+    'Фактическая область CPU',
+    'Phạm vi CPU có hiệu lực',
+  ],
+  [
+    'Effective memory scope',
+    '生效内存口径',
+    '生效記憶體範圍',
+    'Périmètre mémoire effectif',
+    '有効なメモリ範囲',
+    'Фактическая область памяти',
+    'Phạm vi bộ nhớ có hiệu lực',
+  ],
+  [
+    'Go Runtime',
+    'Go 运行时',
+    'Go 執行階段',
+    'Runtime Go',
+    'Go ランタイム',
+    'Среда выполнения Go',
+    'Go Runtime',
+  ],
+  [
+    'Heap allocation',
+    '堆内存分配',
+    '堆積記憶體配置',
+    'Allocation du tas',
+    'ヒープ割り当て',
+    'Выделение кучи',
+    'Cấp phát heap',
+  ],
+  ['Host', '宿主机', '主機', 'Hôte', 'ホスト', 'Хост', 'Máy chủ'],
+  [
+    'Host resources',
+    '宿主机资源',
+    '主機資源',
+    'Ressources de l’hôte',
+    'ホストリソース',
+    'Ресурсы хоста',
+    'Tài nguyên máy chủ',
+  ],
+  [
+    'Memory limit',
+    '内存限额',
+    '記憶體限額',
+    'Limite mémoire',
+    'メモリ上限',
+    'Лимит памяти',
+    'Giới hạn bộ nhớ',
+  ],
+  [
+    'Resource monitoring scope',
+    '资源监控口径',
+    '資源監控範圍',
+    'Périmètre de surveillance des ressources',
+    'リソース監視範囲',
+    'Область мониторинга ресурсов',
+    'Phạm vi giám sát tài nguyên',
+  ],
+  [
+    'Runtime system memory',
+    '运行时系统内存',
+    '執行階段系統記憶體',
+    'Mémoire système du runtime',
+    'ランタイムシステムメモリ',
+    'Системная память среды выполнения',
+    'Bộ nhớ hệ thống runtime',
+  ],
+  [
+    'CPU and memory protection use this scope; unavailable container metrics fall back to host metrics.',
+    'CPU 和内存保护使用此口径；容器指标不可用时回退到宿主机指标。',
+    'CPU 與記憶體保護使用此範圍；容器指標不可用時回退至主機指標。',
+    'La protection CPU et mémoire utilise ce périmètre ; si les métriques du conteneur sont indisponibles, celles de l’hôte sont utilisées.',
+    'CPU とメモリの保護にはこの範囲を使用し、コンテナ指標を取得できない場合はホスト指標にフォールバックします。',
+    'Защита CPU и памяти использует эту область; если метрики контейнера недоступны, используются метрики хоста.',
+    'Bảo vệ CPU và bộ nhớ dùng phạm vi này; khi thiếu chỉ số container, hệ thống dùng chỉ số máy chủ.',
+  ],
+  [
+    'Keep server log files for this many days. Set to 0 to disable automatic cleanup.',
+    '服务器日志文件保留指定天数；设为 0 可关闭自动清理。',
+    '伺服器日誌檔保留指定天數；設為 0 可關閉自動清理。',
+    'Conserve les journaux serveur pendant ce nombre de jours. Définissez 0 pour désactiver le nettoyage automatique.',
+    'サーバーログを指定日数保持します。0 にすると自動クリーンアップを無効にします。',
+    'Хранит журналы сервера указанное число дней. Укажите 0, чтобы отключить автоматическую очистку.',
+    'Giữ tệp nhật ký máy chủ trong số ngày này. Đặt 0 để tắt dọn dẹp tự động.',
+  ],
+]
+
+for (const [key, zh, zhTW, fr, ja, ru, vi] of resourceMonitoringRows) {
+  Object.assign(newKeys.en, { [key]: key })
+  Object.assign(newKeys.zh, { [key]: zh })
+  Object.assign(newKeys['zh-TW'], { [key]: zhTW })
+  Object.assign(newKeys.fr, { [key]: fr })
+  Object.assign(newKeys.ja, { [key]: ja })
+  Object.assign(newKeys.ru, { [key]: ru })
+  Object.assign(newKeys.vi, { [key]: vi })
+}
+
 const protocolPolicyRows = [
   [
     'Model protocol capability summary',

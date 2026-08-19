@@ -98,6 +98,9 @@ const OPERATIONS_SECTIONS = [
     build: (settings: OperationsSettings) => (
       <LogSettingsSection
         defaultEnabled={Boolean(settings.LogConsumeEnabled)}
+        defaultRetentionDays={
+          settings['performance_setting.server_log_retention_days'] ?? 0
+        }
       />
     ),
   },
@@ -123,6 +126,8 @@ const OPERATIONS_SECTIONS = [
             settings['performance_setting.monitor_memory_threshold'] ?? 90,
           'performance_setting.monitor_disk_threshold':
             settings['performance_setting.monitor_disk_threshold'] ?? 95,
+          'performance_setting.monitor_resource_scope':
+            settings['performance_setting.monitor_resource_scope'] ?? 'host',
         }}
       />
     ),

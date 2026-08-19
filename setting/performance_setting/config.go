@@ -24,6 +24,10 @@ type PerformanceSetting struct {
 	MonitorMemoryThreshold int `json:"monitor_memory_threshold"`
 	// MonitorDiskThreshold 磁盘使用率阈值（%）
 	MonitorDiskThreshold int `json:"monitor_disk_threshold"`
+	// MonitorResourceScope CPU 和内存监控口径
+	MonitorResourceScope string `json:"monitor_resource_scope"`
+	// ServerLogRetentionDays 服务器文件日志自动保留天数，0 表示关闭
+	ServerLogRetentionDays int `json:"server_log_retention_days"`
 }
 
 // 默认配置
@@ -37,6 +41,8 @@ var performanceSetting = PerformanceSetting{
 	MonitorCPUThreshold:    90,
 	MonitorMemoryThreshold: 90,
 	MonitorDiskThreshold:   95,
+	MonitorResourceScope:   common.ResourceScopeHost,
+	ServerLogRetentionDays: 0,
 }
 
 func init() {
@@ -60,7 +66,9 @@ func syncToCommon() {
 		CPUThreshold:    performanceSetting.MonitorCPUThreshold,
 		MemoryThreshold: performanceSetting.MonitorMemoryThreshold,
 		DiskThreshold:   performanceSetting.MonitorDiskThreshold,
+		ResourceScope:   performanceSetting.MonitorResourceScope,
 	})
+	common.SetServerLogRetentionDays(performanceSetting.ServerLogRetentionDays)
 }
 
 // GetPerformanceSetting 获取性能设置

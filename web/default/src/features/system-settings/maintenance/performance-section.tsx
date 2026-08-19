@@ -48,6 +48,14 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
@@ -80,6 +88,7 @@ const perfSchema = z.object({
     monitor_cpu_threshold: z.coerce.number().min(0),
     monitor_memory_threshold: z.coerce.number().min(0).max(100),
     monitor_disk_threshold: z.coerce.number().min(0).max(100),
+    monitor_resource_scope: z.enum(['host', 'container']),
   }),
 })
 
@@ -95,6 +104,7 @@ type FlatPerfDefaults = {
   'performance_setting.monitor_cpu_threshold': number
   'performance_setting.monitor_memory_threshold': number
   'performance_setting.monitor_disk_threshold': number
+  'performance_setting.monitor_resource_scope': 'host' | 'container'
 }
 
 const buildFormDefaults = (defaults: FlatPerfDefaults): PerfFormInput => ({
@@ -112,6 +122,8 @@ const buildFormDefaults = (defaults: FlatPerfDefaults): PerfFormInput => ({
       defaults['performance_setting.monitor_memory_threshold'],
     monitor_disk_threshold:
       defaults['performance_setting.monitor_disk_threshold'],
+    monitor_resource_scope:
+      defaults['performance_setting.monitor_resource_scope'],
   },
 })
 
@@ -132,6 +144,8 @@ const normalizeFormValues = (values: PerfFormValues): FlatPerfDefaults => ({
     values.performance_setting.monitor_memory_threshold,
   'performance_setting.monitor_disk_threshold':
     values.performance_setting.monitor_disk_threshold,
+  'performance_setting.monitor_resource_scope':
+    values.performance_setting.monitor_resource_scope,
 })
 
 function formatBytes(bytes: number, decimals = 2): string {
@@ -145,6 +159,20 @@ function formatBytes(bytes: number, decimals = 2): string {
   return `${Number.parseFloat((bytes / Math.pow(k, i)).toFixed(decimals))} ${
     sizes[i]
   }`
+}
+
+function formatPercent(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return '—'
+  }
+  return `${value.toFixed(1)}%`
+}
+
+function formatCoreLimit(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return '—'
+  }
+  return value.toFixed(2).replace(/\.00$/, '')
 }
 
 interface Props {
@@ -181,6 +209,21 @@ type PerformanceStats = {
   }
   config?: {
     is_running_in_container: boolean
+  }
+  resource_stats?: {
+    configured_scope: 'host' | 'container'
+    effective_cpu_scope: 'host' | 'container'
+    effective_memory_scope: 'host' | 'container'
+    host_cpu_usage_percent?: number | null
+    host_memory_usage_percent?: number | null
+    host_cpu_steal_percent?: number | null
+    host_cpu_psi_some_avg60?: number | null
+    container_cpu_usage_percent?: number | null
+    container_memory_usage_percent?: number | null
+    container_cpu_limit_cores?: number | null
+    container_memory_limit_bytes?: number | null
+    container_cpu_throttled_percent?: number | null
+    gomaxprocs: number
   }
 }
 
@@ -448,7 +491,7 @@ export function PerformanceSection(props: Props) {
             </p>
           </div>
 
-          <div className='grid grid-cols-1 gap-4 md:grid-cols-4'>
+          <div className='grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5'>
             <FormField
               control={form.control}
               name='performance_setting.monitor_enabled'
@@ -525,6 +568,46 @@ export function PerformanceSection(props: Props) {
                 </FormItem>
               )}
             />
+            <FormField
+              control={form.control}
+              name='performance_setting.monitor_resource_scope'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Resource monitoring scope')}</FormLabel>
+                  <Select
+                    items={[
+                      { value: 'host', label: t('Host') },
+                      { value: 'container', label: t('Container') },
+                    ]}
+                    value={field.value}
+                    onValueChange={(value) =>
+                      value !== null && field.onChange(value)
+                    }
+                    disabled={!monitorEnabled}
+                  >
+                    <FormControl>
+                      <SelectTrigger className='w-full'>
+                        <SelectValue />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent alignItemWithTrigger={false}>
+                      <SelectGroup>
+                        <SelectItem value='host'>{t('Host')}</SelectItem>
+                        <SelectItem value='container'>
+                          {t('Container')}
+                        </SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <FormDescription>
+                    {t(
+                      'CPU and memory protection use this scope; unavailable container metrics fall back to host metrics.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
           </div>
         </SettingsForm>
       </Form>
@@ -533,7 +616,7 @@ export function PerformanceSection(props: Props) {
 
       {/* Performance Stats Dashboard */}
       <div className='space-y-4'>
-        <div className='flex items-center gap-2'>
+        <div className='flex flex-wrap items-center gap-2'>
           <h4 className='font-medium'>{t('Performance Monitor')}</h4>
           <Button variant='outline' size='sm' onClick={fetchStats}>
             {t('Refresh Stats')}
@@ -574,6 +657,173 @@ export function PerformanceSection(props: Props) {
 
         {stats && (
           <>
+            {stats.resource_stats && (
+              <>
+                <div className='grid grid-cols-1 gap-4 lg:grid-cols-3'>
+                  <div className='rounded-lg border p-4'>
+                    <p className='mb-3 text-sm font-medium'>
+                      {t('Host resources')}
+                    </p>
+                    <div className='grid grid-cols-2 gap-x-4 gap-y-2 text-xs'>
+                      <div>
+                        <span className='text-muted-foreground'>CPU:</span>{' '}
+                        {formatPercent(
+                          stats.resource_stats.host_cpu_usage_percent
+                        )}
+                      </div>
+                      <div>
+                        <span className='text-muted-foreground'>
+                          {t('Memory')}:
+                        </span>{' '}
+                        {formatPercent(
+                          stats.resource_stats.host_memory_usage_percent
+                        )}
+                      </div>
+                      <div>
+                        <span className='text-muted-foreground'>
+                          {t('CPU steal')}:
+                        </span>{' '}
+                        {formatPercent(
+                          stats.resource_stats.host_cpu_steal_percent
+                        )}
+                      </div>
+                      <div>
+                        <span className='text-muted-foreground'>
+                          {t('CPU pressure (60s)')}:
+                        </span>{' '}
+                        {formatPercent(
+                          stats.resource_stats.host_cpu_psi_some_avg60
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className='rounded-lg border p-4'>
+                    <p className='mb-3 text-sm font-medium'>
+                      {t('Container resources')}
+                    </p>
+                    <div className='grid grid-cols-2 gap-x-4 gap-y-2 text-xs'>
+                      <div>
+                        <span className='text-muted-foreground'>CPU:</span>{' '}
+                        {formatPercent(
+                          stats.resource_stats.container_cpu_usage_percent
+                        )}
+                      </div>
+                      <div>
+                        <span className='text-muted-foreground'>
+                          {t('Memory')}:
+                        </span>{' '}
+                        {formatPercent(
+                          stats.resource_stats.container_memory_usage_percent
+                        )}
+                      </div>
+                      <div>
+                        <span className='text-muted-foreground'>
+                          {t('CPU limit')}:
+                        </span>{' '}
+                        {stats.resource_stats.container_cpu_limit_cores == null
+                          ? '—'
+                          : `${formatCoreLimit(
+                              stats.resource_stats.container_cpu_limit_cores
+                            )} ${t('cores')}`}
+                      </div>
+                      <div>
+                        <span className='text-muted-foreground'>
+                          {t('Memory limit')}:
+                        </span>{' '}
+                        {stats.resource_stats.container_memory_limit_bytes ==
+                        null
+                          ? '—'
+                          : formatBytes(
+                              stats.resource_stats.container_memory_limit_bytes
+                            )}
+                      </div>
+                      <div className='col-span-2'>
+                        <span className='text-muted-foreground'>
+                          {t('CPU throttling')}:
+                        </span>{' '}
+                        {formatPercent(
+                          stats.resource_stats.container_cpu_throttled_percent
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className='rounded-lg border p-4'>
+                    <p className='mb-3 text-sm font-medium'>
+                      {t('Go Runtime')}
+                    </p>
+                    <div className='grid grid-cols-2 gap-x-4 gap-y-2 text-xs'>
+                      <div>
+                        <span className='text-muted-foreground'>
+                          {t('Heap allocation')}:
+                        </span>{' '}
+                        {formatBytes(stats.memory_stats?.alloc ?? 0)}
+                      </div>
+                      <div>
+                        <span className='text-muted-foreground'>
+                          {t('Runtime system memory')}:
+                        </span>{' '}
+                        {formatBytes(stats.memory_stats?.sys ?? 0)}
+                      </div>
+                      <div>
+                        <span className='text-muted-foreground'>
+                          {t('Total Allocated')}:
+                        </span>{' '}
+                        {formatBytes(stats.memory_stats?.total_alloc ?? 0)}
+                      </div>
+                      <div>
+                        <span className='text-muted-foreground'>
+                          {t('GC Count')}:
+                        </span>{' '}
+                        {stats.memory_stats?.num_gc ?? 0}
+                      </div>
+                      <div>
+                        <span className='text-muted-foreground'>
+                          Goroutines:
+                        </span>{' '}
+                        {stats.memory_stats?.num_goroutine ?? 0}
+                      </div>
+                      <div>
+                        <span className='text-muted-foreground'>
+                          GOMAXPROCS:
+                        </span>{' '}
+                        {stats.resource_stats.gomaxprocs}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className='flex flex-wrap gap-2 rounded-lg border p-3 text-xs'>
+                  <StatusBadge variant='neutral' copyable={false}>
+                    {t('Configured scope')}:{' '}
+                    {t(
+                      stats.resource_stats.configured_scope === 'container'
+                        ? 'Container'
+                        : 'Host'
+                    )}
+                  </StatusBadge>
+                  <StatusBadge variant='neutral' copyable={false}>
+                    {t('Effective CPU scope')}:{' '}
+                    {t(
+                      stats.resource_stats.effective_cpu_scope === 'container'
+                        ? 'Container'
+                        : 'Host'
+                    )}
+                  </StatusBadge>
+                  <StatusBadge variant='neutral' copyable={false}>
+                    {t('Effective memory scope')}:{' '}
+                    {t(
+                      stats.resource_stats.effective_memory_scope ===
+                        'container'
+                        ? 'Container'
+                        : 'Host'
+                    )}
+                  </StatusBadge>
+                </div>
+              </>
+            )}
+
             <div className='grid grid-cols-1 gap-4 md:grid-cols-2'>
               <div className='space-y-2 rounded-lg border p-4'>
                 <p className='text-sm font-medium'>
@@ -638,44 +888,6 @@ export function PerformanceSection(props: Props) {
                   <span>
                     {t('Total')}: {formatBytes(stats.disk_space_info.total)}
                   </span>
-                </div>
-              </div>
-            )}
-
-            {stats.memory_stats && (
-              <div className='rounded-lg border p-4'>
-                <p className='mb-2 text-sm font-medium'>
-                  {t('System Memory Stats')}
-                </p>
-                <div className='grid grid-cols-2 gap-2 text-xs md:grid-cols-5'>
-                  <div>
-                    <span className='text-muted-foreground'>
-                      {t('Allocated Memory')}:
-                    </span>{' '}
-                    {formatBytes(stats.memory_stats.alloc)}
-                  </div>
-                  <div>
-                    <span className='text-muted-foreground'>
-                      {t('Total Allocated')}:
-                    </span>{' '}
-                    {formatBytes(stats.memory_stats.total_alloc)}
-                  </div>
-                  <div>
-                    <span className='text-muted-foreground'>
-                      {t('System Memory')}:
-                    </span>{' '}
-                    {formatBytes(stats.memory_stats.sys)}
-                  </div>
-                  <div>
-                    <span className='text-muted-foreground'>
-                      {t('GC Count')}:
-                    </span>{' '}
-                    {stats.memory_stats.num_gc}
-                  </div>
-                  <div>
-                    <span className='text-muted-foreground'>Goroutines:</span>{' '}
-                    {stats.memory_stats.num_goroutine}
-                  </div>
                 </div>
               </div>
             )}

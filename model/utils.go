@@ -1,11 +1,13 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/logger"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
@@ -66,7 +68,7 @@ func batchUpdate() {
 		return
 	}
 
-	common.SysLog("batch update started")
+	logger.LogDebug(context.Background(), "batch update started")
 	stores := make([]map[int]int, BatchUpdateTypeCount)
 	for i := 0; i < BatchUpdateTypeCount; i++ {
 		batchUpdateLocks[i].Lock()
@@ -84,7 +86,7 @@ func batchUpdate() {
 			case BatchUpdateTypeTokenQuota:
 				err := increaseTokenQuota(key, value)
 				if err != nil {
-					common.SysLog("failed to batch update token quota: " + err.Error())
+					logger.LogError(context.Background(), "failed to batch update token quota: "+err.Error())
 				}
 			case BatchUpdateTypeChannelUsedQuota:
 				updateChannelUsedQuota(key, value)
@@ -109,7 +111,7 @@ func batchUpdate() {
 	for key := range userIDs {
 		updateUserQuotaUsedQuotaAndRequestCount(key, userQuotaStore[key], usedQuotaStore[key], requestCountStore[key])
 	}
-	common.SysLog("batch update finished")
+	logger.LogDebug(context.Background(), "batch update finished")
 }
 
 func RecordExist(err error) (bool, error) {

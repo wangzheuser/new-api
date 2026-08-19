@@ -4,11 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -28,6 +25,8 @@ type PerformanceStats struct {
 	DiskSpaceInfo common.DiskSpaceInfo `json:"disk_space_info"`
 	// 配置信息
 	Config PerformanceConfig `json:"config"`
+	// 主机、容器与 Go Runtime 资源统计
+	ResourceStats common.ResourceStats `json:"resource_stats"`
 }
 
 // MemoryStats 内存统计
@@ -77,6 +76,10 @@ type PerformanceConfig struct {
 	MonitorMemoryThreshold int `json:"monitor_memory_threshold"`
 	// MonitorDiskThreshold 磁盘使用率阈值（%）
 	MonitorDiskThreshold int `json:"monitor_disk_threshold"`
+	// MonitorResourceScope CPU 和内存监控口径
+	MonitorResourceScope string `json:"monitor_resource_scope"`
+	// ServerLogRetentionDays 服务器文件日志自动保留天数
+	ServerLogRetentionDays int `json:"server_log_retention_days"`
 }
 
 // GetPerformanceStats 获取性能统计信息
@@ -105,19 +108,13 @@ func GetPerformanceStats(c *gin.Context) {
 		MonitorCPUThreshold:    monitorConfig.CPUThreshold,
 		MonitorMemoryThreshold: monitorConfig.MemoryThreshold,
 		MonitorDiskThreshold:   monitorConfig.DiskThreshold,
+		MonitorResourceScope:   monitorConfig.ResourceScope,
+		ServerLogRetentionDays: common.GetServerLogRetentionDays(),
 	}
 
-	// 获取磁盘空间信息
-	// 使用缓存的系统状态，避免频繁调用系统 API
+	// 管理接口需要完整的磁盘容量信息，保护逻辑仍使用缓存状态。
 	systemStatus := common.GetSystemStatus()
-	diskSpaceInfo := common.DiskSpaceInfo{
-		UsedPercent: systemStatus.DiskUsage,
-	}
-	// 如果需要详细信息，可以按需获取，或者扩展 SystemStatus
-	// 这里为了保持接口兼容性，我们仍然调用 GetDiskSpaceInfo，但注意这可能会有性能开销
-	// 考虑到 GetPerformanceStats 是管理接口，频率较低，直接调用是可以接受的
-	// 但为了一致性，我们也可以考虑从 SystemStatus 中获取部分信息
-	diskSpaceInfo = common.GetDiskSpaceInfo()
+	diskSpaceInfo := common.GetDiskSpaceInfo()
 
 	stats := PerformanceStats{
 		CacheStats: cacheStats,
@@ -131,6 +128,7 @@ func GetPerformanceStats(c *gin.Context) {
 		DiskCacheInfo: diskCacheInfo,
 		DiskSpaceInfo: diskSpaceInfo,
 		Config:        config,
+		ResourceStats: systemStatus.ResourceStats,
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -176,11 +174,7 @@ func ForceGC(c *gin.Context) {
 }
 
 // LogFileInfo 日志文件信息
-type LogFileInfo struct {
-	Name    string    `json:"name"`
-	Size    int64     `json:"size"`
-	ModTime time.Time `json:"mod_time"`
-}
+type LogFileInfo = logger.LogFileInfo
 
 // LogFilesResponse 日志文件列表响应
 type LogFilesResponse struct {
@@ -191,50 +185,24 @@ type LogFilesResponse struct {
 	OldestTime *time.Time    `json:"oldest_time,omitempty"`
 	NewestTime *time.Time    `json:"newest_time,omitempty"`
 	Files      []LogFileInfo `json:"files"`
-}
-
-// getLogFiles 读取日志目录中的日志文件列表
-func getLogFiles() ([]LogFileInfo, error) {
-	if *common.LogDir == "" {
-		return nil, nil
-	}
-	entries, err := os.ReadDir(*common.LogDir)
-	if err != nil {
-		return nil, err
-	}
-	var files []LogFileInfo
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !strings.HasPrefix(name, "oneapi-") || !strings.HasSuffix(name, ".log") {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		files = append(files, LogFileInfo{
-			Name:    name,
-			Size:    info.Size(),
-			ModTime: info.ModTime(),
-		})
-	}
-	// 按文件名降序排列（最新在前）
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Name > files[j].Name
-	})
-	return files, nil
+	// AutoCleanupEnabled 是否启用后台自动清理
+	AutoCleanupEnabled bool `json:"auto_cleanup_enabled"`
+	// RetentionDays 自动保留天数
+	RetentionDays int `json:"retention_days"`
 }
 
 // GetLogFiles 获取日志文件列表
 func GetLogFiles(c *gin.Context) {
+	retentionDays := common.GetServerLogRetentionDays()
 	if *common.LogDir == "" {
-		common.ApiSuccess(c, LogFilesResponse{Enabled: false})
+		common.ApiSuccess(c, LogFilesResponse{
+			Enabled:            false,
+			AutoCleanupEnabled: retentionDays > 0,
+			RetentionDays:      retentionDays,
+		})
 		return
 	}
-	files, err := getLogFiles()
+	files, err := logger.ListLogFiles(*common.LogDir)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -251,11 +219,13 @@ func GetLogFiles(c *gin.Context) {
 		}
 	}
 	resp := LogFilesResponse{
-		LogDir:    *common.LogDir,
-		Enabled:   true,
-		FileCount: len(files),
-		TotalSize: totalSize,
-		Files:     files,
+		LogDir:             *common.LogDir,
+		Enabled:            true,
+		FileCount:          len(files),
+		TotalSize:          totalSize,
+		Files:              files,
+		AutoCleanupEnabled: retentionDays > 0,
+		RetentionDays:      retentionDays,
 	}
 	if len(files) > 0 {
 		resp.OldestTime = &oldest
@@ -282,64 +252,22 @@ func CleanupLogFiles(c *gin.Context) {
 		return
 	}
 
-	files, err := getLogFiles()
+	cleanupResult, err := logger.CleanupLogFiles(*common.LogDir, mode, value, time.Now())
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 
-	activeLogPath := logger.GetCurrentLogPath()
-	var toDelete []LogFileInfo
-
-	switch mode {
-	case "by_count":
-		// files 已按名称降序（最新在前），保留前 value 个
-		for i, f := range files {
-			if i < value {
-				continue
-			}
-			fullPath := filepath.Join(*common.LogDir, f.Name)
-			if fullPath == activeLogPath {
-				continue
-			}
-			toDelete = append(toDelete, f)
-		}
-	case "by_days":
-		cutoff := time.Now().AddDate(0, 0, -value)
-		for _, f := range files {
-			if f.ModTime.Before(cutoff) {
-				fullPath := filepath.Join(*common.LogDir, f.Name)
-				if fullPath == activeLogPath {
-					continue
-				}
-				toDelete = append(toDelete, f)
-			}
-		}
-	}
-
-	var deletedCount int
-	var freedBytes int64
-	var failedFiles []string
-	for _, f := range toDelete {
-		fullPath := filepath.Join(*common.LogDir, f.Name)
-		if err := os.Remove(fullPath); err != nil {
-			failedFiles = append(failedFiles, f.Name)
-			continue
-		}
-		deletedCount++
-		freedBytes += f.Size
-	}
-
 	result := gin.H{
-		"deleted_count": deletedCount,
-		"freed_bytes":   freedBytes,
-		"failed_files":  failedFiles,
+		"deleted_count": cleanupResult.DeletedCount,
+		"freed_bytes":   cleanupResult.FreedBytes,
+		"failed_files":  cleanupResult.FailedFiles,
 	}
 
-	if len(failedFiles) > 0 {
+	if len(cleanupResult.FailedFiles) > 0 {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": fmt.Sprintf("部分文件删除失败（%d/%d）", len(failedFiles), len(toDelete)),
+			"message": fmt.Sprintf("部分文件删除失败（%d/%d）", len(cleanupResult.FailedFiles), cleanupResult.AttemptedCount),
 			"data":    result,
 		})
 		return

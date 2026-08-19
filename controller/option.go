@@ -224,6 +224,23 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
+	case "performance_setting.server_log_retention_days":
+		retentionDays, parseErr := strconv.Atoi(option.Value.(string))
+		if parseErr != nil || retentionDays < 0 || retentionDays > common.MaxServerLogRetentionDays {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "服务器日志自动保留天数必须是 0 到 3650 的整数",
+			})
+			return
+		}
+	case "performance_setting.monitor_resource_scope":
+		if option.Value != common.ResourceScopeHost && option.Value != common.ResourceScopeContainer {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "资源监控口径只支持 host 或 container",
+			})
+			return
+		}
 	case "GroupRatio":
 		err = ratio_setting.CheckGroupRatio(option.Value.(string))
 		if err != nil {

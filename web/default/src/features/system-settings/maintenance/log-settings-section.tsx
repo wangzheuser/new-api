@@ -24,6 +24,7 @@ import { toast } from 'sonner'
 import * as z from 'zod'
 
 import { DateTimePicker } from '@/components/datetime-picker'
+import { StatusBadge } from '@/components/status-badge'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   AlertDialog,
@@ -42,6 +43,7 @@ import {
   FormControl,
   FormDescription,
   FormField,
+  FormItem,
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
@@ -77,15 +79,20 @@ import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import type { LogCleanupTask } from '../types'
+import { safeNumberFieldProps } from '../utils/numeric-field'
 
 const logSettingsSchema = z.object({
   LogConsumeEnabled: z.boolean(),
+  performance_setting: z.object({
+    server_log_retention_days: z.number().int().min(0).max(3650),
+  }),
 })
 
 type LogSettingsFormValues = z.infer<typeof logSettingsSchema>
 
 type LogSettingsSectionProps = {
   defaultEnabled: boolean
+  defaultRetentionDays: number
 }
 
 type ServerLogInfo = {
@@ -95,6 +102,8 @@ type ServerLogInfo = {
   total_size: number
   oldest_time?: string
   newest_time?: string
+  auto_cleanup_enabled?: boolean
+  retention_days?: number
 }
 
 const HOURS_IN_DAY = 24
@@ -139,15 +148,16 @@ function isActiveLogCleanupTask(task: LogCleanupTask | null) {
   return task?.status === 'pending' || task?.status === 'running'
 }
 
-export function LogSettingsSection({
-  defaultEnabled,
-}: LogSettingsSectionProps) {
+export function LogSettingsSection(props: LogSettingsSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
   const form = useForm<LogSettingsFormValues>({
     resolver: zodResolver(logSettingsSchema),
     defaultValues: {
-      LogConsumeEnabled: defaultEnabled,
+      LogConsumeEnabled: props.defaultEnabled,
+      performance_setting: {
+        server_log_retention_days: props.defaultRetentionDays,
+      },
     },
   })
 
@@ -174,8 +184,13 @@ export function LogSettingsSection({
   }, [])
 
   useEffect(() => {
-    form.reset({ LogConsumeEnabled: defaultEnabled })
-  }, [defaultEnabled, form])
+    form.reset({
+      LogConsumeEnabled: props.defaultEnabled,
+      performance_setting: {
+        server_log_retention_days: props.defaultRetentionDays,
+      },
+    })
+  }, [form, props.defaultEnabled, props.defaultRetentionDays])
 
   useEffect(() => {
     fetchServerLogInfo()
@@ -257,11 +272,22 @@ export function LogSettingsSection({
   }, [logCleanupActive, logCleanupTaskId, t])
 
   const onSubmit = async (values: LogSettingsFormValues) => {
-    if (values.LogConsumeEnabled === defaultEnabled) return
-    await updateOption.mutateAsync({
-      key: 'LogConsumeEnabled',
-      value: values.LogConsumeEnabled,
-    })
+    if (values.LogConsumeEnabled !== props.defaultEnabled) {
+      await updateOption.mutateAsync({
+        key: 'LogConsumeEnabled',
+        value: values.LogConsumeEnabled,
+      })
+    }
+    if (
+      values.performance_setting.server_log_retention_days !==
+      props.defaultRetentionDays
+    ) {
+      await updateOption.mutateAsync({
+        key: 'performance_setting.server_log_retention_days',
+        value: values.performance_setting.server_log_retention_days,
+      })
+      fetchServerLogInfo()
+    }
   }
 
   const handleRequestCleanLogs = () => {
@@ -364,6 +390,31 @@ export function LogSettingsSection({
                 </FormControl>
                 <FormMessage />
               </SettingsSwitchItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name='performance_setting.server_log_retention_days'
+            render={({ field }) => (
+              <FormItem className='max-w-sm'>
+                <FormLabel>{t('Automatic server log retention')}</FormLabel>
+                <FormControl>
+                  <Input
+                    type='number'
+                    min={0}
+                    max={3650}
+                    step={1}
+                    {...safeNumberFieldProps(field)}
+                  />
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'Keep server log files for this many days. Set to 0 to disable automatic cleanup.'
+                  )}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
             )}
           />
 
@@ -473,6 +524,18 @@ export function LogSettingsSection({
                       {dayjs(serverLogInfo.newest_time).format('YYYY-MM-DD')}
                     </div>
                   )}
+                </div>
+                <div className='mt-3 flex flex-wrap gap-2'>
+                  <StatusBadge variant='neutral' copyable={false}>
+                    {t('Automatic cleanup')}:{' '}
+                    {serverLogInfo.auto_cleanup_enabled
+                      ? t('Enabled')
+                      : t('Disabled')}
+                  </StatusBadge>
+                  <StatusBadge variant='neutral' copyable={false}>
+                    {t('Retention days')}:{' '}
+                    {serverLogInfo.retention_days ?? props.defaultRetentionDays}
+                  </StatusBadge>
                 </div>
               </div>
 
