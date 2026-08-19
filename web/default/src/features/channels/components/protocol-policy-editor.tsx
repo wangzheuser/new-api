@@ -6,7 +6,14 @@ it under the terms of the GNU Affero General Public License as
 published by the Free Software Foundation, either version 3 of the
 License, or (at your option) any later version.
 */
-import { Loader2, OctagonX, Play, Square, Wand2 } from 'lucide-react'
+import {
+  ChevronDown,
+  Loader2,
+  OctagonX,
+  Play,
+  Square,
+  Wand2,
+} from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -14,6 +21,11 @@ import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -26,24 +38,27 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 
 import { probeChannelNativeProtocol } from '../api'
+import {
+  applyNativeProtocolProbeResults,
+  createNativeProtocolProbeBatch,
+  isNativeProtocolProbeBatchComplete,
+  nativeProtocolProbeKey,
+  parseModelOverridesDraft,
+  promoteCommonModelProtocolCapabilities,
+  summarizeModelProtocolOverrides,
+  TEXT_PROTOCOLS,
+  type NativeProtocolProbeBatch,
+  type NativeProtocolProbeResultMap,
+} from '../lib/protocol-policy'
 import type {
   ChannelNativeProbeResponse,
   ChannelProtocolPolicy,
-  ModelProtocolProfile,
   ProtocolCapability,
   TextEndpointType,
 } from '../types'
 
-const TEXT_PROTOCOLS: TextEndpointType[] = [
-  'openai',
-  'openai-response',
-  'anthropic',
-  'gemini',
-]
 const PROBE_CONCURRENCY = 2
 const MAX_PROBE_MODELS = 10
-
-type ProbeResultMap = Record<string, ChannelNativeProbeResponse>
 
 type ProtocolPolicyEditorProps = {
   channelId?: number
@@ -76,14 +91,6 @@ function parsePolicy(value?: string): ChannelProtocolPolicy | null {
   } catch {
     return null
   }
-}
-
-function probeKey(
-  model: string,
-  endpointType: TextEndpointType,
-  stream: boolean
-) {
-  return `${model}\u0000${endpointType}\u0000${stream ? 'stream' : 'normal'}`
 }
 
 function capabilityFor(
@@ -125,10 +132,15 @@ export function ProtocolPolicyEditor({
   const policyEditable = channelType === 1
   const probeSupported = channelType === 1 || channelType === 58
   const [selectedModels, setSelectedModels] = useState<string[]>([])
-  const [probeResults, setProbeResults] = useState<ProbeResultMap>({})
+  const [probeResults, setProbeResults] =
+    useState<NativeProtocolProbeResultMap>({})
+  const [probeBatch, setProbeBatch] = useState<NativeProtocolProbeBatch | null>(
+    null
+  )
   const [probeProgress, setProbeProgress] = useState({ completed: 0, total: 0 })
   const [isProbing, setIsProbing] = useState(false)
   const [overridesDraft, setOverridesDraft] = useState('{}')
+  const [defaultProtocolsOpen, setDefaultProtocolsOpen] = useState(false)
   const stopRequestedRef = useRef(false)
 
   useEffect(() => {
@@ -156,27 +168,22 @@ export function ProtocolPolicyEditor({
   }
 
   const applyOverridesDraft = () => {
-    try {
-      const overrides = JSON.parse(overridesDraft) as Record<
-        string,
-        ModelProtocolProfile
-      >
-      if (
-        !overrides ||
-        typeof overrides !== 'object' ||
-        Array.isArray(overrides)
-      ) {
-        throw new Error(t('Model overrides must be a JSON object'))
-      }
-      const nextPolicy = structuredClone(policy ?? createDefaultPolicy())
-      nextPolicy.model_overrides = overrides
-      writePolicy(nextPolicy)
-      toast.success(t('Model protocol overrides updated in the current form'))
-    } catch (error) {
+    const parsedDraft = parseModelOverridesDraft(overridesDraft)
+    if (!parsedDraft.success) {
       toast.error(
-        error instanceof Error ? error.message : t('Invalid model overrides')
+        t(
+          parsedDraft.error === 'not_object'
+            ? 'Model overrides must be a JSON object'
+            : 'Invalid model overrides'
+        )
       )
+      return
     }
+
+    const nextPolicy = structuredClone(policy ?? createDefaultPolicy())
+    nextPolicy.model_overrides = parsedDraft.value
+    writePolicy(nextPolicy)
+    toast.success(t('Model protocol overrides updated in the current form'))
   }
 
   const toggleSelectedModel = (model: string, checked: boolean) => {
@@ -193,7 +200,8 @@ export function ProtocolPolicyEditor({
 
   const runNativeProbe = async () => {
     if (!channelId || selectedModels.length === 0) return
-    const tasks = selectedModels.flatMap((model) =>
+    const batch = createNativeProtocolProbeBatch(selectedModels)
+    const tasks = batch.models.flatMap((model) =>
       TEXT_PROTOCOLS.flatMap((endpointType) => [
         { model, endpointType, stream: false },
         { model, endpointType, stream: true },
@@ -201,6 +209,7 @@ export function ProtocolPolicyEditor({
     )
     stopRequestedRef.current = false
     setProbeResults({})
+    setProbeBatch(batch)
     setProbeProgress({ completed: 0, total: tasks.length })
     setIsProbing(true)
     let cursor = 0
@@ -220,14 +229,22 @@ export function ProtocolPolicyEditor({
           })
           setProbeResults((current) => ({
             ...current,
-            [probeKey(task.model, task.endpointType, task.stream)]: result,
+            [nativeProtocolProbeKey(
+              task.model,
+              task.endpointType,
+              task.stream
+            )]: result,
           }))
         } catch (error) {
           const message =
             error instanceof Error ? error.message : t('Probe failed')
           setProbeResults((current) => ({
             ...current,
-            [probeKey(task.model, task.endpointType, task.stream)]: {
+            [nativeProtocolProbeKey(
+              task.model,
+              task.endpointType,
+              task.stream
+            )]: {
               success: false,
               message,
               model: task.model,
@@ -249,6 +266,9 @@ export function ProtocolPolicyEditor({
     await Promise.all(Array.from({ length: PROBE_CONCURRENCY }, worker))
     setIsProbing(false)
     if (stopRequestedRef.current) {
+      setProbeBatch((current) =>
+        current === batch ? { ...batch, stopped: true } : current
+      )
       toast.info(t('Protocol probe stopped'))
     } else {
       toast.success(t('Protocol probe completed'))
@@ -256,32 +276,84 @@ export function ProtocolPolicyEditor({
   }
 
   const applyProbeResults = () => {
-    if (!policyEditable) return
-    const nextPolicy = structuredClone(policy ?? createDefaultPolicy())
-    const overrides = { ...nextPolicy.model_overrides }
-    for (const model of selectedModels) {
-      const native: ModelProtocolProfile['native'] = {}
-      for (const endpointType of TEXT_PROTOCOLS) {
-        const nonStream =
-          probeResults[probeKey(model, endpointType, false)]?.classification ===
-          'confirmed'
-        const stream =
-          probeResults[probeKey(model, endpointType, true)]?.classification ===
-          'confirmed'
-        if (nonStream || stream) {
-          native[endpointType] = { non_stream: nonStream, stream }
-        }
-      }
-      if (Object.keys(native).length > 0) {
-        overrides[model] = { native }
-      }
+    if (!policyEditable || !probeBatch) return
+
+    const parsedDraft = parseModelOverridesDraft(overridesDraft)
+    if (!parsedDraft.success) {
+      toast.error(
+        t(
+          parsedDraft.error === 'not_object'
+            ? 'Model overrides must be a JSON object'
+            : 'Invalid model overrides'
+        )
+      )
+      return
     }
+
+    const overrides = applyNativeProtocolProbeResults(
+      parsedDraft.value,
+      probeBatch,
+      probeResults
+    )
+    if (!overrides) return
+
+    const nextPolicy = structuredClone(policy ?? createDefaultPolicy())
     nextPolicy.model_overrides = overrides
     writePolicy(nextPolicy)
     toast.success(t('Probe results applied to the current form'))
   }
 
   const completedResults = Object.keys(probeResults).length
+  const probeBatchComplete = isNativeProtocolProbeBatchComplete(
+    probeBatch,
+    probeResults
+  )
+  const parsedOverridesDraft = useMemo(
+    () => parseModelOverridesDraft(overridesDraft),
+    [overridesDraft]
+  )
+  const visibleOverrides = parsedOverridesDraft.success
+    ? parsedOverridesDraft.value
+    : {}
+  const coverageSummary = summarizeModelProtocolOverrides(
+    models,
+    visibleOverrides
+  )
+  const commonCapabilitiesPromotion = promoteCommonModelProtocolCapabilities(
+    models,
+    visibleOverrides
+  )
+  const commonCapabilitiesPromotionAvailable = Boolean(
+    commonCapabilitiesPromotion &&
+    (TEXT_PROTOCOLS.some((endpointType) => {
+      const currentCapability = policy?.native[endpointType]
+      const promotedCapability =
+        commonCapabilitiesPromotion.native[endpointType]
+      return (
+        Boolean(currentCapability?.non_stream) !==
+          Boolean(promotedCapability?.non_stream) ||
+        Boolean(currentCapability?.stream) !==
+          Boolean(promotedCapability?.stream)
+      )
+    }) ||
+      Object.keys(commonCapabilitiesPromotion.modelOverrides).length !==
+        Object.keys(visibleOverrides).length)
+  )
+  const defaultProtocolLabels = TEXT_PROTOCOLS.filter((endpointType) => {
+    const capability = policy?.native[endpointType]
+    return capability?.non_stream || capability?.stream
+  }).map((endpointType) => protocolLabels[endpointType])
+
+  const promoteCommonCapabilities = () => {
+    if (!policy || !commonCapabilitiesPromotion) return
+
+    const nextPolicy = structuredClone(policy)
+    nextPolicy.native = commonCapabilitiesPromotion.native
+    nextPolicy.model_overrides = commonCapabilitiesPromotion.modelOverrides
+    writePolicy(nextPolicy)
+    setDefaultProtocolsOpen(true)
+    toast.success(t('Common model capabilities set as channel default'))
+  }
 
   return (
     <div className='space-y-5'>
@@ -305,44 +377,155 @@ export function ProtocolPolicyEditor({
 
           {policy && (
             <>
-              <div className='overflow-hidden rounded-md border'>
-                <div className='bg-muted/40 grid grid-cols-[minmax(140px,1fr)_100px_100px] gap-2 px-3 py-2 text-xs font-medium'>
-                  <span>{t('Native protocol')}</span>
-                  <span>{t('Normal')}</span>
-                  <span>{t('Streaming')}</span>
-                </div>
-                {TEXT_PROTOCOLS.map((protocol) => {
-                  const capability = capabilityFor(policy, protocol)
-                  return (
-                    <div
-                      key={protocol}
-                      className='grid grid-cols-[minmax(140px,1fr)_100px_100px] items-center gap-2 border-t px-3 py-2'
-                    >
-                      <span className='text-sm font-medium'>
-                        {protocolLabels[protocol]}
-                      </span>
-                      <Checkbox
-                        checked={capability.non_stream}
-                        disabled={disabled}
-                        onCheckedChange={(checked) =>
-                          updateCapability(
-                            protocol,
-                            'non_stream',
-                            checked === true
-                          )
+              {coverageSummary.coveredModels > 0 && (
+                <div className='space-y-2'>
+                  <div>
+                    <Label>{t('Model protocol capability summary')}</Label>
+                    <p className='text-muted-foreground mt-1 text-xs'>
+                      {t(
+                        '{{covered}} of {{total}} channel models have protocol overrides',
+                        {
+                          covered: coverageSummary.coveredModels,
+                          total: coverageSummary.totalModels,
                         }
-                      />
-                      <Checkbox
-                        checked={capability.stream}
-                        disabled={disabled}
-                        onCheckedChange={(checked) =>
-                          updateCapability(protocol, 'stream', checked === true)
-                        }
-                      />
+                      )}
+                    </p>
+                    <p className='text-muted-foreground mt-1 text-xs'>
+                      {t(
+                        'This summary shows model overrides and does not change channel defaults'
+                      )}
+                    </p>
+                  </div>
+                  <div className='overflow-hidden rounded-md border'>
+                    <div className='bg-muted/40 grid grid-cols-[minmax(140px,1fr)_110px_110px] gap-2 px-3 py-2 text-xs font-medium'>
+                      <span>{t('Native protocol')}</span>
+                      <span>{t('Normal')}</span>
+                      <span>{t('Streaming')}</span>
                     </div>
-                  )
-                })}
-              </div>
+                    {TEXT_PROTOCOLS.map((protocol) => {
+                      const counts = coverageSummary.capabilities[protocol]
+                      const total = coverageSummary.coveredModels
+                      return (
+                        <div
+                          key={protocol}
+                          className='grid grid-cols-[minmax(140px,1fr)_110px_110px] items-center gap-2 border-t px-3 py-2'
+                        >
+                          <span className='text-sm font-medium'>
+                            {protocolLabels[protocol]}
+                          </span>
+                          <div className='flex items-center gap-2'>
+                            <Checkbox
+                              checked={counts.nonStream === total}
+                              disabled
+                            />
+                            <span className='text-muted-foreground text-xs'>
+                              {counts.nonStream}/{total}
+                            </span>
+                          </div>
+                          <div className='flex items-center gap-2'>
+                            <Checkbox
+                              checked={counts.stream === total}
+                              disabled
+                            />
+                            <span className='text-muted-foreground text-xs'>
+                              {counts.stream}/{total}
+                            </span>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                  {commonCapabilitiesPromotionAvailable && (
+                    <div className='bg-muted/30 flex flex-wrap items-center justify-between gap-3 rounded-md border px-3 py-2'>
+                      <p className='text-muted-foreground text-xs'>
+                        {t(
+                          'All channel models are covered; their common capabilities can be used as the channel default'
+                        )}
+                      </p>
+                      <Button
+                        type='button'
+                        size='sm'
+                        variant='outline'
+                        disabled={disabled}
+                        onClick={promoteCommonCapabilities}
+                      >
+                        {t('Set common capabilities as channel default')}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <Collapsible
+                open={defaultProtocolsOpen}
+                onOpenChange={setDefaultProtocolsOpen}
+                className='overflow-hidden rounded-md border'
+              >
+                <CollapsibleTrigger className='hover:bg-muted/40 flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left'>
+                  <div>
+                    <div className='text-sm font-medium'>
+                      {t('Default protocols for uncovered models')}
+                    </div>
+                    <p className='text-muted-foreground mt-1 text-xs'>
+                      {t(
+                        'Used only by models without a model protocol override'
+                      )}
+                    </p>
+                  </div>
+                  <div className='flex shrink-0 items-center gap-2'>
+                    <Badge variant='outline'>
+                      {defaultProtocolLabels.join(', ')}
+                    </Badge>
+                    <ChevronDown
+                      className={`text-muted-foreground h-4 w-4 transition-transform ${
+                        defaultProtocolsOpen ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </div>
+                </CollapsibleTrigger>
+                <CollapsibleContent className='border-t'>
+                  <div className='bg-muted/40 grid grid-cols-[minmax(140px,1fr)_100px_100px] gap-2 px-3 py-2 text-xs font-medium'>
+                    <span>{t('Native protocol')}</span>
+                    <span>{t('Normal')}</span>
+                    <span>{t('Streaming')}</span>
+                  </div>
+                  {TEXT_PROTOCOLS.map((protocol) => {
+                    const capability = capabilityFor(policy, protocol)
+                    return (
+                      <div
+                        key={protocol}
+                        className='grid grid-cols-[minmax(140px,1fr)_100px_100px] items-center gap-2 border-t px-3 py-2'
+                      >
+                        <span className='text-sm font-medium'>
+                          {protocolLabels[protocol]}
+                        </span>
+                        <Checkbox
+                          checked={capability.non_stream}
+                          disabled={disabled}
+                          onCheckedChange={(checked) =>
+                            updateCapability(
+                              protocol,
+                              'non_stream',
+                              checked === true
+                            )
+                          }
+                        />
+                        <Checkbox
+                          checked={capability.stream}
+                          disabled={disabled}
+                          onCheckedChange={(checked) =>
+                            updateCapability(
+                              protocol,
+                              'stream',
+                              checked === true
+                            )
+                          }
+                        />
+                      </div>
+                    )
+                  })}
+                </CollapsibleContent>
+              </Collapsible>
 
               <div className='grid gap-4 md:grid-cols-2'>
                 <div className='flex items-center justify-between rounded-md border px-3 py-2'>
@@ -445,7 +628,7 @@ export function ProtocolPolicyEditor({
                   type='button'
                   size='sm'
                   variant='outline'
-                  disabled={disabled || isProbing || completedResults === 0}
+                  disabled={disabled || isProbing || !probeBatchComplete}
                   onClick={applyProbeResults}
                 >
                   <Wand2 className='mr-2 h-3.5 w-3.5' />
@@ -494,15 +677,19 @@ export function ProtocolPolicyEditor({
 
           {completedResults > 0 && (
             <div className='space-y-3'>
-              {selectedModels.map((model) => (
+              {probeBatch?.models.map((model) => (
                 <div key={model} className='space-y-2 rounded-md border p-3'>
                   <div className='truncate text-sm font-medium'>{model}</div>
                   <div className='grid gap-2 sm:grid-cols-2'>
                     {TEXT_PROTOCOLS.map((protocol) => {
                       const normal =
-                        probeResults[probeKey(model, protocol, false)]
+                        probeResults[
+                          nativeProtocolProbeKey(model, protocol, false)
+                        ]
                       const stream =
-                        probeResults[probeKey(model, protocol, true)]
+                        probeResults[
+                          nativeProtocolProbeKey(model, protocol, true)
+                        ]
                       return (
                         <div
                           key={protocol}

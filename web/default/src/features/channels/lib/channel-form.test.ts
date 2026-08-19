@@ -24,6 +24,7 @@ import {
   CHANNEL_FORM_DEFAULT_VALUES,
   transformChannelToFormDefaults,
   transformFormDataToCreatePayload,
+  transformFormDataToUpdatePayload,
 } from './channel-form'
 
 /**
@@ -131,5 +132,32 @@ describe('channel system prompt form defaults', () => {
 
     assert.equal(setting.system_prompt, 'channel prompt')
     assert.equal(setting.system_prompt_override, false)
+  })
+})
+
+describe('channel protocol policy persistence', () => {
+  test('persists and reloads an explicitly empty model override object', () => {
+    const protocolPolicy = {
+      native: { openai: { non_stream: true, stream: true } },
+      model_overrides: {},
+      auto_convert: true,
+      max_quality: 'fair',
+    }
+    const payload = transformFormDataToUpdatePayload(
+      {
+        ...CHANNEL_FORM_DEFAULT_VALUES,
+        name: 'test channel',
+        models: 'MODEL_A',
+        protocol_policy: JSON.stringify(protocolPolicy),
+      },
+      1
+    )
+    const setting = JSON.parse(String(payload.setting))
+    const defaults = transformChannelToFormDefaults(
+      createChannel(setting as Record<string, unknown>)
+    )
+
+    assert.deepEqual(setting.protocol_policy, protocolPolicy)
+    assert.deepEqual(JSON.parse(defaults.protocol_policy || ''), protocolPolicy)
   })
 })

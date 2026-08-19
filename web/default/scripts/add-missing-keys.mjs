@@ -504,6 +504,91 @@ const newKeys = {
   },
 }
 
+const protocolPolicyRows = [
+  [
+    'Model protocol capability summary',
+    '模型协议能力汇总',
+    '模型協議能力彙總',
+    'Résumé des capacités par modèle',
+    'モデルプロトコル能力の概要',
+    'Сводка возможностей протоколов моделей',
+    'Tổng hợp khả năng giao thức theo mô hình',
+  ],
+  [
+    '{{covered}} of {{total}} channel models have protocol overrides',
+    '{{covered}} / {{total}} 个渠道模型已配置协议覆盖',
+    '{{covered}} / {{total}} 個渠道模型已設定協議覆寫',
+    '{{covered}} modèles de canal sur {{total}} ont une substitution de protocole',
+    '{{total}} 個のチャネルモデルのうち {{covered}} 個にプロトコル上書きがあります',
+    'Для {{covered}} из {{total}} моделей канала настроены переопределения протоколов',
+    '{{covered}}/{{total}} mô hình của kênh có ghi đè giao thức',
+  ],
+  [
+    'This summary shows model overrides and does not change channel defaults',
+    '此汇总仅展示模型覆盖，不会更改渠道默认配置',
+    '此彙總僅顯示模型覆寫，不會變更渠道預設設定',
+    'Ce résumé affiche les substitutions par modèle sans modifier les valeurs par défaut du canal',
+    'この概要はモデル上書きのみを表示し、チャネルの既定値は変更しません',
+    'Эта сводка показывает переопределения моделей и не меняет настройки канала по умолчанию',
+    'Phần tổng hợp này chỉ hiển thị ghi đè theo mô hình và không đổi mặc định của kênh',
+  ],
+  [
+    'All channel models are covered; their common capabilities can be used as the channel default',
+    '所有渠道模型均已覆盖，可将其共同能力设为渠道默认',
+    '所有渠道模型均已覆寫，可將其共同能力設為渠道預設',
+    'Tous les modèles du canal sont couverts ; leurs capacités communes peuvent devenir la valeur par défaut',
+    'すべてのチャネルモデルが上書き済みです。共通能力をチャネルの既定値に設定できます',
+    'Все модели канала охвачены; их общие возможности можно использовать по умолчанию',
+    'Tất cả mô hình của kênh đã được bao phủ; có thể dùng khả năng chung làm mặc định',
+  ],
+  [
+    'Set common capabilities as channel default',
+    '将共同能力设为渠道默认',
+    '將共同能力設為渠道預設',
+    'Définir les capacités communes par défaut',
+    '共通能力をチャネルの既定値に設定',
+    'Использовать общие возможности по умолчанию',
+    'Đặt khả năng chung làm mặc định của kênh',
+  ],
+  [
+    'Default protocols for uncovered models',
+    '未覆盖模型的默认协议',
+    '未覆寫模型的預設協議',
+    'Protocoles par défaut des modèles non couverts',
+    '未上書きモデルの既定プロトコル',
+    'Протоколы по умолчанию для моделей без переопределения',
+    'Giao thức mặc định cho mô hình chưa được bao phủ',
+  ],
+  [
+    'Used only by models without a model protocol override',
+    '仅用于没有模型协议覆盖的模型',
+    '僅用於沒有模型協議覆寫的模型',
+    'Utilisé uniquement par les modèles sans substitution de protocole',
+    'モデルプロトコル上書きがないモデルにのみ使用されます',
+    'Используется только для моделей без переопределения протокола',
+    'Chỉ dùng cho mô hình không có ghi đè giao thức',
+  ],
+  [
+    'Common model capabilities set as channel default',
+    '已将模型共同能力设为渠道默认',
+    '已將模型共同能力設為渠道預設',
+    'Les capacités communes sont définies par défaut pour le canal',
+    'モデルの共通能力をチャネルの既定値に設定しました',
+    'Общие возможности моделей установлены для канала по умолчанию',
+    'Đã đặt khả năng chung của mô hình làm mặc định của kênh',
+  ],
+]
+
+for (const [key, zh, zhTW, fr, ja, ru, vi] of protocolPolicyRows) {
+  Object.assign(newKeys.en, { [key]: key })
+  Object.assign(newKeys.zh, { [key]: zh })
+  Object.assign(newKeys['zh-TW'], { [key]: zhTW })
+  Object.assign(newKeys.fr, { [key]: fr })
+  Object.assign(newKeys.ja, { [key]: ja })
+  Object.assign(newKeys.ru, { [key]: ru })
+  Object.assign(newKeys.vi, { [key]: vi })
+}
+
 // Independent user/group rate-limit management page.
 // Keep the rows compact while still supplying every locale in one operation.
 const userRateLimitRows = [
