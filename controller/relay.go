@@ -363,7 +363,7 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, ws *
 		return
 	}
 	if relayFormat == types.RelayFormatOpenAIRealtime {
-		helper.WssError(c, ws, newAPIError.ToOpenAIError())
+		helper.WssError(c, ws, relayClientOpenAIError(newAPIError))
 		return
 	}
 
@@ -383,12 +383,12 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, ws *
 		if relayFormat == types.RelayFormatClaude {
 			_ = helper.ClaudeData(c, dto.ClaudeResponse{
 				Type:  "error",
-				Error: newAPIError.ToClaudeError(),
+				Error: relayClientClaudeError(newAPIError),
 			})
 			return
 		}
 		if relayFormat == types.RelayFormatOpenAIResponses {
-			openAIError := newAPIError.ToOpenAIError()
+			openAIError := relayClientOpenAIError(newAPIError)
 			streamError := dto.ResponsesStreamResponse{
 				Type:    "error",
 				Code:    openAIError.Code,
@@ -405,7 +405,7 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, ws *
 			}
 			return
 		}
-		if err := helper.ObjectData(c, gin.H{"error": newAPIError.ToOpenAIError()}); err != nil {
+		if err := helper.ObjectData(c, gin.H{"error": relayClientOpenAIError(newAPIError)}); err != nil {
 			logger.LogError(c, "write stream error failed: "+err.Error())
 		}
 		return
@@ -415,7 +415,7 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, ws *
 		prepareRelayErrorHeaders(c)
 		c.JSON(newAPIError.StatusCode, gin.H{
 			"type":  "error",
-			"error": newAPIError.ToClaudeError(),
+			"error": relayClientClaudeError(newAPIError),
 		})
 		return
 	}
@@ -424,7 +424,7 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, ws *
 		c.JSON(newAPIError.StatusCode, dto.GeminiErrorResponse{
 			Error: dto.GeminiError{
 				Code:    newAPIError.StatusCode,
-				Message: newAPIError.ToOpenAIError().Message,
+				Message: relayClientOpenAIError(newAPIError).Message,
 				Status:  geminiCanonicalErrorStatus(newAPIError.StatusCode),
 			},
 		})
@@ -432,8 +432,22 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, ws *
 	}
 	prepareRelayErrorHeaders(c)
 	c.JSON(newAPIError.StatusCode, gin.H{
-		"error": newAPIError.ToOpenAIError(),
+		"error": relayClientOpenAIError(newAPIError),
 	})
+}
+
+// relayClientOpenAIError 使用当前错误消息生成 OpenAI 协议错误，保留请求 ID 等网关补充信息。
+func relayClientOpenAIError(newAPIError *types.NewAPIError) types.OpenAIError {
+	openAIError := newAPIError.ToOpenAIError()
+	openAIError.Message = newAPIError.MaskSensitiveError()
+	return openAIError
+}
+
+// relayClientClaudeError 使用当前错误消息生成 Claude 协议错误，保留请求 ID 等网关补充信息。
+func relayClientClaudeError(newAPIError *types.NewAPIError) types.ClaudeError {
+	claudeError := newAPIError.ToClaudeError()
+	claudeError.Message = newAPIError.MaskSensitiveError()
+	return claudeError
 }
 
 // geminiCanonicalErrorStatus maps HTTP status codes to Google RPC canonical status names.
@@ -492,40 +506,37 @@ func CountTokens(c *gin.Context) {
 			http.StatusBadRequest,
 			types.ErrOptionWithSkipRetry(),
 		)
-		c.JSON(newAPIError.StatusCode, gin.H{
-			"type":  "error",
-			"error": newAPIError.ToClaudeError(),
-		})
+		writeCountTokensErrorResponse(c, newAPIError)
 		return
 	}
 
 	relayInfo, err := relaycommon.GenRelayInfo(c, types.RelayFormatClaude, request, nil)
 	if err != nil {
 		newAPIError := types.NewError(err, types.ErrorCodeGenRelayInfoFailed, types.ErrOptionWithSkipRetry())
-		c.JSON(newAPIError.StatusCode, gin.H{
-			"type":  "error",
-			"error": newAPIError.ToClaudeError(),
-		})
+		writeCountTokensErrorResponse(c, newAPIError)
 		return
 	}
 	if modalityErr := helper.ValidateRequestInputModalities(c, relayInfo.GetRequestedModelName(), request); modalityErr != nil {
-		c.JSON(modalityErr.StatusCode, gin.H{
-			"type":  "error",
-			"error": modalityErr.ToClaudeError(),
-		})
+		writeCountTokensErrorResponse(c, modalityErr)
 		return
 	}
 
 	tokens, err := service.CountRequestToken(c, request.GetTokenCountMeta(), relayInfo)
 	if err != nil {
 		newAPIError := types.NewError(err, types.ErrorCodeCountTokenFailed, types.ErrOptionWithSkipRetry())
-		c.JSON(newAPIError.StatusCode, gin.H{
-			"type":  "error",
-			"error": newAPIError.ToClaudeError(),
-		})
+		writeCountTokensErrorResponse(c, newAPIError)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"input_tokens": tokens})
+}
+
+// writeCountTokensErrorResponse 复用 Messages 协议错误出口并附加请求 ID。
+func writeCountTokensErrorResponse(c *gin.Context, newAPIError *types.NewAPIError) {
+	if newAPIError == nil {
+		return
+	}
+	newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), c.GetString(common.RequestIdKey)))
+	writeRelayErrorResponse(c, types.RelayFormatClaude, nil, nil, newAPIError)
 }
 
 var upgrader = websocket.Upgrader{
