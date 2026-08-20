@@ -161,3 +161,57 @@ describe('channel protocol policy persistence', () => {
     assert.deepEqual(JSON.parse(defaults.protocol_policy || ''), protocolPolicy)
   })
 })
+
+describe('channel model input modality persistence', () => {
+  test('reloads channel overrides and preserves adjacent channel settings', () => {
+    const defaults = transformChannelToFormDefaults(
+      createChannel({
+        force_format: true,
+        system_prompt: 'keep me',
+        model_context_fallbacks: {
+          MODEL_A: {
+            source_context_window_tokens: 128000,
+            fallback_model: 'MODEL_B',
+            fallback_context_window_tokens: 256000,
+            route_mode: 'same_channel',
+          },
+        },
+        model_input_modalities: {
+          VISION_MODEL: ['image', 'text'],
+          TEXT_MODEL: ['text'],
+        },
+      })
+    )
+
+    assert.deepEqual(defaults.model_input_modalities, {
+      TEXT_MODEL: ['text'],
+      VISION_MODEL: ['text', 'image'],
+    })
+
+    const payload = transformFormDataToUpdatePayload(defaults, 1)
+    const setting = JSON.parse(String(payload.setting))
+    assert.deepEqual(setting.model_input_modalities, {
+      TEXT_MODEL: ['text'],
+      VISION_MODEL: ['text', 'image'],
+    })
+    assert.equal(setting.force_format, true)
+    assert.equal(setting.system_prompt, 'keep me')
+    assert.equal(
+      setting.model_context_fallbacks.MODEL_A.fallback_model,
+      'MODEL_B'
+    )
+  })
+
+  test('omits model_input_modalities after the final override is removed', () => {
+    const payload = transformFormDataToCreatePayload({
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      name: 'test channel',
+      key: 'test-key',
+      models: 'MODEL_A',
+      model_input_modalities: {},
+    })
+    const setting = JSON.parse(String(payload.channel.setting))
+
+    assert.equal(Object.hasOwn(setting, 'model_input_modalities'), false)
+  })
+})

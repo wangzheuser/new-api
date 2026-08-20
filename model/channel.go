@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/samber/lo"
+	"github.com/tidwall/sjson"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -950,6 +951,21 @@ func (channel *Channel) ValidateSettings() error {
 	}
 	if err := channelParams.ValidateSystemPrompts(); err != nil {
 		return err
+	}
+	if err := channelParams.ModelInputModalities.Validate(); err != nil {
+		return err
+	}
+	if channelParams.ModelInputModalities != nil {
+		normalized, err := common.Marshal(channelParams.ModelInputModalities.Normalized())
+		if err != nil {
+			return err
+		}
+		setting, err := sjson.SetRawBytes([]byte(*channel.Setting), "model_input_modalities", normalized)
+		if err != nil {
+			return err
+		}
+		normalizedSetting := string(setting)
+		channel.Setting = &normalizedSetting
 	}
 	if err := channelParams.ValidateContextFallbacks(); err != nil {
 		return err

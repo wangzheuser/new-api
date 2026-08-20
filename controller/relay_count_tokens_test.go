@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -39,6 +40,30 @@ func TestCountTokensReturnsLocalClaudeTokenEstimate(t *testing.T) {
 	}
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
 	assert.Positive(t, response.InputTokens)
+}
+
+func TestCountTokensRejectsUndeclaredImageInput(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages/count_tokens?beta=true",
+		strings.NewReader(`{"model":"source","messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AA=="}}]}]}`),
+	)
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	common.SetContextKey(ctx, constant.ContextKeyOriginalModel, "source")
+	common.SetContextKey(ctx, constant.ContextKeyChannelSetting, dto.ChannelSettings{
+		ModelInputModalities: types.ModelInputModalities{
+			"source": {types.InputModalityText},
+		},
+	})
+
+	CountTokens(ctx)
+
+	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "unsupported_input_modality")
+	assert.Contains(t, recorder.Body.String(), "no declared image input capability")
 }
 
 // TestShouldRetrySkipsToolProtocolInvalidOnly 验证确定性协议错误不影响普通 502 重试。

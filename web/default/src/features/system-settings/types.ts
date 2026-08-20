@@ -192,6 +192,7 @@ export type ModelSettings = {
   'global.pass_through_request_enabled': boolean
   'global.thinking_model_blacklist': string
   'global.chat_completions_to_responses_policy': string
+  'global.model_input_modalities': string
   'general_setting.ping_interval_enabled': boolean
   'general_setting.ping_interval_seconds': number
   'general_setting.default_final_error_override': string

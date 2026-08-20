@@ -19,6 +19,13 @@ For commercial licensing, please contact support@quantumnous.com
 import { z } from 'zod'
 
 import {
+  modelInputModalitiesSchema,
+  normalizeModelInputModalities,
+  parseModelInputModalities,
+  type ModelInputModalities,
+} from '@/lib/model-input-modalities'
+
+import {
   CHANNEL_STATUS,
   ERROR_MESSAGES,
   MODEL_FETCHABLE_TYPES,
@@ -266,6 +273,7 @@ export const channelFormSchema = z
     system_prompt: z.string().optional(),
     system_prompt_override: z.boolean().optional(),
     model_system_prompts: z.record(z.string(), z.string()).optional(),
+    model_input_modalities: modelInputModalitiesSchema.optional(),
     model_context_fallbacks: z.string().optional(),
     protocol_policy: z.string().optional(),
     // Type-specific settings (stored in settings JSON)
@@ -366,6 +374,8 @@ export const channelFormSchema = z
       let settingErrorField = 'system_prompt'
       if (modelPrompts.length > 0) {
         settingErrorField = 'model_system_prompts'
+      } else if (Object.keys(data.model_input_modalities || {}).length > 0) {
+        settingErrorField = 'model_input_modalities'
       } else if (data.model_context_fallbacks?.trim()) {
         settingErrorField = 'model_context_fallbacks'
       } else if (data.protocol_policy?.trim()) {
@@ -499,6 +509,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   system_prompt: '',
   system_prompt_override: false,
   model_system_prompts: {},
+  model_input_modalities: {},
   model_context_fallbacks: '',
   protocol_policy: '',
   // Type-specific settings
@@ -554,6 +565,7 @@ export function transformChannelToFormDefaults(
     system_prompt: '',
     system_prompt_override: false,
     model_system_prompts: {} as Record<string, string>,
+    model_input_modalities: {} as ModelInputModalities,
     model_context_fallbacks: '',
     protocol_policy: '',
   }
@@ -582,6 +594,9 @@ export function transformChannelToFormDefaults(
           ? parsed.system_prompt_override
           : hasConfiguredSystemPrompt(systemPrompt, modelSystemPrompts),
         model_system_prompts: modelSystemPrompts,
+        model_input_modalities: parseModelInputModalities(
+          parsed.model_input_modalities
+        ),
         model_context_fallbacks:
           parsed.model_context_fallbacks &&
           typeof parsed.model_context_fallbacks === 'object' &&
@@ -717,6 +732,11 @@ function buildSettingJSON(formData: ChannelFormValues): string {
   }
   if (Object.keys(formData.model_system_prompts || {}).length > 0) {
     settingObj.model_system_prompts = formData.model_system_prompts
+  }
+  if (Object.keys(formData.model_input_modalities || {}).length > 0) {
+    settingObj.model_input_modalities = normalizeModelInputModalities(
+      formData.model_input_modalities || {}
+    )
   }
   if (formData.model_context_fallbacks?.trim()) {
     try {

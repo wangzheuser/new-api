@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { parseModelInputModalities } from '@/lib/model-input-modalities'
+
 import { ChannelAffinitySection } from '../general/channel-affinity'
 import { IoNetDeploymentSettingsSection } from '../integrations/ionet-deployment-settings-section'
 import type { ModelSettings } from '../types'
@@ -53,6 +55,9 @@ const MODELS_SECTIONS = [
             chat_completions_to_responses_policy: formatJsonForEditor(
               settings['global.chat_completions_to_responses_policy'],
               '{}'
+            ),
+            model_input_modalities: parseModelInputModalities(
+              settings['global.model_input_modalities']
             ),
           },
           general_setting: {

@@ -150,6 +150,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	if c.Request.ContentLength > 0 {
 		relayInfo.IncomingRequestBodyBytes = c.Request.ContentLength
 	}
+	if modalityErr := helper.ValidateRequestInputModalities(c, relayInfo.GetRequestedModelName(), request); modalityErr != nil {
+		newAPIError = modalityErr
+		return
+	}
 
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	needCountToken := constant.CountToken
@@ -504,6 +508,13 @@ func CountTokens(c *gin.Context) {
 		})
 		return
 	}
+	if modalityErr := helper.ValidateRequestInputModalities(c, relayInfo.GetRequestedModelName(), request); modalityErr != nil {
+		c.JSON(modalityErr.StatusCode, gin.H{
+			"type":  "error",
+			"error": modalityErr.ToClaudeError(),
+		})
+		return
+	}
 
 	tokens, err := service.CountRequestToken(c, request.GetTokenCountMeta(), relayInfo)
 	if err != nil {
@@ -608,6 +619,9 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	if newAPIError != nil {
 		return nil, newAPIError
 	}
+	if modalityErr := helper.ValidateRequestInputModalities(c, info.GetRequestedModelName(), info.Request); modalityErr != nil {
+		return nil, modalityErr
+	}
 	info.ProtocolEndpointMismatch = false
 	if routePlan, ok := common.GetContextKeyType[types.ChannelRoutePlan](c, constant.ContextKeyChannelRoutePlan); ok {
 		info.ChannelRoutePlan = &routePlan
@@ -675,6 +689,10 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 
 // resolveConfiguredFinalRelayError applies channel and system final_error rules after retries finish.
 func resolveConfiguredFinalRelayError(c *gin.Context, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
+	if relayInfo != nil && relayInfo.LastError != nil &&
+		relayInfo.LastError.GetErrorCode() == types.ErrorCodeUnsupportedInputModality {
+		return relayInfo.LastError
+	}
 	if relayInfo != nil && relayInfo.ChannelMeta != nil {
 		mapped, matched, err := relaycommon.ApplyFinalErrorOverride(relayInfo.ChannelMeta.ParamOverride, relayInfo)
 		if err != nil {

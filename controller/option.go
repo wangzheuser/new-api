@@ -12,6 +12,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/console_setting"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
@@ -295,6 +296,17 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
+	case "global.model_input_modalities":
+		var normalized string
+		normalized, err = model_setting.NormalizeModelInputModalitiesJSON(option.Value.(string))
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+		option.Value = normalized
 	case setting.UserModelRateLimitResponseConfigOption:
 		err = setting.CheckUserModelRateLimitResponseConfigJSONString(option.Value.(string))
 		if err != nil {

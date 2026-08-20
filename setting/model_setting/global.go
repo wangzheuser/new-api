@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/types"
 )
 
 type ChatCompletionsToResponsesPolicy struct {
@@ -36,6 +37,7 @@ type GlobalSettings struct {
 	PassThroughRequestEnabled        bool                             `json:"pass_through_request_enabled"`
 	ThinkingModelBlacklist           []string                         `json:"thinking_model_blacklist"`
 	ChatCompletionsToResponsesPolicy ChatCompletionsToResponsesPolicy `json:"chat_completions_to_responses_policy"`
+	ModelInputModalities             types.ModelInputModalities       `json:"model_input_modalities"`
 }
 
 // 默认配置
@@ -49,6 +51,7 @@ var defaultOpenaiSettings = GlobalSettings{
 		Enabled:     false,
 		AllChannels: true,
 	},
+	ModelInputModalities: types.ModelInputModalities{},
 }
 
 // 全局实例

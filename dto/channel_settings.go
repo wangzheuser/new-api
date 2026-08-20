@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/types"
 )
 
 const (
@@ -77,6 +78,7 @@ type ChannelSettings struct {
 	SystemPrompt           string                          `json:"system_prompt,omitempty"`
 	SystemPromptOverride   bool                            `json:"system_prompt_override,omitempty"`
 	ModelSystemPrompts     map[string]string               `json:"model_system_prompts,omitempty"`
+	ModelInputModalities   types.ModelInputModalities      `json:"model_input_modalities,omitempty"`
 	ModelContextFallbacks  map[string]ModelContextFallback `json:"model_context_fallbacks,omitempty"`
 	ProtocolPolicy         *ChannelProtocolPolicy          `json:"protocol_policy,omitempty"`
 }

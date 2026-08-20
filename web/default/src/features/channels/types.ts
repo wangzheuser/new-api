@@ -18,6 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
 
+import type { ModelInputModalities } from '@/lib/model-input-modalities'
+
 // ============================================================================
 // Channel Schema & Types
 // ============================================================================
@@ -87,6 +89,7 @@ export interface ChannelSettings {
   system_prompt?: string
   system_prompt_override?: boolean
   model_system_prompts?: Record<string, string>
+  model_input_modalities?: ModelInputModalities
   model_context_fallbacks?: Record<string, ModelContextFallback>
   protocol_policy?: ChannelProtocolPolicy
 }

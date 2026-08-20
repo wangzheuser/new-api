@@ -7,6 +7,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -41,4 +42,17 @@ func TestChannelValidateSettingsProtocolPolicyScopeAndPassThrough(t *testing.T) 
 	unsupportedType := &Channel{Type: constant.ChannelTypeAnthropic}
 	unsupportedType.SetSetting(dto.ChannelSettings{ProtocolPolicy: policy})
 	assert.ErrorContains(t, unsupportedType.ValidateSettings(), "standard compatible channels")
+}
+
+func TestChannelValidateSettingsInputModalities(t *testing.T) {
+	validSetting := `{"force_format":true,"model_input_modalities":{"model-a":["image","text"]}}`
+	valid := &Channel{Setting: &validSetting}
+	require.NoError(t, valid.ValidateSettings())
+	assert.JSONEq(t, `{"force_format":true,"model_input_modalities":{"model-a":["text","image"]}}`, *valid.Setting)
+
+	invalid := &Channel{}
+	invalid.SetSetting(dto.ChannelSettings{ModelInputModalities: types.ModelInputModalities{
+		"model-a": {types.InputModalityImage},
+	}})
+	assert.ErrorContains(t, invalid.ValidateSettings(), "text input modality is required")
 }

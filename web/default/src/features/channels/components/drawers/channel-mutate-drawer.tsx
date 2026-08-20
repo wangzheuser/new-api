@@ -65,6 +65,7 @@ import {
   sideDrawerSwitchItemClassName,
 } from '@/components/drawer-layout'
 import { JsonEditor } from '@/components/json-editor'
+import { ModelInputModalityEditor } from '@/components/model-input-modality-editor'
 import { MultiSelect } from '@/components/multi-select'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -111,6 +112,7 @@ import {
   SecureVerificationDialog,
   useSecureVerification,
 } from '@/features/auth/secure-verification'
+import { useSystemOptions } from '@/features/system-settings/hooks/use-system-options'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { useHiddenClickUnlock } from '@/hooks/use-hidden-click-unlock'
 import {
@@ -123,6 +125,10 @@ import {
   type ChannelConnectionInfo,
 } from '@/lib/channel-connection-info'
 import { getLobeIcon } from '@/lib/lobe-icon'
+import {
+  parseInputModalityModelMapping,
+  parseModelInputModalitiesWithStatus,
+} from '@/lib/model-input-modalities'
 import { ROLE } from '@/lib/roles'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
@@ -297,6 +303,7 @@ const SENSITIVE_FORM_FIELDS = [
   'system_prompt',
   'system_prompt_override',
   'model_system_prompts',
+  'model_input_modalities',
   'model_context_fallbacks',
   'protocol_policy',
   'allow_service_tier',
@@ -689,6 +696,12 @@ export function ChannelMutateDrawer({
     queryFn: getAllModels,
   })
 
+  const {
+    data: systemOptionsData,
+    isLoading: isLoadingSystemOptions,
+    isError: isSystemOptionsError,
+  } = useSystemOptions()
+
   // Fetch prefill model groups
   const { data: prefillGroupsData } = useQuery({
     queryKey: ['prefill_groups', 'model'],
@@ -759,6 +772,7 @@ export function ChannelMutateDrawer({
   const currentModels = useWatch({ control: form.control, name: 'models' })
   const currentName = form.watch('name')
   const currentModelMapping = form.watch('model_mapping')
+  const currentModelInputModalities = form.watch('model_input_modalities') || {}
   const awsKeyType = form.watch('aws_key_type')
   const vertexKeyType = form.watch('vertex_key_type')
   const upstreamModelUpdateCheckEnabled = form.watch(
@@ -1012,7 +1026,10 @@ export function ChannelMutateDrawer({
     formErrors.azure_responses_version
   )
   const modelsHaveErrors = Boolean(
-    formErrors.models || formErrors.group || formErrors.model_mapping
+    formErrors.models ||
+    formErrors.group ||
+    formErrors.model_mapping ||
+    formErrors.model_input_modalities
   )
   const systemPromptsHaveErrors = Boolean(
     formErrors.system_prompt ||
@@ -1313,6 +1330,18 @@ export function ChannelMutateDrawer({
       return { ...createEmptyModelMappingGuardrail(), invalidJson: true }
     }
   }, [currentModelMapping, currentModelsArray])
+
+  const inputModalityMapping = useMemo(
+    () => parseInputModalityModelMapping(currentModelMapping),
+    [currentModelMapping]
+  )
+
+  const globalModelInputModalityState = useMemo(() => {
+    const option = systemOptionsData?.data?.find(
+      (item) => item.key === 'global.model_input_modalities'
+    )
+    return parseModelInputModalitiesWithStatus(option?.value || '{}')
+  }, [systemOptionsData?.data])
 
   const mappingPreviewPairs =
     modelMappingGuardrail.entries.length > 0
@@ -3689,6 +3718,69 @@ export function ChannelMutateDrawer({
                                         >
                                           {t('Add missing models')}
                                         </Button>
+                                      </AlertDescription>
+                                    </Alert>
+                                  )}
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                          </div>
+
+                          <div className='border-border/60 rounded-lg border p-4'>
+                            <FormField
+                              control={form.control}
+                              name='model_input_modalities'
+                              render={({ field }) => (
+                                <FormItem className='space-y-4'>
+                                  <div className='space-y-1'>
+                                    <div className='flex flex-wrap items-center gap-2'>
+                                      <FormLabel>
+                                        {t('Model Input Modalities')}
+                                      </FormLabel>
+                                      <Badge variant='outline'>
+                                        {t('{{count}} channel overrides', {
+                                          count: Object.keys(
+                                            currentModelInputModalities
+                                          ).length,
+                                        })}
+                                      </Badge>
+                                    </div>
+                                    <FormDescription>
+                                      {t(
+                                        'Declare capabilities for the client-requested model before model mapping is applied.'
+                                      )}
+                                    </FormDescription>
+                                  </div>
+                                  <FormControl>
+                                    {isLoadingSystemOptions ? (
+                                      <div className='space-y-3'>
+                                        <Skeleton className='h-10 w-full' />
+                                        <Skeleton className='h-20 w-full' />
+                                      </div>
+                                    ) : (
+                                      <ModelInputModalityEditor
+                                        scope='channel'
+                                        value={field.value || {}}
+                                        onChange={field.onChange}
+                                        modelOptions={currentModelsArray}
+                                        mapping={inputModalityMapping}
+                                        globalValue={
+                                          globalModelInputModalityState.value
+                                        }
+                                        disabled={
+                                          isSubmitting || sensitiveLocked
+                                        }
+                                      />
+                                    )}
+                                  </FormControl>
+                                  {(isSystemOptionsError ||
+                                    !globalModelInputModalityState.valid) && (
+                                    <Alert variant='destructive'>
+                                      <AlertDescription>
+                                        {t(
+                                          'Global model input modality configuration could not be loaded. Channel inheritance is shown as unconfigured.'
+                                        )}
                                       </AlertDescription>
                                     </Alert>
                                   )}

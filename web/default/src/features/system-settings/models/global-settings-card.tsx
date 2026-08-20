@@ -23,8 +23,10 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import * as z from 'zod'
 
+import { ModelInputModalityEditor } from '@/components/model-input-modality-editor'
 import { StatusBadge } from '@/components/status-badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -39,6 +41,10 @@ import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  modelInputModalitiesSchema,
+  stringifyModelInputModalities,
+} from '@/lib/model-input-modalities'
 
 import {
   SettingsForm,
@@ -164,6 +170,7 @@ const schema = z.object({
     pass_through_request_enabled: z.boolean(),
     thinking_model_blacklist: jsonString,
     chat_completions_to_responses_policy: jsonString,
+    model_input_modalities: modelInputModalitiesSchema,
   }),
   general_setting: z.object({
     ping_interval_enabled: z.boolean(),
@@ -179,6 +186,7 @@ type FlatGlobalModelSettings = {
   'global.pass_through_request_enabled': boolean
   'global.thinking_model_blacklist': string
   'global.chat_completions_to_responses_policy': string
+  'global.model_input_modalities': string
   'general_setting.ping_interval_enabled': boolean
   'general_setting.ping_interval_seconds': number
   'general_setting.default_final_error_override': string
@@ -196,6 +204,9 @@ const flattenGlobalValues = (
   'global.chat_completions_to_responses_policy': normalizeJsonText(
     values.global.chat_completions_to_responses_policy,
     '{}'
+  ),
+  'global.model_input_modalities': stringifyModelInputModalities(
+    values.global.model_input_modalities
   ),
   'general_setting.ping_interval_enabled':
     values.general_setting.ping_interval_enabled,
@@ -300,6 +311,41 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
                   />
                 </FormControl>
               </SettingsSwitchItem>
+            )}
+          />
+
+          <Separator />
+
+          <FormField
+            control={form.control}
+            name='global.model_input_modalities'
+            render={({ field }) => (
+              <FormItem className='space-y-4'>
+                <div className='space-y-1'>
+                  <div className='flex flex-wrap items-center gap-2'>
+                    <FormLabel>{t('Model Input Modalities')}</FormLabel>
+                    <Badge variant='outline'>
+                      {t('{{count}} configured models', {
+                        count: Object.keys(field.value).length,
+                      })}
+                    </Badge>
+                  </div>
+                  <FormDescription>
+                    {t(
+                      'Declare image input capability by exact client-requested model name. Channel declarations take precedence.'
+                    )}
+                  </FormDescription>
+                </div>
+                <FormControl>
+                  <ModelInputModalityEditor
+                    scope='global'
+                    value={field.value}
+                    onChange={field.onChange}
+                    disabled={updateOption.isPending}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
             )}
           />
 
