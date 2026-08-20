@@ -173,18 +173,18 @@ export function ModelBadge(props: ModelBadgeProps) {
       <PopoverContent className='w-72'>
         <div className='space-y-2'>
           <div className='flex items-start justify-between gap-3'>
-            <span className='text-muted-foreground text-xs'>
+            <span className='text-muted-foreground shrink-0 text-xs'>
               {t('Request Model:')}
             </span>
-            <span className='truncate font-mono text-xs font-medium'>
+            <span className='min-w-0 text-right font-mono text-xs font-medium break-all whitespace-normal'>
               {props.modelName}
             </span>
           </div>
           <div className='flex items-start justify-between gap-3'>
-            <span className='text-muted-foreground text-xs'>
+            <span className='text-muted-foreground shrink-0 text-xs'>
               {t('Actual Model:')}
             </span>
-            <span className='truncate font-mono text-xs font-medium'>
+            <span className='min-w-0 text-right font-mono text-xs font-medium break-all whitespace-normal'>
               {props.actualModel}
             </span>
           </div>
