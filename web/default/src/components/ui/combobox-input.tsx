@@ -33,6 +33,8 @@ interface ComboboxInputProps {
   options: ComboboxInputOption[]
   value?: string
   onValueChange: (value: string) => void
+  onValueCommit?: (value: string) => void
+  onBlur?: React.FocusEventHandler<HTMLInputElement>
   placeholder?: string
   emptyText?: string
   className?: string
@@ -48,6 +50,8 @@ export function ComboboxInput({
   options,
   value = '',
   onValueChange,
+  onValueCommit,
+  onBlur,
   placeholder = 'Select or type...',
   emptyText = 'No option found.',
   className,
@@ -107,6 +111,7 @@ export function ComboboxInput({
 
   const handleSelect = (selectedValue: string) => {
     onValueChange(selectedValue)
+    onValueCommit?.(selectedValue)
     setOpen(false)
     setSearchValue('')
     inputRef.current?.focus()
@@ -202,6 +207,7 @@ export function ComboboxInput({
           }
           pointerFocusRef.current = false
         }}
+        onBlur={onBlur}
         onKeyDown={handleKeyDown}
         className={cn('pr-9', className)}
       />

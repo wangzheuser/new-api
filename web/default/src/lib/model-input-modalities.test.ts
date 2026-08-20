@@ -20,8 +20,13 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
 import {
-  modelInputModalitiesSchema,
+  buildGlobalInputModalityModelOptions,
   enableChannelInputModalityOverride,
+  filterChannelInputModalityModels,
+  getAvailableInputModalityModelOptions,
+  getModelInputModalityNameError,
+  groupChannelInputModalityModels,
+  modelInputModalitiesSchema,
   normalizeModelInputModalities,
   parseInputModalityModelMapping,
   parseModelInputModalities,
@@ -82,6 +87,43 @@ describe('model input modality persistence helpers', () => {
         )
       ).success,
       false
+    )
+  })
+
+  test('builds searchable global options without configured duplicates', () => {
+    const value: ModelInputModalities = {
+      MODEL_B: ['text'],
+      CUSTOM_MODEL: ['text', 'image'],
+    }
+    const options = buildGlobalInputModalityModelOptions(
+      ['MODEL_C', 'MODEL_B', 'MODEL_A', 'MODEL_A'],
+      value
+    )
+
+    assert.deepEqual(options, ['CUSTOM_MODEL', 'MODEL_A', 'MODEL_B', 'MODEL_C'])
+    assert.deepEqual(getAvailableInputModalityModelOptions(options, value), [
+      'MODEL_A',
+      'MODEL_C',
+    ])
+    assert.deepEqual(
+      getAvailableInputModalityModelOptions(options, value, 'MODEL_B'),
+      ['MODEL_A', 'MODEL_B', 'MODEL_C']
+    )
+  })
+
+  test('validates exact custom model names before add or rename', () => {
+    const value: ModelInputModalities = { MODEL_A: ['text'] }
+
+    assert.equal(getModelInputModalityNameError('', value), 'required')
+    assert.equal(getModelInputModalityNameError('MODEL_A', value), 'duplicate')
+    assert.equal(
+      getModelInputModalityNameError('MODEL_A', value, 'MODEL_A'),
+      null
+    )
+    assert.equal(getModelInputModalityNameError('CUSTOM_MODEL', value), null)
+    assert.equal(
+      getModelInputModalityNameError('模'.repeat(86), value),
+      'too_long'
     )
   })
 })
@@ -147,6 +189,52 @@ describe('model input modality resolution', () => {
         '{" SOURCE_MODEL ":" UPSTREAM_MODEL ","EMPTY":"","BAD":1}'
       ),
       { SOURCE_MODEL: 'UPSTREAM_MODEL' }
+    )
+  })
+
+  test('groups live channel models and keeps removed overrides visible', () => {
+    const channelValue: ModelInputModalities = {
+      MODEL_B: ['text'],
+      REMOVED_MODEL: ['text', 'image'],
+    }
+
+    assert.deepEqual(
+      groupChannelInputModalityModels(
+        ['MODEL_B', 'MODEL_A', 'MODEL_B'],
+        channelValue
+      ),
+      {
+        currentModels: ['MODEL_B', 'MODEL_A'],
+        removedModels: ['REMOVED_MODEL'],
+      }
+    )
+    assert.deepEqual(
+      groupChannelInputModalityModels(
+        ['MODEL_B', 'REMOVED_MODEL'],
+        channelValue
+      ),
+      {
+        currentModels: ['MODEL_B', 'REMOVED_MODEL'],
+        removedModels: [],
+      }
+    )
+  })
+
+  test('filters channel rows by requested model or mapping target', () => {
+    const models = ['SOURCE_MODEL', 'TEXT_MODEL', 'VISION_MODEL']
+    const mapping = { SOURCE_MODEL: 'UPSTREAM_VISION_MODEL' }
+
+    assert.deepEqual(
+      filterChannelInputModalityModels(models, mapping, 'source'),
+      ['SOURCE_MODEL']
+    )
+    assert.deepEqual(
+      filterChannelInputModalityModels(models, mapping, 'upstream_vision'),
+      ['SOURCE_MODEL']
+    )
+    assert.deepEqual(
+      filterChannelInputModalityModels(models, mapping, 'model'),
+      models
     )
   })
 })

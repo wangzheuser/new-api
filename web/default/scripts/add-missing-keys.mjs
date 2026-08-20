@@ -1727,6 +1727,46 @@ for (const [key, zh, zhTW, fr, ja, ru, vi] of userRateLimitRows) {
   Object.assign(newKeys.vi, { [key]: vi })
 }
 
+const modelInputModalityRows = [
+  [
+    'Model name must not exceed 255 bytes',
+    '模型名称不得超过 255 字节',
+    '模型名稱不得超過 255 位元組',
+    'Le nom du modèle ne doit pas dépasser 255 octets',
+    'モデル名は255バイト以内で入力してください',
+    'Название модели не должно превышать 255 байт',
+    'Tên mô hình không được vượt quá 255 byte',
+  ],
+  [
+    'Model option loading failed. You can still enter an exact model name.',
+    '模型选项加载失败，仍可输入精确模型名称。',
+    '模型選項載入失敗，仍可輸入精確模型名稱。',
+    'Échec du chargement des options de modèle. Vous pouvez toujours saisir un nom exact.',
+    'モデル候補の読み込みに失敗しました。正確なモデル名は引き続き入力できます。',
+    'Не удалось загрузить варианты моделей. Точное название модели по-прежнему можно ввести вручную.',
+    'Không tải được các tùy chọn mô hình. Bạn vẫn có thể nhập tên mô hình chính xác.',
+  ],
+  [
+    'These overrides belong to models removed from the current channel model list. Restore inheritance to remove them.',
+    '这些覆盖项属于已从当前渠道模型列表中移除的模型。恢复继承即可删除对应覆盖。',
+    '這些覆寫項目屬於已從目前渠道模型清單中移除的模型。恢復繼承即可刪除對應覆寫。',
+    'Ces remplacements concernent des modèles retirés de la liste actuelle du canal. Restaurez l’héritage pour les supprimer.',
+    'これらの上書きは、現在のチャネルモデル一覧から削除されたモデルに属します。継承に戻すと削除できます。',
+    'Эти переопределения относятся к моделям, удалённым из текущего списка канала. Восстановите наследование, чтобы удалить их.',
+    'Các ghi đè này thuộc về những mô hình đã bị xóa khỏi danh sách mô hình hiện tại của kênh. Khôi phục kế thừa để xóa chúng.',
+  ],
+]
+
+for (const [key, zh, zhTW, fr, ja, ru, vi] of modelInputModalityRows) {
+  Object.assign(newKeys.en, { [key]: key })
+  Object.assign(newKeys.zh, { [key]: zh })
+  Object.assign(newKeys['zh-TW'], { [key]: zhTW })
+  Object.assign(newKeys.fr, { [key]: fr })
+  Object.assign(newKeys.ja, { [key]: ja })
+  Object.assign(newKeys.ru, { [key]: ru })
+  Object.assign(newKeys.vi, { [key]: vi })
+}
+
 async function main() {
   let totalAdded = 0
 

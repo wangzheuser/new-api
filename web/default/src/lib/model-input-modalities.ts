@@ -23,6 +23,16 @@ export const MAX_MODEL_INPUT_MODALITY_ENTRIES = 256
 export type InputModality = 'text' | 'image'
 export type ModelInputModalities = Record<string, InputModality[]>
 export type InputModalityConfigSource = 'channel' | 'global' | 'unconfigured'
+export type ModelInputModalityNameError =
+  | 'required'
+  | 'too_long'
+  | 'duplicate'
+  | null
+
+export type ChannelInputModalityModelGroups = {
+  currentModels: string[]
+  removedModels: string[]
+}
 
 const inputModalitiesSchema = z
   .array(z.enum(['text', 'image']))
@@ -66,6 +76,80 @@ export function normalizeModelInputModalities(
       : ['text']
   }
   return normalized
+}
+
+/** Build a stable global picker list from catalog and persisted model names. */
+export function buildGlobalInputModalityModelOptions(
+  modelOptions: string[],
+  value: ModelInputModalities
+): string[] {
+  const options = new Set<string>()
+  for (const model of [...modelOptions, ...Object.keys(value)]) {
+    const normalizedModel = model.trim()
+    if (normalizedModel) options.add(normalizedModel)
+  }
+  return [...options].sort()
+}
+
+/** Exclude model names already used by another global declaration. */
+export function getAvailableInputModalityModelOptions(
+  modelOptions: string[],
+  value: ModelInputModalities,
+  currentModel?: string
+): string[] {
+  const configuredModels = new Set(Object.keys(value))
+  if (currentModel) configuredModels.delete(currentModel)
+  return modelOptions.filter((model) => !configuredModels.has(model))
+}
+
+/** Validate one trimmed model name before adding or renaming a declaration. */
+export function getModelInputModalityNameError(
+  model: string,
+  value: ModelInputModalities,
+  currentModel?: string
+): ModelInputModalityNameError {
+  if (!model) return 'required'
+  if (new TextEncoder().encode(model).length > 255) return 'too_long'
+  if (model !== currentModel && Object.hasOwn(value, model)) return 'duplicate'
+  return null
+}
+
+/** Separate live channel models from saved overrides removed from the form list. */
+export function groupChannelInputModalityModels(
+  modelOptions: string[],
+  channelValue: ModelInputModalities
+): ChannelInputModalityModelGroups {
+  const currentModels: string[] = []
+  const currentModelSet = new Set<string>()
+  for (const model of modelOptions) {
+    const normalizedModel = model.trim()
+    if (!normalizedModel || currentModelSet.has(normalizedModel)) continue
+    currentModelSet.add(normalizedModel)
+    currentModels.push(normalizedModel)
+  }
+
+  const removedModels = Object.keys(channelValue)
+    .filter((model) => !currentModelSet.has(model))
+    .sort()
+  return { currentModels, removedModels }
+}
+
+/** Filter channel models by requested name or mapped upstream target. */
+export function filterChannelInputModalityModels(
+  models: string[],
+  mapping: Record<string, string>,
+  search: string
+): string[] {
+  const normalizedSearch = search.trim().toLowerCase()
+  if (!normalizedSearch) return models
+
+  return models.filter((model) => {
+    const mappingTarget = mapping[model] || ''
+    return (
+      model.toLowerCase().includes(normalizedSearch) ||
+      mappingTarget.toLowerCase().includes(normalizedSearch)
+    )
+  })
 }
 
 /** Parse one persisted option or channel setting value into a validated map. */

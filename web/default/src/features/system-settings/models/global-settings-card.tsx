@@ -17,7 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useEffect } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { useEffect, useMemo } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -41,6 +42,7 @@ import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { getAllModels } from '@/features/channels/api'
 import {
   modelInputModalitiesSchema,
   stringifyModelInputModalities,
@@ -230,6 +232,18 @@ type GlobalSettingsCardProps = {
 export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const modelOptionsQuery = useQuery({
+    queryKey: ['channel_models'],
+    queryFn: getAllModels,
+  })
+  const modelOptions = useMemo(
+    () =>
+      modelOptionsQuery.data?.data?.map((model) => model.id).filter(Boolean) ||
+      [],
+    [modelOptionsQuery.data?.data]
+  )
+  const modelOptionsUnavailable =
+    modelOptionsQuery.isError || modelOptionsQuery.data?.success === false
 
   const form = useForm<
     GlobalModelSettingsFormInput,
@@ -341,9 +355,19 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
                     scope='global'
                     value={field.value}
                     onChange={field.onChange}
+                    modelOptions={modelOptions}
                     disabled={updateOption.isPending}
                   />
                 </FormControl>
+                {modelOptionsUnavailable && (
+                  <Alert variant='destructive'>
+                    <AlertDescription>
+                      {t(
+                        'Model option loading failed. You can still enter an exact model name.'
+                      )}
+                    </AlertDescription>
+                  </Alert>
+                )}
                 <FormMessage />
               </FormItem>
             )}
