@@ -246,7 +246,9 @@ export function ComboboxInput({
                     )}
                   />
                   {option.icon && <span>{option.icon}</span>}
-                  <span className='truncate'>{option.label}</span>
+                  <span className='truncate' title={option.label}>
+                    {option.label}
+                  </span>
                 </li>
               ))}
             </ul>

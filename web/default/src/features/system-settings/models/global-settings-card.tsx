@@ -42,7 +42,7 @@ import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import { getAllModels } from '@/features/channels/api'
+import { getPricing } from '@/features/pricing/api'
 import {
   modelInputModalitiesSchema,
   stringifyModelInputModalities,
@@ -233,13 +233,15 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
   const modelOptionsQuery = useQuery({
-    queryKey: ['channel_models'],
-    queryFn: getAllModels,
+    queryKey: ['pricing'],
+    queryFn: getPricing,
+    staleTime: 5 * 60 * 1000,
   })
   const modelOptions = useMemo(
     () =>
-      modelOptionsQuery.data?.data?.map((model) => model.id).filter(Boolean) ||
-      [],
+      modelOptionsQuery.data?.data
+        ?.map((model) => model.model_name)
+        .filter(Boolean) || [],
     [modelOptionsQuery.data?.data]
   )
   const modelOptionsUnavailable =

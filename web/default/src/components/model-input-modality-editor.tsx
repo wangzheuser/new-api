@@ -172,7 +172,7 @@ function GlobalInputModalityEditor(props: ScopedInputModalityEditorProps) {
 
   return (
     <div className='space-y-4'>
-      <div className='flex flex-col gap-2 sm:flex-row'>
+      <div className='grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]'>
         <ComboboxInput
           id='new-input-modality-model'
           options={addModelOptions.map((model) => ({
@@ -197,6 +197,7 @@ function GlobalInputModalityEditor(props: ScopedInputModalityEditorProps) {
         <Button
           type='button'
           variant='outline'
+          className='sm:shrink-0'
           disabled={
             props.disabled ||
             configuredModels.length >= MAX_MODEL_INPUT_MODALITY_ENTRIES

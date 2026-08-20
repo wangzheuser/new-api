@@ -111,6 +111,27 @@ describe('model input modality persistence helpers', () => {
     )
   })
 
+  test('preserves exact long marketplace model IDs and ignores empty options', () => {
+    const longModelId =
+      'provider/very-long-model-identifier-with-version-and-preview-suffix-2026-08-20'
+    const options = buildGlobalInputModalityModelOptions(
+      [
+        ' ',
+        longModelId,
+        'Model-Case-Sensitive',
+        'model-case-sensitive',
+        longModelId,
+      ],
+      {}
+    )
+
+    assert.deepEqual(options, [
+      'Model-Case-Sensitive',
+      'model-case-sensitive',
+      longModelId,
+    ])
+  })
+
   test('validates exact custom model names before add or rename', () => {
     const value: ModelInputModalities = { MODEL_A: ['text'] }
 
