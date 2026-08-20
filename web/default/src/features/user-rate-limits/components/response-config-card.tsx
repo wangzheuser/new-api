@@ -20,7 +20,6 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
-import { Textarea } from '@/components/ui/textarea'
 
 import { getSystemGroups, updateUserRateLimitConfig } from '../api'
 import {
@@ -160,7 +159,7 @@ export function ResponseConfigCard(props: ResponseConfigCardProps) {
                   <FormItem>
                     <FormLabel>{t('Default error message')}</FormLabel>
                     <FormControl>
-                      <Textarea rows={3} maxLength={512} {...field} />
+                      <Input className='lg:w-1/2' maxLength={512} {...field} />
                     </FormControl>
                     <FormDescription>
                       {t('The request ID is appended by the server.')}
