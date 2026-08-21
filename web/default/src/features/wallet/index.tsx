@@ -16,7 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useReducedMotion } from 'motion/react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
@@ -52,6 +53,7 @@ import type {
   PaymentMethod,
   PresetAmount,
   CreemProduct,
+  RedemptionResult,
 } from './types'
 
 interface WalletProps {
@@ -71,11 +73,18 @@ export function Wallet(props: WalletProps) {
   const [transferDialogOpen, setTransferDialogOpen] = useState(false)
   const [billingDialogOpen, setBillingDialogOpen] = useState(false)
   const [redemptionCode, setRedemptionCode] = useState('')
+  const [redemptionResult, setRedemptionResult] =
+    useState<RedemptionResult | null>(null)
+  const [redemptionHighlight, setRedemptionHighlight] = useState<
+    RedemptionResult['type'] | null
+  >(null)
   const [creemDialogOpen, setCreemDialogOpen] = useState(false)
   const [selectedCreemProduct, setSelectedCreemProduct] =
     useState<CreemProduct | null>(null)
   const [showSubscriptionPanel, setShowSubscriptionPanel] = useState(true)
   const [subscriptionRefreshKey, setSubscriptionRefreshKey] = useState(0)
+  const redemptionHighlightTimeoutRef = useRef<number | null>(null)
+  const shouldReduceMotion = useReducedMotion()
 
   const { status } = useStatus()
   const { currency } = useSystemConfig()
@@ -132,6 +141,14 @@ export function Wallet(props: WalletProps) {
       window.history.replaceState({}, '', window.location.pathname)
     }
   }, [props.initialShowHistory])
+
+  useEffect(() => {
+    return () => {
+      if (redemptionHighlightTimeoutRef.current !== null) {
+        window.clearTimeout(redemptionHighlightTimeoutRef.current)
+      }
+    }
+  }, [])
 
   // Initialize topup amount when topup info is loaded
   useEffect(() => {
@@ -205,12 +222,53 @@ export function Wallet(props: WalletProps) {
 
     const result = await redeemCode(redemptionCode)
     if (result) {
+      if (redemptionHighlightTimeoutRef.current !== null) {
+        window.clearTimeout(redemptionHighlightTimeoutRef.current)
+        redemptionHighlightTimeoutRef.current = null
+      }
+      setRedemptionHighlight(null)
+      setRedemptionResult(result)
       setRedemptionCode('')
       await fetchUser()
       if (result.type === 'subscription') {
         setSubscriptionRefreshKey((value) => value + 1)
       }
     }
+  }
+
+  const handleRedemptionCodeChange = (code: string) => {
+    setRedemptionCode(code)
+    setRedemptionResult(null)
+    setRedemptionHighlight(null)
+    if (redemptionHighlightTimeoutRef.current !== null) {
+      window.clearTimeout(redemptionHighlightTimeoutRef.current)
+      redemptionHighlightTimeoutRef.current = null
+    }
+  }
+
+  const handleViewRedemptionResult = () => {
+    if (!redemptionResult) return
+
+    if (redemptionHighlightTimeoutRef.current !== null) {
+      window.clearTimeout(redemptionHighlightTimeoutRef.current)
+    }
+
+    const targetId =
+      redemptionResult.type === 'quota'
+        ? 'wallet-balance-summary'
+        : 'wallet-subscriptions-summary'
+    const target = document.querySelector<HTMLElement>(`#${targetId}`)
+    setRedemptionHighlight(redemptionResult.type)
+    target?.scrollIntoView({
+      behavior: shouldReduceMotion ? 'auto' : 'smooth',
+      block: 'center',
+    })
+    target?.focus({ preventScroll: true })
+
+    redemptionHighlightTimeoutRef.current = window.setTimeout(() => {
+      setRedemptionHighlight(null)
+      redemptionHighlightTimeoutRef.current = null
+    }, 1500)
   }
 
   // Handle transfer
@@ -269,7 +327,11 @@ export function Wallet(props: WalletProps) {
         <SectionPageLayout.Title>{t('Wallet')}</SectionPageLayout.Title>
         <SectionPageLayout.Content>
           <div className='mx-auto flex w-full max-w-7xl flex-col gap-4 sm:gap-5'>
-            <WalletStatsCard user={user} loading={userLoading} />
+            <WalletStatsCard
+              user={user}
+              loading={userLoading}
+              highlightBalance={redemptionHighlight === 'quota'}
+            />
 
             <div
               className={
@@ -291,9 +353,11 @@ export function Wallet(props: WalletProps) {
                   onPaymentMethodSelect={handlePaymentMethodSelect}
                   paymentLoading={paymentLoading}
                   redemptionCode={redemptionCode}
-                  onRedemptionCodeChange={setRedemptionCode}
+                  onRedemptionCodeChange={handleRedemptionCodeChange}
                   onRedeem={handleRedeem}
                   redeeming={redeeming}
+                  redemptionResult={redemptionResult}
+                  onViewRedemptionResult={handleViewRedemptionResult}
                   topupLink={topupInfo?.topup_link}
                   loading={topupLoading}
                   priceRatio={(status?.price as number) || 1}
@@ -312,13 +376,22 @@ export function Wallet(props: WalletProps) {
                 />
               </div>
 
-              <SubscriptionPlansCard
-                topupInfo={topupInfo}
-                onAvailabilityChange={handleSubscriptionAvailabilityChange}
-                userQuota={user?.quota}
-                onPurchaseSuccess={fetchUser}
-                refreshKey={subscriptionRefreshKey}
-              />
+              <div
+                id='wallet-subscriptions-summary'
+                tabIndex={-1}
+                className='scroll-mt-20 outline-none'
+              >
+                <SubscriptionPlansCard
+                  topupInfo={topupInfo}
+                  onAvailabilityChange={handleSubscriptionAvailabilityChange}
+                  userQuota={user?.quota}
+                  onPurchaseSuccess={fetchUser}
+                  refreshKey={subscriptionRefreshKey}
+                  highlightMySubscriptions={
+                    redemptionHighlight === 'subscription'
+                  }
+                />
+              </div>
             </div>
 
             <AffiliateRewardsCard

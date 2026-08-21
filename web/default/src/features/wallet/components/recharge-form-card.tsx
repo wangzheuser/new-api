@@ -16,7 +16,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Gift, ExternalLink, Loader2, Receipt, WalletCards } from 'lucide-react'
+import {
+  ArrowRight,
+  CircleCheck,
+  Crown,
+  ExternalLink,
+  Gift,
+  Loader2,
+  Receipt,
+  WalletCards,
+} from 'lucide-react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -34,7 +44,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { formatNumber } from '@/lib/format'
+import { formatNumber, formatQuota } from '@/lib/format'
+import { MOTION_TRANSITION } from '@/lib/motion'
 import { cn } from '@/lib/utils'
 
 import {
@@ -50,6 +61,7 @@ import type {
   TopupInfo,
   CreemProduct,
   WaffoPayMethod,
+  RedemptionResult,
 } from '../types'
 import { CreemProductsSection } from './creem-products-section'
 
@@ -68,6 +80,8 @@ interface RechargeFormCardProps {
   onRedemptionCodeChange: (code: string) => void
   onRedeem: () => void
   redeeming: boolean
+  redemptionResult: RedemptionResult | null
+  onViewRedemptionResult: () => void
   topupLink?: string
   loading?: boolean
   priceRatio?: number
@@ -98,6 +112,8 @@ export function RechargeFormCard({
   onRedemptionCodeChange,
   onRedeem,
   redeeming,
+  redemptionResult,
+  onViewRedemptionResult,
   topupLink,
   loading,
   priceRatio = 1,
@@ -113,6 +129,7 @@ export function RechargeFormCard({
   enableWaffoPancakeTopup,
 }: RechargeFormCardProps) {
   const { t } = useTranslation()
+  const shouldReduceMotion = useReducedMotion()
   const [localAmount, setLocalAmount] = useState(topupAmount.toString())
 
   useEffect(() => {
@@ -529,6 +546,91 @@ export function RechargeFormCard({
               {t('Redeem')}
             </Button>
           </div>
+          <AnimatePresence mode='wait'>
+            {redemptionResult && (
+              <motion.div
+                key={
+                  redemptionResult.type === 'quota'
+                    ? `quota-${redemptionResult.quota}`
+                    : `subscription-${redemptionResult.plan_id}`
+                }
+                role='status'
+                aria-live='polite'
+                initial={
+                  shouldReduceMotion
+                    ? false
+                    : { opacity: 0, y: -6, scale: 0.985 }
+                }
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={
+                  shouldReduceMotion
+                    ? { opacity: 0 }
+                    : { opacity: 0, y: -4, scale: 0.99 }
+                }
+                transition={
+                  shouldReduceMotion
+                    ? MOTION_TRANSITION.none
+                    : MOTION_TRANSITION.default
+                }
+                className={cn(
+                  'flex flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-center',
+                  redemptionResult.type === 'quota'
+                    ? 'border-emerald-500/25 bg-emerald-500/5'
+                    : 'border-amber-500/25 bg-amber-500/5'
+                )}
+              >
+                <div className='flex min-w-0 flex-1 items-start gap-2.5'>
+                  <IconBadge
+                    tone={
+                      redemptionResult.type === 'quota' ? 'success' : 'warning'
+                    }
+                    size='sm'
+                  >
+                    {redemptionResult.type === 'quota' ? (
+                      <CircleCheck />
+                    ) : (
+                      <Crown />
+                    )}
+                  </IconBadge>
+                  <div className='min-w-0'>
+                    <p className='text-sm font-semibold'>
+                      {redemptionResult.type === 'quota'
+                        ? t('Balance added')
+                        : t('Subscription activated')}
+                    </p>
+                    {redemptionResult.type === 'quota' ? (
+                      <p className='text-muted-foreground mt-0.5 text-xs'>
+                        {t('Added {{quota}} to your wallet balance.', {
+                          quota: formatQuota(redemptionResult.quota),
+                        })}
+                      </p>
+                    ) : (
+                      <div className='mt-0.5 space-y-0.5'>
+                        <p className='truncate text-xs font-medium'>
+                          {redemptionResult.plan_title}
+                        </p>
+                        <p className='text-muted-foreground text-xs'>
+                          {t('This redemption does not add wallet balance.')}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='ghost'
+                  onClick={onViewRedemptionResult}
+                  className='w-full shrink-0 sm:w-auto'
+                >
+                  {redemptionResult.type === 'quota'
+                    ? t('View Balance')
+                    : t('View My Subscriptions')}
+                  <ArrowRight className='ml-1 h-3.5 w-3.5' />
+                </Button>
+              </motion.div>
+            )}
+          </AnimatePresence>
           {topupLink && (
             <p className='text-muted-foreground text-xs'>
               {t('Need a redemption code?')}{' '}

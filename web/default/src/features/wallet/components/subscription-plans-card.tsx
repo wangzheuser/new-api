@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Crown, RefreshCw, Sparkles, Check } from 'lucide-react'
+import { motion, useReducedMotion } from 'motion/react'
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -57,6 +58,7 @@ import type {
   UserSubscriptionRecord,
 } from '@/features/subscriptions/types'
 import { formatQuota } from '@/lib/format'
+import { MOTION_TRANSITION } from '@/lib/motion'
 import { cn } from '@/lib/utils'
 
 import type { PaymentMethod, TopupInfo } from '../types'
@@ -67,6 +69,7 @@ interface SubscriptionPlansCardProps {
   userQuota?: number
   onPurchaseSuccess?: () => void | Promise<void>
   refreshKey?: number
+  highlightMySubscriptions?: boolean
 }
 
 function getEpayMethods(payMethods: PaymentMethod[] = []): PaymentMethod[] {
@@ -99,8 +102,10 @@ export function SubscriptionPlansCard({
   userQuota,
   onPurchaseSuccess,
   refreshKey = 0,
+  highlightMySubscriptions = false,
 }: SubscriptionPlansCardProps) {
   const { t } = useTranslation()
+  const shouldReduceMotion = useReducedMotion()
 
   const [plans, setPlans] = useState<PlanRecord[]>([])
   const [activeSubscriptions, setActiveSubscriptions] = useState<
@@ -274,7 +279,19 @@ export function SubscriptionPlansCard({
         contentClassName='space-y-4 sm:space-y-5'
       >
         {/* My subscriptions & billing preference */}
-        <div className='rounded-xl border p-3 sm:p-4'>
+        <motion.div
+          animate={
+            highlightMySubscriptions && !shouldReduceMotion
+              ? { scale: [1, 1.01, 1] }
+              : { scale: 1 }
+          }
+          transition={MOTION_TRANSITION.slow}
+          className={cn(
+            'rounded-xl border p-3 sm:p-4',
+            highlightMySubscriptions &&
+              'bg-amber-500/5 ring-2 ring-amber-500/40 ring-offset-2'
+          )}
+        >
           <div className='flex flex-wrap items-center justify-between gap-2.5 sm:gap-3'>
             <div className='flex min-w-0 flex-wrap items-center gap-2'>
               <span className='text-sm font-medium'>
@@ -525,7 +542,7 @@ export function SubscriptionPlansCard({
               {t('Subscribe to a plan for model access')}
             </p>
           )}
-        </div>
+        </motion.div>
 
         {/* Available plans grid */}
         {plans.length > 0 ? (

@@ -17,30 +17,51 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Activity, BarChart3, WalletCards } from 'lucide-react'
+import { motion, useReducedMotion } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 
 import { IconBadge, type IconBadgeTone } from '@/components/ui/icon-badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { formatQuota } from '@/lib/format'
+import { MOTION_TRANSITION } from '@/lib/motion'
+import { cn } from '@/lib/utils'
 
 import type { UserWalletData } from '../types'
 
 interface WalletStatsCardProps {
   user: UserWalletData | null
   loading?: boolean
+  highlightBalance?: boolean
 }
 
 export function WalletStatsCard(props: WalletStatsCardProps) {
   const { t } = useTranslation()
+  const shouldReduceMotion = useReducedMotion()
   if (props.loading) {
     return (
       <div className='grid grid-cols-3 divide-x rounded-lg border'>
         {['balance', 'usage', 'requests'].map((key) => (
-          <div key={key} className='min-w-0 px-2.5 py-2.5 sm:px-5 sm:py-4'>
+          <motion.div
+            key={key}
+            id={key === 'balance' ? 'wallet-balance-summary' : undefined}
+            tabIndex={key === 'balance' ? -1 : undefined}
+            animate={
+              key === 'balance' && props.highlightBalance && !shouldReduceMotion
+                ? { scale: [1, 1.015, 1] }
+                : { scale: 1 }
+            }
+            transition={MOTION_TRANSITION.slow}
+            className={cn(
+              'min-w-0 px-2.5 py-2.5 outline-none sm:px-5 sm:py-4',
+              key === 'balance' &&
+                props.highlightBalance &&
+                'bg-emerald-500/5 ring-2 ring-emerald-500/40 ring-offset-2'
+            )}
+          >
             <Skeleton className='h-3.5 w-full' />
             <Skeleton className='mt-2 h-6 w-full sm:h-7' />
             <Skeleton className='mt-1.5 hidden h-3.5 w-24 md:block' />
-          </div>
+          </motion.div>
         ))}
       </div>
     )
@@ -78,8 +99,24 @@ export function WalletStatsCard(props: WalletStatsCardProps) {
 
   return (
     <div className='grid grid-cols-3 divide-x rounded-lg border'>
-      {stats.map((item) => (
-        <div key={item.label} className='min-w-0 px-2.5 py-2.5 sm:px-5 sm:py-4'>
+      {stats.map((item, index) => (
+        <motion.div
+          key={item.label}
+          id={index === 0 ? 'wallet-balance-summary' : undefined}
+          tabIndex={index === 0 ? -1 : undefined}
+          animate={
+            index === 0 && props.highlightBalance && !shouldReduceMotion
+              ? { scale: [1, 1.015, 1] }
+              : { scale: 1 }
+          }
+          transition={MOTION_TRANSITION.slow}
+          className={cn(
+            'min-w-0 px-2.5 py-2.5 outline-none sm:px-5 sm:py-4',
+            index === 0 &&
+              props.highlightBalance &&
+              'relative z-10 rounded-lg bg-emerald-500/5 ring-2 ring-emerald-500/40 ring-offset-2'
+          )}
+        >
           <div className='flex items-center gap-1.5 sm:gap-2.5'>
             <IconBadge tone={item.tone} size='stat'>
               <item.icon />
@@ -95,7 +132,7 @@ export function WalletStatsCard(props: WalletStatsCardProps) {
           <div className='text-muted-foreground/60 mt-1 hidden text-xs md:block'>
             {item.description}
           </div>
-        </div>
+        </motion.div>
       ))}
     </div>
   )
