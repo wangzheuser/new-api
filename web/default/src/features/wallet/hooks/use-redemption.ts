@@ -34,14 +34,15 @@ export function useRedemption() {
 
   const redeemCode = useCallback(
     async (code: string): Promise<RedemptionResult | null> => {
-      if (!code || code.trim() === '') {
+      const normalizedCode = code.trim()
+      if (normalizedCode === '') {
         toast.error(i18next.t('Please enter a redemption code'))
         return null
       }
 
       try {
         setRedeeming(true)
-        const response = await redeemTopupCode({ key: code })
+        const response = await redeemTopupCode({ key: normalizedCode })
 
         if (response.success && response.data) {
           if (response.data.type === 'quota') {
