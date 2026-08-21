@@ -2,7 +2,7 @@ services:
   new-api:
     image: ${IMAGE_TAG:?IMAGE_TAG is required}
     container_name: new-api-${SLOT:?SLOT is required}
-    restart: always
+    restart: unless-stopped
     command: --log-dir /app/logs
     ports:
       - "127.0.0.1:${HOST_PORT:?HOST_PORT is required}:3000"

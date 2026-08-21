@@ -32,6 +32,8 @@ Dockerfile                               runtime-local 镜像目标
 
 两个槽位必须共享 PostgreSQL、Redis、`SESSION_SECRET`、业务配置和应用网络；必须使用
 不同容器名、端口、日志目录、数据目录和 `NODE_NAME`。候选端口只绑定 `127.0.0.1`。
+槽位容器统一使用 `unless-stopped` 重启策略，确保生产容器异常退出时自动恢复，同时让已经
+完成观察并由发布脚本主动停止的旧槽位在 Docker daemon 重启后仍保持停止。
 
 槽位 Compose 只能加入应用网络，禁止声明 Nginx Proxy 网络。代理网络仅由
 `release-remote.sh cutover|rollback` 管理。发布流程禁止执行：
@@ -57,6 +59,8 @@ NEW
                   GATED
                    v
                 CUTOVER
+                   v
+              OBSERVING_10M
                    v
                 OBSERVED
                    v
@@ -216,24 +220,29 @@ CONFIRM_CUTOVER=<release-id> ./release-remote.sh cutover --execute
 
 ## 9. 观察与完成
 
-默认观察十分钟：
+切流成功后，旧槽位继续运行，进入不少于十分钟的观察窗口：
 
 ```bash
 ./release-remote.sh observe --seconds 600 --interval 30
 ```
 
-脚本定时检查健康、重启、OOM、Nginx 内部版本、有限公网版本和配置哈希，并写入固定结果
-文件。实际 access log 的样本数和 5xx 应记录在发布结果中；共享日志没有 `$host` 时，
-非零 5xx 只能视为无法归因，不能推断为本应用错误。
+脚本以单调递进的截止时间控制观察窗口，在切流后立即检查，并每 30 秒检查健康、重启、
+OOM、Nginx 内部版本、有限公网版本和配置哈希；到达 600 秒后再执行最后一次检查，避免以
+“检查次数 × 间隔”代替真实持续时间。观察状态和实际耗时写入固定结果文件。任何检查失败
+都会把观察结果标记为失败并保留旧槽位运行。实际 access log 的样本数和 5xx 应记录在
+发布结果中；共享日志没有 `$host` 时，非零 5xx 只能视为无法归因，不能推断为本应用错误。
 
-取得停止旧槽位确认后：
+只有当前 release、当前生产容器和当前版本存在成功结果，且请求观察时间与实际耗时均不少
+于 600 秒，`finalize` 才允许继续。取得停止旧槽位确认后：
 
 ```bash
 CONFIRM_FINALIZE=<release-id> ./release-remote.sh finalize --execute
 ```
 
-旧容器和旧镜像保留用于回滚。停止后连续验证新槽位健康、Nginx 内部版本和公网版本。
-验证通过后，`finalize` 自动执行 `docker image prune --force` 和
+`finalize` 首先把旧槽位重启策略校正为 `unless-stopped`，再停止旧槽位容器，立即释放其
+CPU 和内存占用，并确保 Docker daemon 重启后不会意外拉起；容器元数据、可写层和旧镜像
+继续保留用于快速回滚。停止后连续验证新槽位健康、零重启、未 OOM、Nginx 内部版本和
+公网版本。验证通过后，`finalize` 自动执行 `docker image prune --force` 和
 `docker builder prune --force`，清理 dangling 镜像与构建缓存。该清理不使用 `-a`，不会
 移除仍由容器引用或带标签的回滚镜像，也不会清理卷、网络和运行中的容器。
 

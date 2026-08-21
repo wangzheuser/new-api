@@ -14,6 +14,10 @@ Mutating production actions require:
   cutover  --execute   CONFIRM_CUTOVER=<release-id>
   finalize --execute  CONFIRM_FINALIZE=<release-id>
   rollback --execute  CONFIRM_ROLLBACK=<release-id>
+
+Observation gate:
+  observe [--seconds N] [--interval N] defaults to 600 seconds / 30 seconds
+  finalize requires a successful observation of at least 600 seconds
 EOF
 }
 
@@ -374,33 +378,50 @@ action_observe() {
       *) usage >&2; exit 2 ;;
     esac
   done
+  if [[ ! "$seconds" =~ ^[1-9][0-9]*$ || ! "$interval" =~ ^[1-9][0-9]*$ ]]; then
+    printf 'invalid_observation_timing seconds=%s interval=%s\n' "$seconds" "$interval" >&2
+    exit 2
+  fi
   # shellcheck disable=SC1090
   source "$STATE_DIR/role-state.env"
-  local baseline_hash start end iterations i baseline_lines end_lines sample_count errors_5xx
+  local baseline_hash start end start_tick deadline now remaining sleep_seconds
+  local checks=0 baseline_lines end_lines sample_count errors_5xx elapsed_seconds
   observe_on_error() {
     local rc=$?
     trap - ERR
-    printf 'observation_failed line=%s command=%s rc=%s\n' "$LINENO" "$BASH_COMMAND" "$rc" |
-      tee "$STATE_DIR/observation.failed" >&2
+    printf 'observation=failed release_id=%s production=%s line=%s command=%s rc=%s\n' \
+      "$RELEASE_ID" "$NEW" "$LINENO" "$BASH_COMMAND" "$rc" |
+      tee "$STATE_DIR/observation.result" >&2
     exit "$rc"
   }
   trap observe_on_error ERR
   baseline_hash="$(awk '{print $1}' "$BACKUP_ROOT/$RELEASE_ID/nginx-config.sha256")"
   start="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  # Bash's elapsed-time counter prevents wall-clock corrections from shortening the window.
+  start_tick="$SECONDS"
+  deadline=$(( start_tick + seconds ))
+  printf 'observation=running release_id=%s production=%s requested_seconds=%s interval=%s start=%s\n' \
+    "$RELEASE_ID" "$NEW" "$seconds" "$interval" "$start" > "$STATE_DIR/observation.result"
   baseline_lines="$(docker exec "$PROXY_CONTAINER" sh -c "wc -l < '$NGINX_ACCESS_LOG'")"
   [[ "$(public_version)" == "$VERSION" ]]
-  iterations=$(( seconds / interval ))
-  (( iterations > 0 )) || iterations=1
-  for i in $(seq 1 "$iterations"); do
+  while true; do
     [[ "$(docker inspect -f '{{.State.Health.Status}}' "$NEW")" == healthy ]]
     [[ "$(docker inspect -f '{{.RestartCount}}' "$NEW")" == 0 ]]
     [[ "$(docker inspect -f '{{.State.OOMKilled}}' "$NEW")" == false ]]
     [[ "$(proxy_version)" == "$VERSION" ]]
     nginx_hash_matches "$baseline_hash"
-    [[ "$i" -eq "$iterations" ]] || sleep "$interval"
+    checks=$(( checks + 1 ))
+    now="$SECONDS"
+    (( now >= deadline )) && break
+    remaining=$(( deadline - now ))
+    sleep_seconds="$interval"
+    (( sleep_seconds <= remaining )) || sleep_seconds="$remaining"
+    sleep "$sleep_seconds"
   done
   [[ "$(public_version)" == "$VERSION" ]]
   end="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  elapsed_seconds=$(( SECONDS - start_tick ))
+  (( elapsed_seconds >= seconds ))
   end_lines="$(docker exec "$PROXY_CONTAINER" sh -c "wc -l < '$NGINX_ACCESS_LOG'")"
   (( end_lines >= baseline_lines ))
   sample_count=$(( end_lines - baseline_lines ))
@@ -408,14 +429,48 @@ action_observe() {
   errors_5xx="$(docker exec "$PROXY_CONTAINER" sh -c "tail -n '$sample_count' '$NGINX_ACCESS_LOG'" | grep -Ec '" 5[0-9][0-9] ' || true)"
   [[ "$errors_5xx" -eq 0 ]]
   trap - ERR
-  printf 'observation=passed start=%s end=%s version=%s samples=%s errors_5xx=%s\n' "$start" "$end" "$VERSION" "$sample_count" "$errors_5xx" | tee "$STATE_DIR/observation.result"
+  printf 'observation=passed release_id=%s production=%s version=%s requested_seconds=%s elapsed_seconds=%s interval=%s checks=%s start=%s end=%s samples=%s errors_5xx=%s\n' \
+    "$RELEASE_ID" "$NEW" "$VERSION" "$seconds" "$elapsed_seconds" "$interval" "$checks" "$start" "$end" "$sample_count" "$errors_5xx" |
+    tee "$STATE_DIR/observation.result"
 }
 
 action_finalize() {
   load_config
   local mode="${1:---dry-run}"
+  local minimum_observe_seconds=600 observation_result field
+  local observed_release="" observed_production="" observed_version=""
+  local requested_seconds="" elapsed_seconds=""
   # shellcheck disable=SC1090
   source "$STATE_DIR/role-state.env"
+  # Finalization only accepts a successful observation for this release and production slot.
+  if [[ ! -r "$STATE_DIR/observation.result" ]]; then
+    printf 'finalize_blocked=observation_missing\n' >&2
+    return 1
+  fi
+  observation_result="$(cat "$STATE_DIR/observation.result")"
+  if [[ "$observation_result" != observation=passed\ * ]]; then
+    printf 'finalize_blocked=observation_not_passed\n' >&2
+    return 1
+  fi
+  for field in $observation_result; do
+    case "$field" in
+      release_id=*) observed_release="${field#*=}" ;;
+      production=*) observed_production="${field#*=}" ;;
+      version=*) observed_version="${field#*=}" ;;
+      requested_seconds=*) requested_seconds="${field#*=}" ;;
+      elapsed_seconds=*) elapsed_seconds="${field#*=}" ;;
+    esac
+  done
+  if [[ "$observed_release" != "$RELEASE_ID" || "$observed_production" != "$NEW" || "$observed_version" != "$VERSION" ]]; then
+    printf 'finalize_blocked=observation_identity_mismatch\n' >&2
+    return 1
+  fi
+  if [[ ! "$requested_seconds" =~ ^[0-9]+$ || ! "$elapsed_seconds" =~ ^[0-9]+$ ]] ||
+    (( requested_seconds < minimum_observe_seconds || elapsed_seconds < requested_seconds )); then
+    printf 'finalize_blocked=observation_too_short minimum_seconds=%s requested_seconds=%s elapsed_seconds=%s\n' \
+      "$minimum_observe_seconds" "$requested_seconds" "$elapsed_seconds" >&2
+    return 1
+  fi
   [[ "$(docker inspect -f '{{.State.Health.Status}}' "$NEW")" == healthy ]]
   [[ "$(proxy_version)" == "$VERSION" ]]
   if [[ "$mode" == --dry-run ]]; then
@@ -423,6 +478,9 @@ action_finalize() {
     return
   fi
   [[ "$mode" == --execute && "${CONFIRM_FINALIZE:-}" == "$RELEASE_ID" ]]
+  # Preserve the manual standby stop across Docker daemon restarts.
+  docker update --restart=unless-stopped "$OLD" >/dev/null
+  [[ "$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$OLD")" == unless-stopped ]]
   docker stop --time 30 "$OLD" >/dev/null
   [[ "$(docker inspect -f '{{.State.Status}}' "$OLD")" == exited ]]
   local i
@@ -437,7 +495,8 @@ action_finalize() {
   # Only prune disposable Docker data; the stopped slot and its tagged image remain rollback-ready.
   docker image prune --force >/dev/null
   docker builder prune --force >/dev/null
-  printf 'finalize=passed production=%s old=%s old_state=exited version=%s docker_cleanup=passed\n' "$NEW" "$OLD" "$VERSION" | tee "$STATE_DIR/final.result"
+  printf 'finalize=passed production=%s old=%s old_state=exited old_restart_policy=unless-stopped version=%s docker_cleanup=passed\n' \
+    "$NEW" "$OLD" "$VERSION" | tee "$STATE_DIR/final.result"
 }
 
 action_rollback() {
