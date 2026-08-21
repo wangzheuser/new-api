@@ -16,7 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRewriteContextFallbackResponseModels(t *testing.T) {
+func TestRewriteRequestedModelResponse(t *testing.T) {
+	info := &relaycommon.RelayInfo{RequestedModelName: "MODEL_A"}
 	tests := []struct {
 		name     string
 		input    string
@@ -33,24 +34,31 @@ func TestRewriteContextFallbackResponseModels(t *testing.T) {
 			expected: "data: {\"type\":\"response.created\",\"response\":{\"model\":\"MODEL_A\"}}\n\n",
 		},
 		{
-			name:     "done",
-			input:    "data: [DONE]\n\n",
-			expected: "data: [DONE]\n\n",
+			name:     "preserve sse fields and spacing",
+			input:    ": comment\r\nevent: response.created\r\nid: 7\r\ndata:\t{\"response\":{\"modelVersion\":\"MODEL_B\"}}  \r\n\r\n",
+			expected: ": comment\r\nevent: response.created\r\nid: 7\r\ndata:\t{\"response\":{\"modelVersion\":\"MODEL_A\"}}  \r\n\r\n",
+		},
+		{
+			name:     "done and comment",
+			input:    ": ping\n\ndata: [DONE]\n\n",
+			expected: ": ping\n\ndata: [DONE]\n\n",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, string(rewriteContextFallbackResponseModels([]byte(tt.input), "MODEL_A")))
+			actual, _ := rewriteRequestedModelResponse([]byte(tt.input), info, http.StatusOK)
+			assert.Equal(t, tt.expected, string(actual))
 		})
 	}
 }
 
-func TestContextFallbackResponseWriterRewritesSplitSSE(t *testing.T) {
+func TestRequestedModelResponseWriterRewritesSplitSSE(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Header("Content-Type", "text/event-stream")
-	installContextFallbackResponseWriter(c, "MODEL_A")
+	info := &relaycommon.RelayInfo{RequestedModelName: "MODEL_A"}
+	installRequestedModelResponseWriter(c, info)
 	relaycommon.ApplyFinalResponseWriter(c)
 
 	_, err := c.Writer.Write([]byte("data: {\"model\":\"MODE"))
@@ -62,31 +70,54 @@ func TestContextFallbackResponseWriterRewritesSplitSSE(t *testing.T) {
 	assert.Equal(t, "data: {\"model\":\"MODEL_A\"}\n\n", recorder.Body.String())
 }
 
-// TestContextFallbackResponseWriterKeepsPartialSSEAfterBufferRelease protects
-// transform state when an unexpected stream releases the inner buffer.
-func TestContextFallbackResponseWriterKeepsPartialSSEAfterBufferRelease(t *testing.T) {
+func TestRequestedModelResponseWriterRewritesSplitJSON(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	info := &relaycommon.RelayInfo{
-		RelayFormat: types.RelayFormatOpenAI,
-		RelayMode:   relayconstant.RelayModeChatCompletions,
-		ChannelMeta: &relaycommon.ChannelMeta{ParamOverride: map[string]interface{}{
-			"operations": []interface{}{
-				map[string]interface{}{
-					"phase": "response",
-					"mode":  "return_error",
-					"value": map[string]interface{}{"message": "blocked"},
-				},
-			},
-		}},
-	}
-	installContextFallbackResponseWriter(c, "MODEL_A")
+	info := &relaycommon.RelayInfo{RequestedModelName: "MODEL_A"}
+	installRequestedModelResponseWriter(c, info)
+	relaycommon.ApplyFinalResponseWriter(c)
+
+	_, err := c.Writer.Write([]byte(`{"model":"MODE`))
+	require.NoError(t, err)
+	assert.Empty(t, recorder.Body.String())
+	_, err = c.Writer.Write([]byte(`L_B","choices":[]}`))
+	require.NoError(t, err)
+
+	assert.JSONEq(t, `{"model":"MODEL_A","choices":[]}`, recorder.Body.String())
+}
+
+func TestRequestedModelResponseWriterPreservesInvalidJSON(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Header("Content-Type", "application/json")
+	info := &relaycommon.RelayInfo{RequestedModelName: "MODEL_A"}
+	installRequestedModelResponseWriter(c, info)
+	relaycommon.ApplyFinalResponseWriter(c)
+
+	input := []byte(`{"model":"MODEL_B"`)
+	_, err := c.Writer.Write(input)
+	require.NoError(t, err)
+	assert.Empty(t, recorder.Body.String())
+	require.NoError(t, relaycommon.FinishFinalResponseWriter(c, true))
+
+	assert.Equal(t, input, recorder.Body.Bytes())
+}
+
+// TestRequestedModelResponseWriterKeepsPartialSSEAfterBufferRelease protects
+// transform state when an unexpected stream releases the inner buffer.
+func TestRequestedModelResponseWriterKeepsPartialSSEAfterBufferRelease(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	info := responseWriterOverrideRelayInfo()
+	installRequestedModelResponseWriter(c, info)
 	relaycommon.StartResponseOverrideBuffer(c, info)
 	relaycommon.ApplyFinalResponseWriter(c)
 	c.Header("Content-Type", "text/event-stream")
 
-	writer, ok := c.Writer.(*contextFallbackResponseWriter)
+	writer, ok := c.Writer.(*requestedModelResponseWriter)
 	require.True(t, ok)
 	_, err := writer.Write([]byte("data: {\"model\":\"MODEL_B\"}\n\ndata: {\"model\":\"MODE"))
 	require.NoError(t, err)
@@ -102,26 +133,14 @@ func TestContextFallbackResponseWriterKeepsPartialSSEAfterBufferRelease(t *testi
 	)
 }
 
-// TestContextFallbackResponseWriterDiscardsPartialCandidate verifies stale
-// transformed bytes cannot prefix the replacement error body.
-func TestContextFallbackResponseWriterDiscardsPartialCandidate(t *testing.T) {
+// TestRequestedModelResponseWriterDiscardsPartialCandidate verifies stale
+// bytes from a failed attempt cannot prefix the replacement error body.
+func TestRequestedModelResponseWriterDiscardsPartialCandidate(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	info := &relaycommon.RelayInfo{
-		RelayFormat: types.RelayFormatOpenAI,
-		RelayMode:   relayconstant.RelayModeChatCompletions,
-		ChannelMeta: &relaycommon.ChannelMeta{ParamOverride: map[string]interface{}{
-			"operations": []interface{}{
-				map[string]interface{}{
-					"phase": "response",
-					"mode":  "return_error",
-					"value": map[string]interface{}{"message": "blocked"},
-				},
-			},
-		}},
-	}
-	installContextFallbackResponseWriter(c, "MODEL_A")
+	info := responseWriterOverrideRelayInfo()
+	installRequestedModelResponseWriter(c, info)
 	relaycommon.StartResponseOverrideBuffer(c, info)
 	relaycommon.ApplyFinalResponseWriter(c)
 	c.Header("Content-Type", "text/event-stream")
@@ -134,32 +153,99 @@ func TestContextFallbackResponseWriterDiscardsPartialCandidate(t *testing.T) {
 	buffer.MarkRelayError()
 	buffer.Discard(c)
 
-	clientErr := types.WithOpenAIError(types.OpenAIError{Message: "upstream failed"}, http.StatusBadGateway)
+	clientErr := types.WithOpenAIError(types.OpenAIError{Message: "MODEL_B failed"}, http.StatusBadGateway)
 	writeRelayErrorResponse(c, types.RelayFormatOpenAI, nil, info, clientErr)
-	assert.NotContains(t, recorder.Body.String(), "MODE")
-	assert.Contains(t, recorder.Body.String(), "upstream failed")
+	assert.NotContains(t, recorder.Body.String(), "MODEL_B")
+	assert.Contains(t, recorder.Body.String(), "MODEL_A failed")
 }
 
-func TestContextFallbackResponseWriterDropsStaleContentLength(t *testing.T) {
+func TestRequestedModelResponseWriterDiscardsPartialCandidateWithoutOverride(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	info := &relaycommon.RelayInfo{
+		RequestedModelName: "MODEL_A",
+		AttemptModelName:   "MODEL_B",
+		ChannelMeta:        &relaycommon.ChannelMeta{UpstreamModelName: "MODEL_B"},
+	}
+	c.Header("Content-Type", "text/event-stream")
+	installRequestedModelResponseWriter(c, info)
+	relaycommon.ApplyFinalResponseWriter(c)
+
+	_, err := c.Writer.Write([]byte("data: {\"model\":\"MODE"))
+	require.NoError(t, err)
+	assert.Empty(t, recorder.Body.String())
+	require.NoError(t, relaycommon.FinishFinalResponseWriter(c, false))
+
+	c.Header("Content-Type", "application/json")
+	clientErr := types.WithOpenAIError(types.OpenAIError{Message: "MODEL_B failed"}, http.StatusBadGateway)
+	writeRelayErrorResponse(c, types.RelayFormatOpenAI, nil, info, clientErr)
+	assert.NotContains(t, recorder.Body.String(), "MODEL_B")
+	assert.Contains(t, recorder.Body.String(), "MODEL_A failed")
+}
+
+func TestRequestedModelResponseWriterFiltersHeadersAfterTransformation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Header("Content-Type", "application/json")
 	c.Header("Content-Length", "24")
-	installContextFallbackResponseWriter(c, "MODEL_A_LONG")
+	c.Header("Content-Encoding", "gzip")
+	c.Header("Content-Range", "bytes 0-23/24")
+	c.Header("ETag", `"entity"`)
+	c.Header("Last-Modified", "Wed, 21 Oct 2015 07:28:00 GMT")
+	c.Header("Content-MD5", "digest")
+	c.Header("Digest", "sha-256=digest")
+	c.Header("X-Upstream-Model", "MODEL_B")
+	c.Header("X-Deployment", "region/MODEL_B-build")
+	c.Header("X-Request-Id", "request-id")
+	info := &relaycommon.RelayInfo{
+		RequestedModelName: "MODEL_A_LONG",
+		ChannelMeta:        &relaycommon.ChannelMeta{UpstreamModelName: "MODEL_B"},
+	}
+	installRequestedModelResponseWriter(c, info)
 	relaycommon.ApplyFinalResponseWriter(c)
 
-	c.Writer.WriteHeader(200)
+	c.Writer.WriteHeader(http.StatusOK)
 	_, err := c.Writer.Write([]byte(`{"model":"MODEL_B"}`))
 
 	require.NoError(t, err)
-	assert.Empty(t, recorder.Header().Get("Content-Length"))
+	for _, key := range []string{
+		"Content-Length", "Content-Encoding", "Content-Range", "ETag", "Last-Modified", "Content-MD5", "Digest",
+		"X-Upstream-Model", "X-Deployment",
+	} {
+		assert.Empty(t, recorder.Header().Get(key), key)
+	}
+	assert.Equal(t, "request-id", recorder.Header().Get("X-Request-Id"))
 	assert.JSONEq(t, `{"model":"MODEL_A_LONG"}`, recorder.Body.String())
 }
 
-// TestContextFallbackResponseOverrideUsesFinalClientBody verifies model
+func TestRequestedModelResponseWriterPreservesNonJSONBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	body := []byte{0x00, 0x01, 0x02, 0xff}
+	c.Header("Content-Type", "application/octet-stream")
+	c.Header("Content-Length", "4")
+	c.Header("X-Upstream-Model", "MODEL_B")
+	info := &relaycommon.RelayInfo{
+		RequestedModelName: "MODEL_A",
+		ChannelMeta:        &relaycommon.ChannelMeta{UpstreamModelName: "MODEL_B"},
+	}
+	installRequestedModelResponseWriter(c, info)
+	relaycommon.ApplyFinalResponseWriter(c)
+
+	_, err := c.Writer.Write(body)
+
+	require.NoError(t, err)
+	assert.Equal(t, body, recorder.Body.Bytes())
+	assert.Equal(t, "4", recorder.Header().Get("Content-Length"))
+	assert.Empty(t, recorder.Header().Get("X-Upstream-Model"))
+}
+
+// TestRequestedModelResponseOverrideUsesFinalClientBody verifies model
 // restoration runs before response matching and client response capture.
-func TestContextFallbackResponseOverrideUsesFinalClientBody(t *testing.T) {
+func TestRequestedModelResponseOverrideUsesFinalClientBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	previousCaptureEnabled := common.ConversationCaptureEnabled
 	common.ConversationCaptureEnabled = true
@@ -201,14 +287,14 @@ func TestContextFallbackResponseOverrideUsesFinalClientBody(t *testing.T) {
 		AttemptModelName:   "MODEL_B",
 		RequestURLPath:     "/v1/chat/completions",
 	}
-	installContextFallbackResponseWriter(c, info.RequestedModelName)
+	installRequestedModelResponseWriter(c, info)
 	info.InitChannelMeta(c)
 
 	buffer := relaycommon.CurrentResponseOverrideBuffer(c)
 	require.NotNil(t, buffer)
-	fallbackWriter, ok := c.Writer.(*contextFallbackResponseWriter)
+	responseWriter, ok := c.Writer.(*requestedModelResponseWriter)
 	require.True(t, ok)
-	assert.Same(t, buffer, fallbackWriter.ResponseWriter)
+	assert.Same(t, buffer, responseWriter.ResponseWriter)
 
 	providerBody := []byte(`{"model":"MODEL_B","choices":[{"finish_reason":"content_filter","message":{"content":""}}]}`)
 	info.MergeResponseSemantics(types.RelayFormatOpenAI, providerBody)
@@ -226,7 +312,7 @@ func TestContextFallbackResponseOverrideUsesFinalClientBody(t *testing.T) {
 
 	clientErr := finalizeResponseOverride(c, info)
 	require.NotNil(t, clientErr)
-	restoredWriter, ok := c.Writer.(*contextFallbackResponseWriter)
+	restoredWriter, ok := c.Writer.(*requestedModelResponseWriter)
 	require.True(t, ok)
 	assert.NotSame(t, buffer, restoredWriter.ResponseWriter)
 	assert.Nil(t, relaycommon.CurrentResponseOverrideBuffer(c))
@@ -237,4 +323,23 @@ func TestContextFallbackResponseOverrideUsesFinalClientBody(t *testing.T) {
 	assert.Contains(t, string(snapshot.ClientResponseBody), "模型拒绝执行该指令")
 	assert.Equal(t, http.StatusForbidden, recorder.Code)
 	assert.JSONEq(t, string(snapshot.ClientResponseBody), recorder.Body.String())
+}
+
+// responseWriterOverrideRelayInfo creates a relay fixture with one response override operation.
+func responseWriterOverrideRelayInfo() *relaycommon.RelayInfo {
+	return &relaycommon.RelayInfo{
+		RelayFormat:        types.RelayFormatOpenAI,
+		RelayMode:          relayconstant.RelayModeChatCompletions,
+		RequestedModelName: "MODEL_A",
+		AttemptModelName:   "MODEL_B",
+		ChannelMeta: &relaycommon.ChannelMeta{ParamOverride: map[string]interface{}{
+			"operations": []interface{}{
+				map[string]interface{}{
+					"phase": "response",
+					"mode":  "return_error",
+					"value": map[string]interface{}{"message": "blocked"},
+				},
+			},
+		}},
+	}
 }

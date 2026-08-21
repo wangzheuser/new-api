@@ -145,6 +145,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
 	}
+	if relayFormat != types.RelayFormatOpenAIRealtime {
+		installRequestedModelResponseWriter(c, relayInfo)
+	}
 	relayInfo.OriginHandlerStartedAt = handlerStartedAt
 	relayInfo.RequestUploadDuration = requestReadFinishedAt.Sub(handlerStartedAt)
 	if c.Request.ContentLength > 0 {
@@ -184,9 +187,6 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	meta, newAPIError = prepareContextFallback(c, relayInfo, request, tokens)
 	if newAPIError != nil {
 		return
-	}
-	if relayInfo.IsContextFallbackActive() {
-		installContextFallbackResponseWriter(c, relayInfo.GetRequestedModelName())
 	}
 	tokens = relayInfo.GetEstimatePromptTokens()
 
@@ -268,12 +268,18 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			// Response overrides may map one successful, billable upstream attempt
 			// to a client 4xx/5xx without changing its internal success semantics.
 			common.SetContextKey(c, constant.ContextKeyRelayUpstreamSucceeded, true)
+			if finishErr := relaycommon.FinishFinalResponseWriter(c, true); finishErr != nil {
+				newAPIError = types.NewError(finishErr, types.ErrorCodeBadResponse)
+				return
+			}
 			clientResponseError = finalizeResponseOverride(c, relayInfo)
 			return
 		}
 		if buffer := relaycommon.CurrentResponseOverrideBuffer(c); buffer != nil {
 			buffer.MarkRelayError()
 			buffer.Discard(c)
+		} else {
+			_ = relaycommon.FinishFinalResponseWriter(c, false)
 		}
 		if requestErr := c.Request.Context().Err(); requestErr != nil {
 			if relayInfo.StreamStatus != nil {
@@ -363,7 +369,7 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, ws *
 		return
 	}
 	if relayFormat == types.RelayFormatOpenAIRealtime {
-		helper.WssError(c, ws, relayClientOpenAIError(newAPIError))
+		helper.WssError(c, ws, relayClientOpenAIError(newAPIError, relayInfo))
 		return
 	}
 
@@ -383,12 +389,12 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, ws *
 		if relayFormat == types.RelayFormatClaude {
 			_ = helper.ClaudeData(c, dto.ClaudeResponse{
 				Type:  "error",
-				Error: relayClientClaudeError(newAPIError),
+				Error: relayClientClaudeError(newAPIError, relayInfo),
 			})
 			return
 		}
 		if relayFormat == types.RelayFormatOpenAIResponses {
-			openAIError := relayClientOpenAIError(newAPIError)
+			openAIError := relayClientOpenAIError(newAPIError, relayInfo)
 			streamError := dto.ResponsesStreamResponse{
 				Type:    "error",
 				Code:    openAIError.Code,
@@ -405,7 +411,7 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, ws *
 			}
 			return
 		}
-		if err := helper.ObjectData(c, gin.H{"error": relayClientOpenAIError(newAPIError)}); err != nil {
+		if err := helper.ObjectData(c, gin.H{"error": relayClientOpenAIError(newAPIError, relayInfo)}); err != nil {
 			logger.LogError(c, "write stream error failed: "+err.Error())
 		}
 		return
@@ -415,7 +421,7 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, ws *
 		prepareRelayErrorHeaders(c)
 		c.JSON(newAPIError.StatusCode, gin.H{
 			"type":  "error",
-			"error": relayClientClaudeError(newAPIError),
+			"error": relayClientClaudeError(newAPIError, relayInfo),
 		})
 		return
 	}
@@ -424,7 +430,7 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, ws *
 		c.JSON(newAPIError.StatusCode, dto.GeminiErrorResponse{
 			Error: dto.GeminiError{
 				Code:    newAPIError.StatusCode,
-				Message: relayClientOpenAIError(newAPIError).Message,
+				Message: relayClientOpenAIError(newAPIError, relayInfo).Message,
 				Status:  geminiCanonicalErrorStatus(newAPIError.StatusCode),
 			},
 		})
@@ -432,21 +438,21 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, ws *
 	}
 	prepareRelayErrorHeaders(c)
 	c.JSON(newAPIError.StatusCode, gin.H{
-		"error": relayClientOpenAIError(newAPIError),
+		"error": relayClientOpenAIError(newAPIError, relayInfo),
 	})
 }
 
 // relayClientOpenAIError 使用当前错误消息生成 OpenAI 协议错误，保留请求 ID 等网关补充信息。
-func relayClientOpenAIError(newAPIError *types.NewAPIError) types.OpenAIError {
+func relayClientOpenAIError(newAPIError *types.NewAPIError, relayInfo *relaycommon.RelayInfo) types.OpenAIError {
 	openAIError := newAPIError.ToOpenAIError()
-	openAIError.Message = newAPIError.MaskSensitiveError()
+	openAIError.Message = relaycommon.SanitizeClientModelErrorMessage(newAPIError.MaskSensitiveError(), relayInfo)
 	return openAIError
 }
 
 // relayClientClaudeError 使用当前错误消息生成 Claude 协议错误，保留请求 ID 等网关补充信息。
-func relayClientClaudeError(newAPIError *types.NewAPIError) types.ClaudeError {
+func relayClientClaudeError(newAPIError *types.NewAPIError, relayInfo *relaycommon.RelayInfo) types.ClaudeError {
 	claudeError := newAPIError.ToClaudeError()
-	claudeError.Message = newAPIError.MaskSensitiveError()
+	claudeError.Message = relaycommon.SanitizeClientModelErrorMessage(newAPIError.MaskSensitiveError(), relayInfo)
 	return claudeError
 }
 

@@ -129,6 +129,43 @@ func TestWriteRelayErrorResponse_UncommittedResponseKeepsHTTPStatus(t *testing.T
 	assert.Contains(t, recorder.Body.String(), `"message":"upstream timeout"`)
 }
 
+func TestWriteRelayErrorResponse_SanitizesInternalModelNames(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name        string
+		relayFormat types.RelayFormat
+		path        string
+	}{
+		{name: "openai", relayFormat: types.RelayFormatOpenAI, path: "/v1/chat/completions"},
+		{name: "responses", relayFormat: types.RelayFormatOpenAIResponses, path: "/v1/responses"},
+		{name: "claude", relayFormat: types.RelayFormatClaude, path: "/v1/messages"},
+		{name: "gemini", relayFormat: types.RelayFormatGemini, path: "/v1beta/models/CLIENT_ALIAS:generateContent"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, tt.path, nil)
+			info := &relaycommon.RelayInfo{
+				RequestedModelName: "CLIENT_ALIAS",
+				AttemptModelName:   "UPSTREAM_MODEL",
+				ChannelMeta:        &relaycommon.ChannelMeta{UpstreamModelName: "UPSTREAM_MODEL"},
+			}
+			relayErr := types.NewErrorWithStatusCode(
+				errors.New("UPSTREAM_MODEL is unavailable"),
+				types.ErrorCodeBadResponse,
+				http.StatusBadGateway,
+			)
+
+			writeRelayErrorResponse(ctx, tt.relayFormat, nil, info, relayErr)
+
+			assert.NotContains(t, recorder.Body.String(), "UPSTREAM_MODEL")
+			assert.Contains(t, recorder.Body.String(), "CLIENT_ALIAS is unavailable")
+		})
+	}
+}
+
 func TestWriteRelayErrorResponse_CommittedStreamSkipsWriteAfterClientCancellation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()

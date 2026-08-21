@@ -2,159 +2,291 @@ package controller
 
 import (
 	"bytes"
+	"net/http"
 	"strings"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
-// contextFallbackResponseWriter 将普通 JSON 和 SSE 中的模型字段恢复为客户端请求模型。
-type contextFallbackResponseWriter struct {
+// requestedModelResponseWriter exposes only the client-requested model in HTTP and SSE responses.
+type requestedModelResponseWriter struct {
 	gin.ResponseWriter
-	requestedModel string
-	pendingSSE     []byte
+	info        *relaycommon.RelayInfo
+	pendingSSE  []byte
+	pendingJSON []byte
+	statusCode  int
+	headerSent  bool
 }
 
-// RebindResponseWriter preserves pending transform state while replacing an
-// attempt-scoped response buffer with its stable downstream writer.
-func (w *contextFallbackResponseWriter) RebindResponseWriter(writer gin.ResponseWriter) {
+// RebindResponseWriter preserves pending SSE state when an attempt buffer releases its downstream writer.
+func (w *requestedModelResponseWriter) RebindResponseWriter(writer gin.ResponseWriter) {
 	if w == nil || writer == nil {
 		return
 	}
 	w.ResponseWriter = writer
 }
 
-// FinishResponseWriter either forwards the remaining transformed bytes or
-// discards them together with the failed candidate response.
-func (w *contextFallbackResponseWriter) FinishResponseWriter(commit bool) error {
-	if w == nil || len(w.pendingSSE) == 0 {
+// FinishResponseWriter commits or discards bytes held for an incomplete JSON or SSE frame.
+func (w *requestedModelResponseWriter) FinishResponseWriter(commit bool) error {
+	if w == nil {
 		return nil
 	}
-	pending := w.pendingSSE
+	pendingSSE := w.pendingSSE
+	pendingJSON := w.pendingJSON
 	w.pendingSSE = nil
+	w.pendingJSON = nil
 	if !commit {
+		relaycommon.FilterClientModelResponseHeaders(w.Header(), w.info)
+		if !w.ResponseWriter.Written() {
+			relaycommon.ClearTransformedEntityHeaders(w.Header())
+			w.Header().Del("Content-Type")
+			w.Header().Del("Transfer-Encoding")
+			w.statusCode = 0
+			w.headerSent = false
+		}
 		return nil
 	}
-	_, err := w.ResponseWriter.Write(rewriteContextFallbackResponseModels(pending, w.requestedModel))
+	if len(pendingSSE) == 0 && len(pendingJSON) == 0 {
+		w.commitHeader(false)
+		return nil
+	}
+	if len(pendingSSE) > 0 {
+		rewritten, changed := rewriteRequestedModelResponse(pendingSSE, w.info, w.responseStatusCode())
+		w.commitHeader(changed || w.isSSE())
+		_, err := w.ResponseWriter.Write(rewritten)
+		return err
+	}
+	rewritten, changed := relaycommon.RewriteClientModelJSON(pendingJSON, w.info, w.responseStatusCode())
+	w.commitHeader(changed)
+	_, err := w.ResponseWriter.Write(rewritten)
 	return err
 }
 
-// WriteHeader 移除重写后已失效的上游内容长度，交由 HTTP 层重新计算或分块发送。
-func (w *contextFallbackResponseWriter) WriteHeader(code int) {
-	w.Header().Del("Content-Length")
-	w.ResponseWriter.WriteHeader(code)
+// WriteHeader delays the status until the body determines whether entity headers became stale.
+func (w *requestedModelResponseWriter) WriteHeader(code int) {
+	if w == nil || w.ResponseWriter == nil || code <= 0 || w.headerSent || w.ResponseWriter.Written() {
+		return
+	}
+	w.statusCode = code
 }
 
-// Write 重写普通 JSON，并仅缓冲 SSE 的未完成行以兼容任意网络分块。
-func (w *contextFallbackResponseWriter) Write(data []byte) (int, error) {
-	w.Header().Del("Content-Length")
-	if strings.Contains(w.Header().Get("Content-Type"), "text/event-stream") || len(w.pendingSSE) > 0 {
-		w.pendingSSE = append(w.pendingSSE, data...)
-		lineEnd := bytes.LastIndexByte(w.pendingSSE, '\n')
-		if lineEnd < 0 {
-			return len(data), nil
-		}
-		complete := w.pendingSSE[:lineEnd+1]
-		if _, err := w.ResponseWriter.Write(rewriteContextFallbackResponseModels(complete, w.requestedModel)); err != nil {
-			return 0, err
-		}
-		w.pendingSSE = append([]byte(nil), w.pendingSSE[lineEnd+1:]...)
-		return len(data), nil
+// WriteHeaderNow commits filtered headers when a handler explicitly requests it.
+func (w *requestedModelResponseWriter) WriteHeaderNow() {
+	if w == nil {
+		return
 	}
-	rewritten := rewriteContextFallbackResponseModels(data, w.requestedModel)
-	_, err := w.ResponseWriter.Write(rewritten)
-	if err != nil {
+	contentType := strings.ToLower(w.Header().Get("Content-Type"))
+	mayTransform := strings.Contains(contentType, "json") || strings.Contains(contentType, "text/event-stream")
+	w.commitHeader(mayTransform)
+}
+
+// Status returns the delayed status code before the underlying writer is committed.
+func (w *requestedModelResponseWriter) Status() int {
+	if w == nil {
+		return 0
+	}
+	if w.statusCode != 0 {
+		return w.statusCode
+	}
+	if w.ResponseWriter == nil {
+		return http.StatusOK
+	}
+	return w.ResponseWriter.Status()
+}
+
+// Write rewrites complete JSON bodies and complete SSE lines while preserving arbitrary network chunks.
+func (w *requestedModelResponseWriter) Write(data []byte) (int, error) {
+	if w == nil || w.ResponseWriter == nil {
+		return 0, http.ErrBodyNotAllowed
+	}
+	if w.isSSE() || len(w.pendingSSE) > 0 || looksLikeSSE(data) {
+		return w.writeSSE(data)
+	}
+	if w.isJSON() || len(w.pendingJSON) > 0 || looksLikeJSON(data) {
+		return w.writeJSON(data)
+	}
+
+	rewritten, changed := rewriteRequestedModelResponse(data, w.info, w.responseStatusCode())
+	w.commitHeader(changed)
+	if _, err := w.ResponseWriter.Write(rewritten); err != nil {
 		return 0, err
 	}
 	return len(data), nil
 }
 
-// WriteString 与 Write 共用同一模型重写逻辑。
-func (w *contextFallbackResponseWriter) WriteString(data string) (int, error) {
+// WriteString delegates to Write so string and byte responses share the same contract.
+func (w *requestedModelResponseWriter) WriteString(data string) (int, error) {
 	return w.Write([]byte(data))
 }
 
-// Flush 在完整 SSE 事件没有换行时仍会重写可识别的数据行。
-func (w *contextFallbackResponseWriter) Flush() {
+// Flush emits a complete pending SSE data line and then flushes the downstream writer.
+func (w *requestedModelResponseWriter) Flush() {
+	if w == nil || w.ResponseWriter == nil {
+		return
+	}
+	if len(w.pendingJSON) > 0 {
+		return
+	}
 	if len(w.pendingSSE) > 0 {
 		trimmed := bytes.TrimSpace(w.pendingSSE)
 		payload := bytes.TrimSpace(bytes.TrimPrefix(trimmed, []byte("data:")))
 		if !bytes.HasPrefix(trimmed, []byte("data:")) || bytes.Equal(payload, []byte("[DONE]")) || gjson.ValidBytes(payload) {
-			_, _ = w.ResponseWriter.Write(rewriteContextFallbackResponseModels(w.pendingSSE, w.requestedModel))
+			rewritten, changed := rewriteRequestedModelResponse(w.pendingSSE, w.info, w.responseStatusCode())
+			w.commitHeader(changed || w.isSSE())
+			_, _ = w.ResponseWriter.Write(rewritten)
 			w.pendingSSE = nil
 		}
 	}
+	w.commitHeader(w.isSSE())
 	w.ResponseWriter.Flush()
 }
 
-// rewriteContextFallbackResponseModels 重写顶层 model 及 Responses 事件中的 response.model。
-func rewriteContextFallbackResponseModels(data []byte, requestedModel string) []byte {
-	if len(data) == 0 || requestedModel == "" {
-		return data
+// writeJSON buffers a JSON response until a complete value is available across Write calls.
+func (w *requestedModelResponseWriter) writeJSON(data []byte) (int, error) {
+	w.pendingJSON = append(w.pendingJSON, data...)
+	if !gjson.ValidBytes(bytes.TrimSpace(w.pendingJSON)) {
+		return len(data), nil
+	}
+	rewritten, changed := relaycommon.RewriteClientModelJSON(w.pendingJSON, w.info, w.responseStatusCode())
+	w.pendingJSON = nil
+	w.commitHeader(changed)
+	if _, err := w.ResponseWriter.Write(rewritten); err != nil {
+		return 0, err
+	}
+	return len(data), nil
+}
+
+// writeSSE buffers only the final incomplete line and rewrites all complete SSE lines.
+func (w *requestedModelResponseWriter) writeSSE(data []byte) (int, error) {
+	w.pendingSSE = append(w.pendingSSE, data...)
+	lineEnd := bytes.LastIndexByte(w.pendingSSE, '\n')
+	if lineEnd < 0 {
+		return len(data), nil
+	}
+	complete := w.pendingSSE[:lineEnd+1]
+	rewritten, changed := rewriteRequestedModelResponse(complete, w.info, w.responseStatusCode())
+	w.commitHeader(changed || w.isSSE())
+	if _, err := w.ResponseWriter.Write(rewritten); err != nil {
+		return 0, err
+	}
+	w.pendingSSE = append([]byte(nil), w.pendingSSE[lineEnd+1:]...)
+	return len(data), nil
+}
+
+// responseStatusCode returns the candidate status used to recognize non-2xx error bodies.
+func (w *requestedModelResponseWriter) responseStatusCode() int {
+	statusCode := w.Status()
+	if statusCode == 0 {
+		return http.StatusOK
+	}
+	return statusCode
+}
+
+// isSSE reports whether the current response uses Server-Sent Events.
+func (w *requestedModelResponseWriter) isSSE() bool {
+	return w != nil && strings.Contains(strings.ToLower(w.Header().Get("Content-Type")), "text/event-stream")
+}
+
+// isJSON reports whether the current response declares a JSON media type.
+func (w *requestedModelResponseWriter) isJSON() bool {
+	return w != nil && strings.Contains(strings.ToLower(w.Header().Get("Content-Type")), "json")
+}
+
+// looksLikeJSON recognizes an object or array when an upstream omits its media type.
+func looksLikeJSON(data []byte) bool {
+	trimmed := bytes.TrimSpace(data)
+	return len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[')
+}
+
+// looksLikeSSE recognizes an event data field when an upstream omits its media type.
+func looksLikeSSE(data []byte) bool {
+	return bytes.HasPrefix(bytes.TrimLeft(data, " \t\r\n"), []byte("data:"))
+}
+
+// commitHeader filters model disclosures and commits the delayed response status once.
+func (w *requestedModelResponseWriter) commitHeader(transformed bool) {
+	if w == nil || w.ResponseWriter == nil || w.headerSent {
+		return
+	}
+	relaycommon.FilterClientModelResponseHeaders(w.Header(), w.info)
+	if transformed {
+		relaycommon.ClearTransformedEntityHeaders(w.Header())
+	}
+	statusCode := w.responseStatusCode()
+	w.headerSent = true
+	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+// rewriteRequestedModelResponse rewrites a JSON body or JSON payloads on SSE data lines.
+func rewriteRequestedModelResponse(data []byte, info *relaycommon.RelayInfo, statusCode int) ([]byte, bool) {
+	if len(data) == 0 || info == nil || strings.TrimSpace(info.GetRequestedModelName()) == "" {
+		return data, false
 	}
 	if gjson.ValidBytes(bytes.TrimSpace(data)) {
-		return rewriteContextFallbackJSON(data, requestedModel)
+		return relaycommon.RewriteClientModelJSON(data, info, statusCode)
 	}
 
 	lines := bytes.SplitAfter(data, []byte("\n"))
 	changed := false
-	for i, line := range lines {
-		trimmed := bytes.TrimSpace(line)
-		if !bytes.HasPrefix(trimmed, []byte("data:")) {
+	for index, line := range lines {
+		content, ending := splitSSELineEnding(line)
+		trimmedLeft := bytes.TrimLeft(content, " \t")
+		if !bytes.HasPrefix(trimmedLeft, []byte("data:")) {
 			continue
 		}
-		payload := bytes.TrimSpace(bytes.TrimPrefix(trimmed, []byte("data:")))
+		fieldOffset := len(content) - len(trimmedLeft) + len("data:")
+		payloadStart := fieldOffset
+		for payloadStart < len(content) && (content[payloadStart] == ' ' || content[payloadStart] == '\t') {
+			payloadStart++
+		}
+		payloadEnd := len(content)
+		for payloadEnd > payloadStart && (content[payloadEnd-1] == ' ' || content[payloadEnd-1] == '\t') {
+			payloadEnd--
+		}
+		payload := content[payloadStart:payloadEnd]
 		if !gjson.ValidBytes(payload) {
 			continue
 		}
-		rewritten := rewriteContextFallbackJSON(payload, requestedModel)
-		if bytes.Equal(payload, rewritten) {
+		rewritten, payloadChanged := relaycommon.RewriteClientModelJSON(payload, info, statusCode)
+		if !payloadChanged {
 			continue
 		}
-		lineEnding := ""
-		if bytes.HasSuffix(line, []byte("\r\n")) {
-			lineEnding = "\r\n"
-		} else if bytes.HasSuffix(line, []byte("\n")) {
-			lineEnding = "\n"
-		}
-		lines[i] = []byte("data: " + string(rewritten) + lineEnding)
+		updated := make([]byte, 0, len(content)-len(payload)+len(rewritten)+len(ending))
+		updated = append(updated, content[:payloadStart]...)
+		updated = append(updated, rewritten...)
+		updated = append(updated, content[payloadEnd:]...)
+		updated = append(updated, ending...)
+		lines[index] = updated
 		changed = true
 	}
 	if !changed {
-		return data
+		return data, false
 	}
-	return bytes.Join(lines, nil)
+	return bytes.Join(lines, nil), true
 }
 
-// rewriteContextFallbackJSON 仅修改协议模型字段，保留其他响应内容。
-func rewriteContextFallbackJSON(data []byte, requestedModel string) []byte {
-	result := data
-	for _, path := range []string{"model", "response.model", "message.model"} {
-		if !gjson.GetBytes(result, path).Exists() {
-			continue
-		}
-		updated, err := sjson.SetBytes(result, path, requestedModel)
-		if err == nil {
-			result = updated
-		}
+// splitSSELineEnding separates the payload from CRLF or LF without normalizing either.
+func splitSSELineEnding(line []byte) ([]byte, []byte) {
+	if bytes.HasSuffix(line, []byte("\r\n")) {
+		return line[:len(line)-2], line[len(line)-2:]
 	}
-	return result
+	if bytes.HasSuffix(line, []byte("\n")) {
+		return line[:len(line)-1], line[len(line)-1:]
+	}
+	return line, nil
 }
 
-// installContextFallbackResponseWriter 只在实际发生兜底时安装透明响应重写。
-func installContextFallbackResponseWriter(c *gin.Context, requestedModel string) {
-	if c == nil || c.Writer == nil || strings.TrimSpace(requestedModel) == "" {
-		return
-	}
-	if _, installed := c.Writer.(*contextFallbackResponseWriter); installed {
+// installRequestedModelResponseWriter registers the per-attempt final client response writer.
+func installRequestedModelResponseWriter(c *gin.Context, info *relaycommon.RelayInfo) {
+	if c == nil || c.Writer == nil || info == nil || strings.TrimSpace(info.GetRequestedModelName()) == "" {
 		return
 	}
 	wrap := func(writer gin.ResponseWriter) relaycommon.FinalResponseWriter {
-		return &contextFallbackResponseWriter{
+		return &requestedModelResponseWriter{
 			ResponseWriter: writer,
-			requestedModel: requestedModel,
+			info:           info,
 		}
 	}
 	relaycommon.SetFinalResponseWriterFactory(c, wrap)

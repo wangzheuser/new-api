@@ -528,6 +528,11 @@ func finishFinalResponseWriter(c *gin.Context, commit bool) error {
 	return writer.FinishResponseWriter(commit)
 }
 
+// FinishFinalResponseWriter completes or discards a final response transform outside response buffering.
+func FinishFinalResponseWriter(c *gin.Context, commit bool) error {
+	return finishFinalResponseWriter(c, commit)
+}
+
 func cloneResponseHeader(header http.Header) http.Header {
 	if header == nil {
 		return make(http.Header)

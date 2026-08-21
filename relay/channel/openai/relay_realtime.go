@@ -2,6 +2,7 @@ package openai
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -234,7 +235,8 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 					localUsage.OutputTokenDetails.AudioTokens += audioToken
 				}
 
-				err = helper.WssString(c, clientConn, string(message))
+				clientMessage := rewriteRealtimeClientMessage(message, info)
+				err = helper.WssString(c, clientConn, string(clientMessage))
 				if err != nil {
 					errChan <- fmt.Errorf("error writing to client: %v", err)
 					return
@@ -268,6 +270,12 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 	// check usage total tokens, if 0, use local usage
 
 	return nil, sumUsage
+}
+
+// rewriteRealtimeClientMessage creates the client-visible copy after internal usage processing finishes.
+func rewriteRealtimeClientMessage(message []byte, info *relaycommon.RelayInfo) []byte {
+	rewritten, _ := relaycommon.RewriteClientModelJSON(message, info, http.StatusOK)
+	return rewritten
 }
 
 func preConsumeUsage(ctx *gin.Context, info *relaycommon.RelayInfo, usage *dto.RealtimeUsage, totalUsage *dto.RealtimeUsage) error {
