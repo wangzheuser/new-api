@@ -228,6 +228,8 @@ export interface ChannelTestResponse {
 export interface ChannelTestResponseDetails {
   response_time?: number
   error?: string
+  effective_endpoint_type?: string
+  stream?: boolean
   content?: string
   reasoning_content?: string
   raw_response?: string

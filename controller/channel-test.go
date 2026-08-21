@@ -44,13 +44,17 @@ type testResult struct {
 	responseBody          []byte
 	responseBodyTruncated bool
 	upstreamStatus        int
+	effectiveEndpointType constant.EndpointType
+	isStream              bool
 }
 
 type channelTestResponseDetails struct {
-	Content              string `json:"content,omitempty"`
-	ReasoningContent     string `json:"reasoning_content,omitempty"`
-	RawResponse          string `json:"raw_response"`
-	RawResponseTruncated bool   `json:"raw_response_truncated"`
+	EffectiveEndpointType constant.EndpointType `json:"effective_endpoint_type"`
+	Stream                bool                  `json:"stream"`
+	Content               string                `json:"content,omitempty"`
+	ReasoningContent      string                `json:"reasoning_content,omitempty"`
+	RawResponse           string                `json:"raw_response"`
+	RawResponseTruncated  bool                  `json:"raw_response_truncated"`
 }
 
 type channelTestOptions struct {
@@ -67,7 +71,6 @@ type channelTestOptions struct {
 
 type channelTestResponseOptions struct {
 	includeDetails     bool
-	isStream           bool
 	keyIndex           *int
 	updateResponseTime bool
 }
@@ -97,6 +100,7 @@ func getChannelConnectionTestMaxOutputTokens(userPrompt string) uint {
 	return customChannelTestMaxOutputTokens
 }
 
+// normalizeChannelTestEndpoint preserves explicit endpoint selection and the existing automatic endpoint priority.
 func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointType string) string {
 	normalized := strings.TrimSpace(endpointType)
 	if normalized != "" {
@@ -109,6 +113,75 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 		return string(constant.EndpointTypeOpenAIResponse)
 	}
 	return normalized
+}
+
+// resolveChannelTestRequestPath applies the existing endpoint-selection priority to one test model.
+func resolveChannelTestRequestPath(channel *model.Channel, modelName, endpointType string) string {
+	if endpointType != "" {
+		if endpointInfo, ok := common.GetDefaultEndpointInfo(constant.EndpointType(endpointType)); ok {
+			return endpointInfo.Path
+		}
+	}
+
+	requestPath := "/v1/chat/completions"
+	lowerModelName := strings.ToLower(modelName)
+	if strings.Contains(lowerModelName, "rerank") {
+		requestPath = "/v1/rerank"
+	}
+	if strings.Contains(lowerModelName, "embedding") ||
+		strings.HasPrefix(modelName, "m3e") ||
+		strings.Contains(modelName, "bge-") ||
+		strings.Contains(modelName, "embed") ||
+		channel != nil && channel.Type == constant.ChannelTypeMokaAI {
+		requestPath = "/v1/embeddings"
+	}
+	if channel != nil && channel.Type == constant.ChannelTypeVolcEngine && strings.Contains(modelName, "seedream") {
+		requestPath = "/v1/images/generations"
+	}
+	if strings.Contains(lowerModelName, "codex") {
+		requestPath = "/v1/responses"
+	}
+	if strings.HasSuffix(modelName, ratio_setting.CompactModelSuffix) {
+		requestPath = "/v1/responses/compact"
+	}
+	return requestPath
+}
+
+// resolveChannelTestEndpointType returns the client-visible endpoint represented by the final test request path.
+func resolveChannelTestEndpointType(requestPath string) constant.EndpointType {
+	path := strings.SplitN(requestPath, "?", 2)[0]
+	switch {
+	case strings.HasPrefix(path, "/v1/responses/compact"):
+		return constant.EndpointTypeOpenAIResponseCompact
+	case path == "/v1/responses":
+		return constant.EndpointTypeOpenAIResponse
+	case path == "/v1/messages":
+		return constant.EndpointTypeAnthropic
+	case (strings.Contains(path, "/v1beta/models/") || strings.Contains(path, "/v1/models/")) &&
+		(strings.Contains(path, ":generateContent") || strings.Contains(path, ":streamGenerateContent")):
+		return constant.EndpointTypeGemini
+	case path == "/v1/rerank" || path == "/rerank":
+		return constant.EndpointTypeJinaRerank
+	case path == "/v1/images/generations":
+		return constant.EndpointTypeImageGeneration
+	case path == "/v1/embeddings":
+		return constant.EndpointTypeEmbeddings
+	default:
+		return constant.EndpointTypeOpenAI
+	}
+}
+
+// channelTestEndpointSupportsStream reports whether the selected client protocol has a streaming test contract.
+func channelTestEndpointSupportsStream(endpointType constant.EndpointType) bool {
+	switch endpointType {
+	case constant.EndpointTypeOpenAI,
+		constant.EndpointTypeOpenAIResponse,
+		constant.EndpointTypeAnthropic,
+		constant.EndpointTypeGemini:
+		return true
+	default:
+		return false
+	}
 }
 
 func resolveChannelTestUserID(c *gin.Context) (int, error) {
@@ -169,50 +242,22 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, op
 	endpointType := normalizeChannelTestEndpoint(channel, testModel, options.endpointType)
 	directNativeProbe := options.nativeProbe && channel.Type != constant.ChannelTypeAdvancedCustom
 
-	requestPath := "/v1/chat/completions"
-
-	// 如果指定了端点类型，使用指定的端点类型
-	if endpointType != "" {
-		if endpointInfo, ok := common.GetDefaultEndpointInfo(constant.EndpointType(endpointType)); ok {
-			requestPath = endpointInfo.Path
-		}
-	} else {
-		// 如果没有指定端点类型，使用原有的自动检测逻辑
-
-		if strings.Contains(strings.ToLower(testModel), "rerank") {
-			requestPath = "/v1/rerank"
-		}
-
-		// 先判断是否为 Embedding 模型
-		if strings.Contains(strings.ToLower(testModel), "embedding") ||
-			strings.HasPrefix(testModel, "m3e") || // m3e 系列模型
-			strings.Contains(testModel, "bge-") || // bge 系列模型
-			strings.Contains(testModel, "embed") ||
-			channel.Type == constant.ChannelTypeMokaAI { // 其他 embedding 模型
-			requestPath = "/v1/embeddings" // 修改请求路径
-		}
-
-		// VolcEngine 图像生成模型
-		if channel.Type == constant.ChannelTypeVolcEngine && strings.Contains(testModel, "seedream") {
-			requestPath = "/v1/images/generations"
-		}
-
-		// responses-only models
-		if strings.Contains(strings.ToLower(testModel), "codex") {
-			requestPath = "/v1/responses"
-		}
-
-		// responses compaction models (must use /v1/responses/compact)
-		if strings.HasSuffix(testModel, ratio_setting.CompactModelSuffix) {
-			requestPath = "/v1/responses/compact"
-		}
-	}
+	requestPath := resolveChannelTestRequestPath(channel, testModel, endpointType)
 	if strings.HasPrefix(requestPath, "/v1/responses/compact") {
 		testModel = ratio_setting.WithCompactModelSuffix(testModel)
 	}
 	if directNativeProbe {
 		if nativePath, ok := service.BuildTextProtocolPath(constant.EndpointType(endpointType), testModel, options.isStream); ok {
 			requestPath = nativePath
+		}
+	}
+	effectiveEndpointType := resolveChannelTestEndpointType(requestPath)
+	if options.isStream && !channelTestEndpointSupportsStream(effectiveEndpointType) {
+		err := fmt.Errorf("%s endpoint only accepts non-streaming channel tests", effectiveEndpointType)
+		return testResult{
+			localErr:              err,
+			newAPIError:           types.NewError(err, types.ErrorCodeInvalidRequest),
+			effectiveEndpointType: effectiveEndpointType,
 		}
 	}
 
@@ -308,7 +353,11 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, op
 		}
 	}
 
-	request := buildTestRequest(testModel, endpointType, channel, options)
+	requestEndpointType := endpointType
+	if requestEndpointType == "" {
+		requestEndpointType = string(effectiveEndpointType)
+	}
+	request := buildTestRequest(testModel, requestEndpointType, channel, options)
 	if directNativeProbe {
 		request = buildNativeTextProbeRequest(testModel, constant.EndpointType(endpointType), options)
 	}
@@ -337,9 +386,31 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, op
 			newAPIError: types.NewError(err, types.ErrorCodeGenRelayInfoFailed),
 		}
 	}
+	if info.IsStream != options.isStream {
+		err = fmt.Errorf(
+			"channel test stream mode mismatch for %s: requested=%t actual=%t",
+			effectiveEndpointType,
+			options.isStream,
+			info.IsStream,
+		)
+		return testResult{
+			context:               c,
+			localErr:              err,
+			newAPIError:           types.NewError(err, types.ErrorCodeGenRelayInfoFailed),
+			effectiveEndpointType: effectiveEndpointType,
+			isStream:              info.IsStream,
+		}
+	}
 
 	info.IsChannelTest = true
 	info.InitChannelMeta(c)
+	defer func() {
+		// Early failures must release the attempt-scoped writer chain before the test context is discarded.
+		if buffer := relaycommon.CurrentResponseOverrideBuffer(c); buffer != nil {
+			buffer.MarkRelayError()
+			buffer.Discard(c)
+		}
+	}()
 
 	err = attachTestBillingRequestInput(info, request)
 	if err != nil {
@@ -363,7 +434,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, op
 	// 更新请求中的模型名称
 	request.SetModelName(testModel)
 	if directNativeProbe {
-		if nativePath, ok := service.BuildTextProtocolPath(constant.EndpointType(endpointType), testModel, options.isStream); ok {
+		if nativePath, ok := service.BuildTextProtocolPath(constant.EndpointType(endpointType), testModel, info.IsStream); ok {
 			c.Request.URL.Path = strings.SplitN(nativePath, "?", 2)[0]
 			c.Request.URL.RawQuery = ""
 			if pathParts := strings.SplitN(nativePath, "?", 2); len(pathParts) == 2 {
@@ -581,7 +652,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, op
 	var usageA any
 	var respErr *types.NewAPIError
 	if directNativeProbe {
-		usageA, respErr = relay.HandleNativeTextResponse(c, info, httpResp, relayFormat, options.isStream)
+		usageA, respErr = relay.HandleNativeTextResponse(c, info, httpResp, relayFormat, info.IsStream)
 	} else {
 		usageA, respErr = adaptor.DoResponse(c, httpResp, info)
 	}
@@ -593,7 +664,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, op
 			upstreamStatus: http.StatusOK,
 		}
 	}
-	usage, usageErr := coerceTestUsage(usageA, options.isStream, info.GetEstimatePromptTokens())
+	usage, usageErr := coerceTestUsage(usageA, info.IsStream, info.GetEstimatePromptTokens())
 	if usageErr != nil {
 		return testResult{
 			context:        c,
@@ -602,25 +673,41 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, op
 			upstreamStatus: http.StatusOK,
 		}
 	}
-	result := w.Result()
-	respBody, responseBodyTruncated, err := readTestResponseBody(result.Body, options.isStream)
-	if err != nil {
-		return testResult{
-			context:        c,
-			localErr:       err,
-			newAPIError:    types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError),
-			upstreamStatus: http.StatusOK,
-		}
-	}
-	if bodyErr := validateTestResponseBody(respBody, options.isStream); bodyErr != nil {
-		return testResult{
-			context:        c,
-			localErr:       bodyErr,
-			newAPIError:    types.NewOpenAIError(bodyErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
-			upstreamStatus: http.StatusOK,
-		}
-	}
 	info.SetEstimatePromptTokens(usage.PromptTokens)
+	common.SetContextKey(c, constant.ContextKeyRelayUpstreamSucceeded, true)
+	upstreamStatus := http.StatusOK
+	if httpResp != nil {
+		upstreamStatus = httpResp.StatusCode
+	}
+	service.EvaluateResponseOverrideBeforeSettlement(c, info, usage, upstreamStatus)
+	clientResponseError := finalizeResponseOverride(c, info)
+
+	var respBody []byte
+	var responseBodyTruncated bool
+	if clientResponseError == nil {
+		result := w.Result()
+		respBody, responseBodyTruncated, err = readTestResponseBody(result.Body, info.IsStream)
+		if err != nil {
+			return testResult{
+				context:               c,
+				localErr:              err,
+				newAPIError:           types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError),
+				upstreamStatus:        upstreamStatus,
+				effectiveEndpointType: effectiveEndpointType,
+				isStream:              info.IsStream,
+			}
+		}
+		if bodyErr := validateTestResponseBody(respBody, info.IsStream); bodyErr != nil {
+			return testResult{
+				context:               c,
+				localErr:              bodyErr,
+				newAPIError:           types.NewOpenAIError(bodyErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
+				upstreamStatus:        upstreamStatus,
+				effectiveEndpointType: effectiveEndpointType,
+				isStream:              info.IsStream,
+			}
+		}
+	}
 
 	quota, tieredResult := settleTestQuota(info, priceData, usage)
 	tok := time.Now()
@@ -641,13 +728,25 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, op
 		Other:            other,
 	})
 	common.SysLog(fmt.Sprintf("testing channel #%d completed, response_bytes=%d", channel.Id, len(respBody)))
+	if clientResponseError != nil {
+		return testResult{
+			context:               c,
+			localErr:              clientResponseError,
+			newAPIError:           clientResponseError,
+			upstreamStatus:        upstreamStatus,
+			effectiveEndpointType: effectiveEndpointType,
+			isStream:              info.IsStream,
+		}
+	}
 	return testResult{
 		context:               c,
 		localErr:              nil,
 		newAPIError:           nil,
 		responseBody:          respBody,
 		responseBodyTruncated: responseBodyTruncated,
-		upstreamStatus:        http.StatusOK,
+		upstreamStatus:        upstreamStatus,
+		effectiveEndpointType: effectiveEndpointType,
+		isStream:              info.IsStream,
 	}
 }
 
@@ -736,7 +835,8 @@ func readTestResponseBody(body io.ReadCloser, isStream bool) ([]byte, bool, erro
 	if len(responseBody) <= maxChannelTestResponseDetailBytes {
 		return responseBody, false, nil
 	}
-	return responseBody[:maxChannelTestResponseDetailBytes], true, nil
+	truncatedBody, _ := truncateChannelTestResponseDetail(responseBody)
+	return truncatedBody, true, nil
 }
 
 func detectErrorFromTestResponseBody(respBody []byte) error {
@@ -791,6 +891,12 @@ func validateStreamTestResponseBody(respBody []byte) error {
 }
 
 func validateTestResponseBody(respBody []byte, isStream bool) error {
+	if len(bytes.TrimSpace(respBody)) == 0 {
+		if isStream {
+			return errors.New("stream response body is empty")
+		}
+		return errors.New("response body is empty")
+	}
 	if bodyErr := detectErrorFromTestResponseBody(respBody); bodyErr != nil {
 		return bodyErr
 	}
@@ -1113,7 +1219,6 @@ func TestChannel(c *gin.Context) {
 		return
 	}
 	respondChannelConnectionTest(c, channel, tik, result, channelTestResponseOptions{
-		isStream:           isStream,
 		keyIndex:           keyIndex,
 		updateResponseTime: keyIndex == nil,
 	})
@@ -1190,7 +1295,6 @@ func TestChannelConnectionPrompt(c *gin.Context) {
 	})
 	respondChannelConnectionTest(c, channel, tik, result, channelTestResponseOptions{
 		includeDetails:     true,
-		isStream:           request.Stream,
 		updateResponseTime: true,
 	})
 }
@@ -1234,7 +1338,7 @@ func respondChannelConnectionTest(c *gin.Context, channel *model.Channel, tik ti
 		"time":    consumedTime,
 	}
 	if options.includeDetails {
-		response["data"] = buildChannelTestResponseDetails(result, options.isStream)
+		response["data"] = buildChannelTestResponseDetails(result)
 	}
 	c.JSON(http.StatusOK, response)
 }
@@ -1495,16 +1599,18 @@ func TestChannelPromptEffect(c *gin.Context) {
 }
 
 // buildChannelTestResponseDetails builds the bounded display payload returned by the custom connection test.
-func buildChannelTestResponseDetails(result testResult, isStream bool) channelTestResponseDetails {
-	content, reasoningContent := extractChannelTestResponseContent(result.responseBody, isStream)
+func buildChannelTestResponseDetails(result testResult) channelTestResponseDetails {
+	content, reasoningContent := extractChannelTestResponseContent(result.responseBody, result.isStream)
 	sanitizedBody, _ := service.SanitizeConversationBody(result.responseBody)
 	sanitizedBody, truncated := truncateChannelTestResponseDetail(sanitizedBody)
 
 	return channelTestResponseDetails{
-		Content:              content,
-		ReasoningContent:     reasoningContent,
-		RawResponse:          string(sanitizedBody),
-		RawResponseTruncated: result.responseBodyTruncated || truncated,
+		EffectiveEndpointType: result.effectiveEndpointType,
+		Stream:                result.isStream,
+		Content:               content,
+		ReasoningContent:      reasoningContent,
+		RawResponse:           string(sanitizedBody),
+		RawResponseTruncated:  result.responseBodyTruncated || truncated,
 	}
 }
 

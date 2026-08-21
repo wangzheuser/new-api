@@ -97,9 +97,14 @@ import { tryPrettyJson } from '@/lib/utils'
 
 import { updateChannel } from '../../api'
 import {
+  CHANNEL_TEST_ENDPOINTS,
+  channelTestEndpointSupportsStream,
   channelsQueryKeys,
   formatResponseTime,
+  getChannelTestEndpointConfig,
   handleTestChannel,
+  resolveChannelTestResponseKind,
+  resolveChannelTestResultProtocol,
 } from '../../lib'
 import type {
   Channel,
@@ -131,6 +136,7 @@ type TestResult = {
   error?: string
   errorCode?: string
   endpointType?: string
+  effectiveEndpointType?: string
   isStream?: boolean
   details?: ChannelTestResponseDetails
 }
@@ -190,37 +196,9 @@ function getLatestChannelTestCachePatch(
   return latest?.patch
 }
 
-const endpointTypeOptions: Array<{ value: string; label: string }> = [
-  { value: 'auto', label: 'Auto detect (default)' },
-  { value: 'openai', label: 'OpenAI (/v1/chat/completions)' },
-  { value: 'openai-response', label: 'OpenAI Responses (/v1/responses)' },
-  {
-    value: 'openai-response-compact',
-    label: 'OpenAI Response Compaction (/v1/responses/compact)',
-  },
-  { value: 'anthropic', label: 'Anthropic (/v1/messages)' },
-  {
-    value: 'gemini',
-    label: 'Gemini (/v1beta/models/{model}:generateContent)',
-  },
-  { value: 'jina-rerank', label: 'Jina Rerank (/v1/rerank)' },
-  {
-    value: 'image-generation',
-    label: 'Image Generation (/v1/images/generations)',
-  },
-  { value: 'embeddings', label: 'Embeddings (/v1/embeddings)' },
-]
-
 const endpointSelectContentClass = 'w-[460px] max-w-[calc(100vw-2rem)]'
 const endpointSelectItemClass =
   'items-start py-2 [&_[data-slot=select-item-text]]:min-w-0 [&_[data-slot=select-item-text]]:shrink [&_[data-slot=select-item-text]]:whitespace-normal'
-
-const STREAM_INCOMPATIBLE_ENDPOINTS = new Set([
-  'embeddings',
-  'image-generation',
-  'jina-rerank',
-  'openai-response-compact',
-])
 
 const MODEL_PRICE_ERROR_CODE = 'model_price_error'
 const FAILURE_SUMMARY_MAX_LENGTH = 96
@@ -403,7 +381,7 @@ function ChannelTestDialogContent({
   })
   const endpointSelectItems = useMemo(
     () =>
-      endpointTypeOptions.map((option) => ({
+      CHANNEL_TEST_ENDPOINTS.map((option) => ({
         value: option.value,
         label: t(option.label),
       })),
@@ -461,7 +439,7 @@ function ChannelTestDialogContent({
     setPagination({ pageIndex: 0, pageSize: 30 })
   }, [])
 
-  const streamDisabled = STREAM_INCOMPATIBLE_ENDPOINTS.has(endpointType)
+  const streamDisabled = !channelTestEndpointSupportsStream(endpointType)
   const effectiveStreamTest = !streamDisabled && isStreamTest
   const testPromptByteLength = useMemo(
     () => getPromptByteLength(testPrompt),
@@ -491,7 +469,7 @@ function ChannelTestDialogContent({
     if (value === null) return
 
     setEndpointType(value)
-    if (STREAM_INCOMPATIBLE_ENDPOINTS.has(value)) {
+    if (!channelTestEndpointSupportsStream(value)) {
       setIsStreamTest(false)
     }
   }, [])
@@ -641,6 +619,10 @@ function ChannelTestDialogContent({
           userPrompt: prompt,
           silent,
         })
+        const resultProtocol = resolveChannelTestResultProtocol(
+          resultIsStream,
+          outcome.details
+        )
         finalResult = {
           status: outcome.success ? 'success' : 'error',
           responseTime: outcome.responseTime,
@@ -648,7 +630,8 @@ function ChannelTestDialogContent({
           error: outcome.error,
           errorCode: outcome.errorCode,
           endpointType: resultEndpointType,
-          isStream: resultIsStream,
+          effectiveEndpointType: resultProtocol.effectiveEndpointType,
+          isStream: resultProtocol.stream,
           details: outcome.details,
         }
         updateTestResult(model, finalResult)
@@ -1458,12 +1441,29 @@ function TestDetailsSheet({
   const isMobile = useIsMobile()
   const { copiedText, copyToClipboard } = useCopyToClipboard({ notify: false })
   const isCompleted = result?.status === 'success' || result?.status === 'error'
-  const endpointOption = endpointTypeOptions.find(
-    (option) => option.value === (result?.endpointType ?? 'auto')
-  )
+  const selectedEndpointType = result?.endpointType ?? 'auto'
+  const endpointOption = getChannelTestEndpointConfig(selectedEndpointType)
   const endpointLabel = endpointOption
     ? t(endpointOption.label)
     : (result?.endpointType ?? t('Auto detect (default)'))
+  const effectiveEndpointType =
+    result?.effectiveEndpointType ?? result?.details?.effective_endpoint_type
+  const effectiveEndpointOption = getChannelTestEndpointConfig(
+    effectiveEndpointType
+  )
+  const effectiveEndpointLabel = effectiveEndpointOption
+    ? t(effectiveEndpointOption.label)
+    : effectiveEndpointType
+  const showEffectiveEndpoint = Boolean(
+    effectiveEndpointType &&
+    (selectedEndpointType === 'auto' ||
+      effectiveEndpointType !== selectedEndpointType)
+  )
+  const isStructuredResponse =
+    resolveChannelTestResponseKind(
+      effectiveEndpointType,
+      selectedEndpointType
+    ) === 'structured'
   const statusLabel = result?.status === 'success' ? t('Success') : t('Failed')
   const responseTime =
     typeof result?.responseTime === 'number'
@@ -1500,24 +1500,33 @@ function TestDetailsSheet({
     if (result.errorCode) {
       sections.push(`${t('Error Code')}: ${result.errorCode}`)
     }
-    if (reasoningContent) {
+    if (showEffectiveEndpoint && effectiveEndpointLabel) {
+      sections.push(`${t('Effective Endpoint')}: ${effectiveEndpointLabel}`)
+    }
+    if (!isStructuredResponse && reasoningContent) {
       sections.push(`${t('Reasoning Content')}:\n${reasoningContent}`)
     }
-    if (content) {
+    if (!isStructuredResponse && content) {
       sections.push(`${t('Response Content')}:\n${content}`)
     }
     if (rawResponse) {
-      sections.push(`${t('Full Response')}:\n${rawResponse}`)
+      const rawResponseLabel = isStructuredResponse
+        ? t('Structured Response')
+        : t('Full Response')
+      sections.push(`${rawResponseLabel}:\n${rawResponse}`)
     }
     return sections.join('\n\n')
   }, [
     content,
+    effectiveEndpointLabel,
     endpointLabel,
+    isStructuredResponse,
     model,
     rawResponse,
     reasoningContent,
     responseTime,
     result,
+    showEffectiveEndpoint,
     statusLabel,
     t,
   ])
@@ -1572,6 +1581,16 @@ function TestDetailsSheet({
                     {endpointLabel}
                   </p>
                 </div>
+                {showEffectiveEndpoint && effectiveEndpointLabel && (
+                  <div className='space-y-1'>
+                    <div className='text-muted-foreground text-xs font-medium'>
+                      {t('Effective Endpoint')}
+                    </div>
+                    <p className='text-sm leading-snug wrap-break-word'>
+                      {effectiveEndpointLabel}
+                    </p>
+                  </div>
+                )}
                 <div className='space-y-1'>
                   <div className='text-muted-foreground text-xs font-medium'>
                     {t('Stream Mode')}
@@ -1603,45 +1622,66 @@ function TestDetailsSheet({
                 </section>
               )}
 
-              {result.status === 'success' && (
-                <>
+              {result.status === 'success' &&
+                (isStructuredResponse ? (
                   <section className='space-y-2'>
                     <div className='text-muted-foreground text-xs font-medium'>
-                      {t('Reasoning Content')}
+                      {t('Structured Response')}
                     </div>
-                    {reasoningContent ? (
-                      <pre className='bg-muted/30 text-muted-foreground m-0 max-h-64 max-w-full overflow-auto rounded-md border p-3 text-xs leading-relaxed wrap-break-word whitespace-pre-wrap'>
-                        {reasoningContent}
+                    {result.details?.raw_response_truncated && (
+                      <p className='text-xs text-amber-600 dark:text-amber-400'>
+                        {t('The full response was truncated to 64 KiB.')}
+                      </p>
+                    )}
+                    {rawResponse ? (
+                      <pre className='bg-muted/30 text-foreground m-0 max-h-96 max-w-full overflow-auto rounded-md border p-3 font-mono text-xs leading-relaxed whitespace-pre'>
+                        {formattedRawResponse}
                       </pre>
                     ) : (
                       <p className='text-muted-foreground rounded-md border border-dashed p-3 text-sm'>
-                        {t(
-                          'The model did not return separate reasoning content.'
-                        )}
+                        {t('The endpoint returned no structured response.')}
                       </p>
                     )}
                   </section>
+                ) : (
+                  <>
+                    <section className='space-y-2'>
+                      <div className='text-muted-foreground text-xs font-medium'>
+                        {t('Reasoning Content')}
+                      </div>
+                      {reasoningContent ? (
+                        <pre className='bg-muted/30 text-muted-foreground m-0 max-h-64 max-w-full overflow-auto rounded-md border p-3 text-xs leading-relaxed wrap-break-word whitespace-pre-wrap'>
+                          {reasoningContent}
+                        </pre>
+                      ) : (
+                        <p className='text-muted-foreground rounded-md border border-dashed p-3 text-sm'>
+                          {t(
+                            'The model did not return separate reasoning content.'
+                          )}
+                        </p>
+                      )}
+                    </section>
 
-                  <section className='space-y-2'>
-                    <div className='text-muted-foreground text-xs font-medium'>
-                      {t('Response Content')}
-                    </div>
-                    {content ? (
-                      <pre className='bg-muted/30 text-foreground m-0 max-h-64 max-w-full overflow-auto rounded-md border p-3 text-sm leading-relaxed wrap-break-word whitespace-pre-wrap'>
-                        {content}
-                      </pre>
-                    ) : (
-                      <p className='text-muted-foreground rounded-md border border-dashed p-3 text-sm'>
-                        {t(
-                          'The model did not return displayable response content.'
-                        )}
-                      </p>
-                    )}
-                  </section>
-                </>
-              )}
+                    <section className='space-y-2'>
+                      <div className='text-muted-foreground text-xs font-medium'>
+                        {t('Response Content')}
+                      </div>
+                      {content ? (
+                        <pre className='bg-muted/30 text-foreground m-0 max-h-64 max-w-full overflow-auto rounded-md border p-3 text-sm leading-relaxed wrap-break-word whitespace-pre-wrap'>
+                          {content}
+                        </pre>
+                      ) : (
+                        <p className='text-muted-foreground rounded-md border border-dashed p-3 text-sm'>
+                          {t(
+                            'The model did not return displayable response content.'
+                          )}
+                        </p>
+                      )}
+                    </section>
+                  </>
+                ))}
 
-              {rawResponse && (
+              {!isStructuredResponse && rawResponse && (
                 <Collapsible className='rounded-lg border'>
                   <CollapsibleTrigger className='flex w-full cursor-pointer items-center justify-between gap-3 px-3 py-2.5 text-left text-sm font-medium'>
                     <span>{t('Full Response')}</span>
