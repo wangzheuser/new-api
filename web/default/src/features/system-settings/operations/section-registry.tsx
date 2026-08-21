@@ -98,7 +98,10 @@ const OPERATIONS_SECTIONS = [
     build: (settings: OperationsSettings) => (
       <LogSettingsSection
         defaultEnabled={Boolean(settings.LogConsumeEnabled)}
-        defaultRetentionDays={
+        defaultDatabaseRetentionDays={
+          settings['performance_setting.database_log_retention_days'] ?? 0
+        }
+        defaultServerRetentionDays={
           settings['performance_setting.server_log_retention_days'] ?? 0
         }
       />

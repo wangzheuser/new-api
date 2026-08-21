@@ -28,6 +28,8 @@ type PerformanceSetting struct {
 	MonitorResourceScope string `json:"monitor_resource_scope"`
 	// ServerLogRetentionDays 服务器文件日志自动保留天数，0 表示关闭
 	ServerLogRetentionDays int `json:"server_log_retention_days"`
+	// DatabaseLogRetentionDays 数据库日志自动保留天数，0 表示关闭
+	DatabaseLogRetentionDays int `json:"database_log_retention_days"`
 }
 
 // 默认配置
@@ -37,12 +39,13 @@ var performanceSetting = PerformanceSetting{
 	DiskCacheMaxSizeMB:   1024, // 最大 1GB 磁盘缓存
 	DiskCachePath:        "",   // 空表示使用系统临时目录
 
-	MonitorEnabled:         true,
-	MonitorCPUThreshold:    90,
-	MonitorMemoryThreshold: 90,
-	MonitorDiskThreshold:   95,
-	MonitorResourceScope:   common.ResourceScopeHost,
-	ServerLogRetentionDays: 0,
+	MonitorEnabled:           true,
+	MonitorCPUThreshold:      90,
+	MonitorMemoryThreshold:   90,
+	MonitorDiskThreshold:     95,
+	MonitorResourceScope:     common.ResourceScopeHost,
+	ServerLogRetentionDays:   0,
+	DatabaseLogRetentionDays: 0,
 }
 
 func init() {
@@ -69,6 +72,7 @@ func syncToCommon() {
 		ResourceScope:   performanceSetting.MonitorResourceScope,
 	})
 	common.SetServerLogRetentionDays(performanceSetting.ServerLogRetentionDays)
+	common.SetDatabaseLogRetentionDays(performanceSetting.DatabaseLogRetentionDays)
 }
 
 // GetPerformanceSetting 获取性能设置

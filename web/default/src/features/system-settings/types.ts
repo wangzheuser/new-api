@@ -78,10 +78,10 @@ export type LogCleanupTaskPayload = {
 }
 
 export type LogCleanupTaskState = {
-  total: number
   processed: number
-  progress: number
-  remaining: number
+  progress?: number
+  total?: number
+  remaining?: number
 }
 
 export type LogCleanupTaskResult = {
@@ -360,6 +360,7 @@ export type OperationsSettings = {
   'performance_setting.monitor_memory_threshold': number
   'performance_setting.monitor_disk_threshold': number
   'performance_setting.monitor_resource_scope': 'host' | 'container'
+  'performance_setting.database_log_retention_days': number
   'performance_setting.server_log_retention_days': number
   'perf_metrics_setting.enabled': boolean
   'perf_metrics_setting.flush_interval': number

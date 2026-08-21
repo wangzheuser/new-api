@@ -19,7 +19,12 @@ const (
 	// tasks created on other nodes and mark expired leases failed.
 	systemTaskRunnerIdleInterval = 15 * time.Second
 	systemTaskLockTTL            = 60 * time.Second
-	logCleanupBatchSize          = 100
+	logCleanupBatchSize          = 1000
+	logCleanupBatchInterval      = time.Second
+	logCleanupOverloadInterval   = 10 * time.Second
+	logCleanupQueryTimeout       = 10 * time.Second
+	logCleanupStateInterval      = 10 * time.Second
+	logCleanupScheduleInterval   = 24 * time.Hour
 
 	// systemTaskSchedulerInterval throttles how often the scheduler/stale-lock
 	// pass runs, independent of how often the runner wakes to claim tasks.
@@ -73,12 +78,35 @@ func registeredSystemTaskHandlers() []SystemTaskHandler {
 	return handlers
 }
 
-// logCleanupHandler wraps the existing on-demand log cleanup task as a
-// registered (non-scheduled) handler. It is created via StartLogCleanupTask.
+// logCleanupHandler executes both manual and scheduled low-impact log cleanup tasks.
 type logCleanupHandler struct{}
 
+// Type returns the persistent system task type shared by manual and scheduled cleanup.
 func (logCleanupHandler) Type() string { return model.SystemTaskTypeLogCleanup }
 
+// Enabled reports whether automatic relational-database log retention is active.
+func (logCleanupHandler) Enabled() bool {
+	return !common.UsingLogDatabase(common.DatabaseTypeClickHouse) &&
+		common.GetDatabaseLogRetentionDays() > 0
+}
+
+// Interval returns the fixed cadence for automatic database log retention.
+func (logCleanupHandler) Interval() time.Duration { return logCleanupScheduleInterval }
+
+// NewPayload freezes the current retention cutoff for one scheduled run.
+func (logCleanupHandler) NewPayload() any {
+	retentionDays := common.GetDatabaseLogRetentionDays()
+	targetTimestamp := int64(0)
+	if retentionDays > 0 {
+		targetTimestamp = common.GetTimestamp() - int64(retentionDays)*24*60*60
+	}
+	return LogCleanupPayload{
+		TargetTimestamp: targetTimestamp,
+		BatchSize:       logCleanupBatchSize,
+	}
+}
+
+// Run executes one claimed cleanup task until completion, cancellation, or failure.
 func (logCleanupHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
 	runLogCleanupTask(ctx, task, runnerID)
 }
@@ -93,10 +121,10 @@ type LogCleanupPayload struct {
 }
 
 type LogCleanupState struct {
-	Total     int64 `json:"total"`
+	Total     int64 `json:"total,omitempty"`
 	Processed int64 `json:"processed"`
-	Progress  int   `json:"progress"`
-	Remaining int64 `json:"remaining"`
+	Progress  *int  `json:"progress,omitempty"`
+	Remaining int64 `json:"remaining,omitempty"`
 }
 
 type LogCleanupResult struct {
@@ -345,7 +373,7 @@ func runLogCleanupTask(ctx context.Context, task *model.SystemTask, runnerID str
 		failSystemTask(task, runnerID, errors.New("target timestamp is required"))
 		return
 	}
-	if payload.BatchSize <= 0 {
+	if payload.BatchSize <= 0 || payload.BatchSize > logCleanupBatchSize {
 		payload.BatchSize = logCleanupBatchSize
 	}
 
@@ -354,66 +382,93 @@ func runLogCleanupTask(ctx context.Context, task *model.SystemTask, runnerID str
 		failSystemTask(task, runnerID, err)
 		return
 	}
-
-	for {
-		remaining, err := model.CountOldLog(ctx, payload.TargetTimestamp)
+	// 新任务不做全量预统计；恢复旧任务时仅保留已处理数。
+	state.Total = 0
+	state.Remaining = 0
+	state.Progress = nil
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		// ClickHouse 保持单次同步 mutation，不进入关系型数据库的限速分批循环。
+		rowsAffected, err := model.DeleteOldLogBatch(ctx, payload.TargetTimestamp, payload.BatchSize)
 		if err != nil {
 			failSystemTask(task, runnerID, err)
 			return
 		}
-		syncLogCleanupStateFromRemaining(&state, remaining)
+		state.Processed += rowsAffected
+		completedProgress := 100
+		state.Progress = &completedProgress
 		if err := model.UpdateSystemTaskState(task.TaskID, runnerID, state); err != nil {
 			logSystemTaskLockError(ctx, task, err)
 			return
 		}
-		if state.Remaining == 0 {
+		result := LogCleanupResult{DeletedCount: state.Processed}
+		if err := model.FinishSystemTask(task.TaskID, runnerID, model.SystemTaskStatusSucceeded, result, ""); err != nil {
+			logSystemTaskLockError(ctx, task, err)
+		}
+		return
+	}
+
+	lastStateUpdate := time.Now()
+	pausedForLoad := false
+
+	for {
+		status := common.GetSystemStatus()
+		monitorConfig := common.GetPerformanceMonitorConfig()
+		if shouldPauseLogCleanup(status, monitorConfig) {
+			if !pausedForLoad {
+				logger.LogWarn(ctx, fmt.Sprintf(
+					"system task %s paused for high load: cpu=%.1f memory=%.1f disk=%.1f",
+					task.TaskID,
+					status.CPUUsage,
+					status.MemoryUsage,
+					status.DiskUsage,
+				))
+				pausedForLoad = true
+			}
+			if !waitForLogCleanup(ctx, logCleanupOverloadInterval) {
+				logger.LogWarn(ctx, fmt.Sprintf("system task %s cleanup canceled: %v", task.TaskID, ctx.Err()))
+				return
+			}
+			continue
+		}
+		if pausedForLoad {
+			logger.LogInfo(ctx, fmt.Sprintf("system task %s resumed after load recovered", task.TaskID))
+			pausedForLoad = false
+		}
+
+		// 为单批查询和删除设置上限，避免锁等待或慢 SQL 长时间占用连接。
+		batchCtx, cancel := context.WithTimeout(ctx, logCleanupQueryTimeout)
+		rowsAffected, err := model.DeleteOldLogBatch(batchCtx, payload.TargetTimestamp, payload.BatchSize)
+		cancel()
+		if err != nil {
+			if ctx.Err() != nil {
+				logger.LogWarn(ctx, fmt.Sprintf("system task %s cleanup canceled: %v", task.TaskID, ctx.Err()))
+				return
+			}
+			failSystemTask(task, runnerID, err)
+			return
+		}
+		if rowsAffected == 0 {
 			break
 		}
 
-		// Track whether this pass deleted anything so a fresh recount that still
-		// reports remaining rows resumes immediately instead of waiting for the
-		// lock to expire. If a whole pass deletes nothing while rows remain, the
-		// rows cannot be removed and we fail instead of busy-looping.
-		progressed := false
-		for state.Remaining > 0 {
-			rowsAffected, err := model.DeleteOldLogBatch(ctx, payload.TargetTimestamp, payload.BatchSize)
-			if err != nil {
-				failSystemTask(task, runnerID, err)
-				return
-			}
-			if rowsAffected == 0 {
-				break
-			}
-			progressed = true
-
-			state.Processed += rowsAffected
-			if state.Total < state.Processed {
-				state.Total = state.Processed
-			}
-			if state.Remaining > rowsAffected {
-				state.Remaining -= rowsAffected
-			} else {
-				state.Remaining = 0
-			}
-			state.Progress = logCleanupProgress(state.Processed, state.Total)
-
+		state.Processed += rowsAffected
+		if time.Since(lastStateUpdate) >= logCleanupStateInterval {
 			if err := model.UpdateSystemTaskState(task.TaskID, runnerID, state); err != nil {
 				logSystemTaskLockError(ctx, task, err)
 				return
 			}
+			lastStateUpdate = time.Now()
 		}
 
-		if !progressed {
-			failSystemTask(task, runnerID, errors.New("no log rows were deleted"))
+		// 等待发生在数据库语句之外，不持有连接、事务或行锁。
+		if !waitForLogCleanup(ctx, logCleanupBatchInterval) {
+			logger.LogWarn(ctx, fmt.Sprintf("system task %s cleanup canceled: %v", task.TaskID, ctx.Err()))
 			return
 		}
 	}
 
-	state.Remaining = 0
-	state.Progress = 100
-	if state.Total < state.Processed {
-		state.Total = state.Processed
-	}
+	completedProgress := 100
+	state.Progress = &completedProgress
 	if err := model.UpdateSystemTaskState(task.TaskID, runnerID, state); err != nil {
 		logSystemTaskLockError(ctx, task, err)
 		return
@@ -425,34 +480,30 @@ func runLogCleanupTask(ctx context.Context, task *model.SystemTask, runnerID str
 	}
 }
 
-func syncLogCleanupStateFromRemaining(state *LogCleanupState, remaining int64) {
-	if state.Total <= 0 {
-		state.Total = remaining
-		state.Processed = 0
-	} else {
-		processedFromRemaining := state.Total - remaining
-		if processedFromRemaining > state.Processed {
-			state.Processed = processedFromRemaining
-		}
+// shouldPauseLogCleanup applies the existing performance-protection thresholds to cleanup work.
+func shouldPauseLogCleanup(status common.SystemStatus, config common.PerformanceMonitorConfig) bool {
+	if !config.Enabled {
+		return false
 	}
-	if state.Processed < 0 {
-		state.Processed = 0
+	if config.CPUThreshold > 0 && status.CPUUsage > float64(config.CPUThreshold) {
+		return true
 	}
-	state.Remaining = remaining
-	state.Progress = logCleanupProgress(state.Processed, state.Total)
+	if config.MemoryThreshold > 0 && status.MemoryUsage > float64(config.MemoryThreshold) {
+		return true
+	}
+	return config.DiskThreshold > 0 && status.DiskUsage > float64(config.DiskThreshold)
 }
 
-func logCleanupProgress(processed int64, total int64) int {
-	if total <= 0 {
-		return 100
+// waitForLogCleanup waits outside database work and returns false when the task is canceled.
+func waitForLogCleanup(ctx context.Context, duration time.Duration) bool {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
-	if processed <= 0 {
-		return 0
-	}
-	if processed >= total {
-		return 100
-	}
-	return int(processed * 100 / total)
 }
 
 func systemTaskLockUntil() int64 {

@@ -84,6 +84,7 @@ import { safeNumberFieldProps } from '../utils/numeric-field'
 const logSettingsSchema = z.object({
   LogConsumeEnabled: z.boolean(),
   performance_setting: z.object({
+    database_log_retention_days: z.number().int().min(0).max(3650),
     server_log_retention_days: z.number().int().min(0).max(3650),
   }),
 })
@@ -92,7 +93,8 @@ type LogSettingsFormValues = z.infer<typeof logSettingsSchema>
 
 type LogSettingsSectionProps = {
   defaultEnabled: boolean
-  defaultRetentionDays: number
+  defaultDatabaseRetentionDays: number
+  defaultServerRetentionDays: number
 }
 
 type ServerLogInfo = {
@@ -156,7 +158,8 @@ export function LogSettingsSection(props: LogSettingsSectionProps) {
     defaultValues: {
       LogConsumeEnabled: props.defaultEnabled,
       performance_setting: {
-        server_log_retention_days: props.defaultRetentionDays,
+        database_log_retention_days: props.defaultDatabaseRetentionDays,
+        server_log_retention_days: props.defaultServerRetentionDays,
       },
     },
   })
@@ -187,10 +190,16 @@ export function LogSettingsSection(props: LogSettingsSectionProps) {
     form.reset({
       LogConsumeEnabled: props.defaultEnabled,
       performance_setting: {
-        server_log_retention_days: props.defaultRetentionDays,
+        database_log_retention_days: props.defaultDatabaseRetentionDays,
+        server_log_retention_days: props.defaultServerRetentionDays,
       },
     })
-  }, [form, props.defaultEnabled, props.defaultRetentionDays])
+  }, [
+    form,
+    props.defaultDatabaseRetentionDays,
+    props.defaultEnabled,
+    props.defaultServerRetentionDays,
+  ])
 
   useEffect(() => {
     fetchServerLogInfo()
@@ -229,12 +238,15 @@ export function LogSettingsSection(props: LogSettingsSectionProps) {
 
   const logCleanupActive = isActiveLogCleanupTask(logCleanupTask)
   const logCleanupState = logCleanupTask?.state
-  const logCleanupProgress = Math.min(
-    100,
-    Math.max(0, logCleanupState?.progress ?? 0)
-  )
+  const logCleanupProgress =
+    typeof logCleanupState?.progress === 'number'
+      ? Math.min(100, Math.max(0, logCleanupState.progress))
+      : null
   const logCleanupProcessed = logCleanupState?.processed ?? 0
-  const logCleanupTotal = logCleanupState?.total ?? 0
+  const logCleanupTotal =
+    typeof logCleanupState?.total === 'number' && logCleanupState.total > 0
+      ? logCleanupState.total
+      : null
   const logCleanupTaskId = logCleanupTask?.task_id
 
   useEffect(() => {
@@ -279,8 +291,17 @@ export function LogSettingsSection(props: LogSettingsSectionProps) {
       })
     }
     if (
+      values.performance_setting.database_log_retention_days !==
+      props.defaultDatabaseRetentionDays
+    ) {
+      await updateOption.mutateAsync({
+        key: 'performance_setting.database_log_retention_days',
+        value: values.performance_setting.database_log_retention_days,
+      })
+    }
+    if (
       values.performance_setting.server_log_retention_days !==
-      props.defaultRetentionDays
+      props.defaultServerRetentionDays
     ) {
       await updateOption.mutateAsync({
         key: 'performance_setting.server_log_retention_days',
@@ -395,6 +416,31 @@ export function LogSettingsSection(props: LogSettingsSectionProps) {
 
           <FormField
             control={form.control}
+            name='performance_setting.database_log_retention_days'
+            render={({ field }) => (
+              <FormItem className='max-w-sm'>
+                <FormLabel>{t('Automatic database log retention')}</FormLabel>
+                <FormControl>
+                  <Input
+                    type='number'
+                    min={0}
+                    max={3650}
+                    step={1}
+                    {...safeNumberFieldProps(field)}
+                  />
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'Keep relational database logs for this many days. Set to 0 to disable. Cleanup runs daily in batches of up to 1000 rows and pauses under high server load. ClickHouse continues to use LOG_SQL_CLICKHOUSE_TTL_DAYS.'
+                  )}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
             name='performance_setting.server_log_retention_days'
             render={({ field }) => (
               <FormItem className='max-w-sm'>
@@ -420,7 +466,9 @@ export function LogSettingsSection(props: LogSettingsSectionProps) {
 
           <SettingsControlGroup className='space-y-3'>
             <div>
-              <h4 className='text-sm font-medium'>{t('Clean history logs')}</h4>
+              <h4 className='text-sm font-medium'>
+                {t('Clean database history logs')}
+              </h4>
               <p className='text-muted-foreground text-sm'>
                 {t(
                   'Remove all log entries created before the selected timestamp.'
@@ -456,16 +504,24 @@ export function LogSettingsSection(props: LogSettingsSectionProps) {
                   <span className='font-medium'>
                     {t('Log cleanup progress')}
                   </span>
-                  <span className='text-muted-foreground tabular-nums'>
-                    {logCleanupProgress}%
-                  </span>
+                  {logCleanupProgress !== null && (
+                    <span className='text-muted-foreground tabular-nums'>
+                      {logCleanupProgress}%
+                    </span>
+                  )}
                 </div>
-                <Progress value={logCleanupProgress} />
+                {logCleanupProgress !== null && (
+                  <Progress value={logCleanupProgress} />
+                )}
                 <div className='text-muted-foreground mt-2 text-xs'>
-                  {t('{{processed}} of {{total}} log entries processed.', {
-                    processed: logCleanupProcessed,
-                    total: logCleanupTotal,
-                  })}
+                  {logCleanupTotal !== null
+                    ? t('{{processed}} of {{total}} log entries processed.', {
+                        processed: logCleanupProcessed,
+                        total: logCleanupTotal,
+                      })
+                    : t('{{processed}} log entries processed.', {
+                        processed: logCleanupProcessed,
+                      })}
                 </div>
                 {logCleanupTask.status === 'failed' && logCleanupTask.error && (
                   <div className='text-destructive mt-2 text-xs'>
@@ -534,7 +590,8 @@ export function LogSettingsSection(props: LogSettingsSectionProps) {
                   </StatusBadge>
                   <StatusBadge variant='neutral' copyable={false}>
                     {t('Retention days')}:{' '}
-                    {serverLogInfo.retention_days ?? props.defaultRetentionDays}
+                    {serverLogInfo.retention_days ??
+                      props.defaultServerRetentionDays}
                   </StatusBadge>
                 </div>
               </div>

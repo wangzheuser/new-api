@@ -234,6 +234,15 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
+	case "performance_setting.database_log_retention_days":
+		retentionDays, parseErr := strconv.Atoi(option.Value.(string))
+		if parseErr != nil || retentionDays < 0 || retentionDays > common.MaxDatabaseLogRetentionDays {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "数据库日志自动保留天数必须是 0 到 3650 的整数",
+			})
+			return
+		}
 	case "performance_setting.monitor_resource_scope":
 		if option.Value != common.ResourceScopeHost && option.Value != common.ResourceScopeContainer {
 			c.JSON(http.StatusOK, gin.H{

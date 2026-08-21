@@ -9,6 +9,8 @@ const (
 	ResourceScopeContainer = "container"
 	// MaxServerLogRetentionDays 限制服务器文件日志的最大自动保留天数。
 	MaxServerLogRetentionDays = 3650
+	// MaxDatabaseLogRetentionDays 限制数据库日志的最大自动保留天数。
+	MaxDatabaseLogRetentionDays = 3650
 )
 
 // PerformanceMonitorConfig 性能监控配置
@@ -22,6 +24,7 @@ type PerformanceMonitorConfig struct {
 
 var performanceMonitorConfig atomic.Value
 var serverLogRetentionDays atomic.Int64
+var databaseLogRetentionDays atomic.Int64
 
 func init() {
 	// 初始化默认配置
@@ -58,4 +61,17 @@ func SetServerLogRetentionDays(days int) {
 		days = 0
 	}
 	serverLogRetentionDays.Store(int64(days))
+}
+
+// GetDatabaseLogRetentionDays 返回数据库日志的自动保留天数。
+func GetDatabaseLogRetentionDays() int {
+	return int(databaseLogRetentionDays.Load())
+}
+
+// SetDatabaseLogRetentionDays 更新内存中的数据库日志自动保留天数。
+func SetDatabaseLogRetentionDays(days int) {
+	if days < 0 || days > MaxDatabaseLogRetentionDays {
+		days = 0
+	}
+	databaseLogRetentionDays.Store(int64(days))
 }

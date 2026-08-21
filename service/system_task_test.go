@@ -232,3 +232,86 @@ func TestEnqueueSystemTaskReportsCreatedAndExistingActive(t *testing.T) {
 	require.NotNil(t, second)
 	assert.NotEqual(t, first.TaskID, second.TaskID)
 }
+
+// TestLogCleanupHandlerSchedulingPolicy verifies retention settings and log database type gate automatic cleanup.
+func TestLogCleanupHandlerSchedulingPolicy(t *testing.T) {
+	previousDays := common.GetDatabaseLogRetentionDays()
+	previousMainType := common.MainDatabaseType()
+	previousLogType := common.LogDatabaseType()
+	t.Cleanup(func() {
+		common.SetDatabaseTypes(previousMainType, previousLogType)
+		common.SetDatabaseLogRetentionDays(previousDays)
+	})
+
+	handler := logCleanupHandler{}
+	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+	common.SetDatabaseLogRetentionDays(0)
+	assert.False(t, handler.Enabled())
+
+	common.SetDatabaseLogRetentionDays(30)
+	assert.True(t, handler.Enabled())
+	assert.Equal(t, 24*time.Hour, handler.Interval())
+
+	now := common.GetTimestamp()
+	payload, ok := handler.NewPayload().(LogCleanupPayload)
+	require.True(t, ok)
+	assert.Equal(t, logCleanupBatchSize, payload.BatchSize)
+	assert.GreaterOrEqual(t, payload.TargetTimestamp, now-int64(30*24*time.Hour/time.Second)-1)
+	assert.LessOrEqual(t, payload.TargetTimestamp, now-int64(30*24*time.Hour/time.Second))
+
+	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeClickHouse)
+	assert.False(t, handler.Enabled())
+}
+
+// TestShouldPauseLogCleanupUsesConfiguredThresholds verifies cleanup yields to existing performance protection.
+func TestShouldPauseLogCleanupUsesConfiguredThresholds(t *testing.T) {
+	config := common.PerformanceMonitorConfig{
+		Enabled:         true,
+		CPUThreshold:    80,
+		MemoryThreshold: 85,
+		DiskThreshold:   90,
+	}
+
+	assert.False(t, shouldPauseLogCleanup(common.SystemStatus{CPUUsage: 80, MemoryUsage: 85, DiskUsage: 90}, config))
+	assert.True(t, shouldPauseLogCleanup(common.SystemStatus{CPUUsage: 81}, config))
+	assert.True(t, shouldPauseLogCleanup(common.SystemStatus{MemoryUsage: 86}, config))
+	assert.True(t, shouldPauseLogCleanup(common.SystemStatus{DiskUsage: 91}, config))
+
+	config.Enabled = false
+	assert.False(t, shouldPauseLogCleanup(common.SystemStatus{CPUUsage: 100, MemoryUsage: 100, DiskUsage: 100}, config))
+
+	config = common.PerformanceMonitorConfig{Enabled: true}
+	assert.False(t, shouldPauseLogCleanup(common.SystemStatus{CPUUsage: 100, MemoryUsage: 100, DiskUsage: 100}, config))
+}
+
+// TestRunLogCleanupTaskCompletesWithoutExactCount verifies the low-cost state reports only processed rows while running.
+func TestRunLogCleanupTaskCompletesWithoutExactCount(t *testing.T) {
+	truncate(t)
+	runnerID := "runner-log-cleanup"
+	task, err := StartLogCleanupTask(1)
+	require.NoError(t, err)
+
+	claimedTask, claimed, err := model.ClaimSystemTask(task.ID, task.Type, runnerID, common.GetTimestamp()+60)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.NotNil(t, claimedTask)
+
+	runLogCleanupTask(context.Background(), claimedTask, runnerID)
+
+	reloaded, err := model.GetSystemTaskByTaskID(task.TaskID)
+	require.NoError(t, err)
+	require.NotNil(t, reloaded)
+	assert.Equal(t, model.SystemTaskStatusSucceeded, reloaded.Status)
+
+	state := LogCleanupState{}
+	require.NoError(t, reloaded.DecodeState(&state))
+	assert.Zero(t, state.Total)
+	assert.Zero(t, state.Remaining)
+	assert.Zero(t, state.Processed)
+	require.NotNil(t, state.Progress)
+	assert.Equal(t, 100, *state.Progress)
+
+	result := LogCleanupResult{}
+	require.NoError(t, common.UnmarshalJsonStr(reloaded.Result, &result))
+	assert.Zero(t, result.DeletedCount)
+}

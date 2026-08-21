@@ -809,7 +809,23 @@ func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (i
 		return total, nil
 	}
 
-	result := LOG_DB.WithContext(ctx).Where("created_at < ?", targetTimestamp).Limit(limit).Delete(&Log{})
+	// 先按时间索引取出有界主键集合，避免 PostgreSQL 忽略 DELETE 的 LIMIT。
+	var ids []int
+	if err := LOG_DB.WithContext(ctx).
+		Model(&Log{}).
+		Select("id").
+		Where("created_at < ?", targetTimestamp).
+		Order("created_at asc, id asc").
+		Limit(limit).
+		Pluck("id", &ids).Error; err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	// 删除只覆盖本批主键，不持有跨批次事务或行锁。
+	result := LOG_DB.WithContext(ctx).Where("id IN ?", ids).Delete(&Log{})
 	if nil != result.Error {
 		return 0, result.Error
 	}

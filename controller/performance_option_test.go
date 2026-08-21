@@ -73,6 +73,12 @@ func TestUpdateOptionValidatesAndSynchronizesPerformanceSettings(t *testing.T) {
 		assert.Equal(t, true, response["success"])
 		assert.Equal(t, days, common.GetServerLogRetentionDays())
 	}
+	for _, days := range []int{0, 30, 3650} {
+		status, response := updatePerformanceOption(t, "performance_setting.database_log_retention_days", days)
+		assert.Equal(t, http.StatusOK, status)
+		assert.Equal(t, true, response["success"])
+		assert.Equal(t, days, common.GetDatabaseLogRetentionDays())
+	}
 	for _, scope := range []string{common.ResourceScopeHost, common.ResourceScopeContainer} {
 		status, response := updatePerformanceOption(t, "performance_setting.monitor_resource_scope", scope)
 		assert.Equal(t, http.StatusOK, status)
@@ -96,6 +102,9 @@ func TestUpdateOptionRejectsInvalidPerformanceSettings(t *testing.T) {
 		{name: "negative retention", key: "performance_setting.server_log_retention_days", value: -1},
 		{name: "retention too large", key: "performance_setting.server_log_retention_days", value: 3651},
 		{name: "non integer retention", key: "performance_setting.server_log_retention_days", value: 7.5},
+		{name: "negative database retention", key: "performance_setting.database_log_retention_days", value: -1},
+		{name: "database retention too large", key: "performance_setting.database_log_retention_days", value: 3651},
+		{name: "non integer database retention", key: "performance_setting.database_log_retention_days", value: 7.5},
 		{name: "invalid scope", key: "performance_setting.monitor_resource_scope", value: "process"},
 	}
 	for _, test := range tests {
