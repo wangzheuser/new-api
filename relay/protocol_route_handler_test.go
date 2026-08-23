@@ -179,6 +179,11 @@ func TestExecuteConvertedTextRouteResponsesViaChatRejectsMissingDoneMarker(t *te
 	assert.NotContains(t, recorder.Body.String(), "event: response.completed")
 	reason, _ := info.StreamStatus.End()
 	assert.Equal(t, relaycommon.StreamEndReasonUnexpectedEOF, reason)
+	assert.True(t, info.StreamStatus.ClientPayloadIsCommitted())
+	partialUsage, hasPartialUsage, estimated := info.StreamStatus.PartialUsageSnapshot()
+	assert.True(t, hasPartialUsage)
+	assert.True(t, estimated)
+	assert.Positive(t, partialUsage.CompletionTokens)
 }
 
 func TestHandleNativeResponsesStreamUsesTypedTerminalWithoutDoneMarker(t *testing.T) {
@@ -237,6 +242,11 @@ func TestHandleNativeResponsesStreamRejectsUnexpectedEOF(t *testing.T) {
 	assert.True(t, types.IsSkipRetryError(apiError))
 	reason, _ := info.StreamStatus.End()
 	assert.Equal(t, relaycommon.StreamEndReasonUnexpectedEOF, reason)
+	assert.True(t, info.StreamStatus.ClientPayloadIsCommitted())
+	partialUsage, hasPartialUsage, estimated := info.StreamStatus.PartialUsageSnapshot()
+	assert.True(t, hasPartialUsage)
+	assert.True(t, estimated)
+	assert.Positive(t, partialUsage.CompletionTokens)
 }
 
 func TestHandleNativeResponsesStreamRecordsFailedTerminal(t *testing.T) {
@@ -264,6 +274,7 @@ func TestHandleNativeResponsesStreamRecordsFailedTerminal(t *testing.T) {
 	event, status := info.StreamStatus.Terminal()
 	assert.Equal(t, "response.failed", event)
 	assert.Equal(t, "failed", status)
+	assert.False(t, info.StreamStatus.ClientPayloadIsCommitted())
 }
 
 func TestHandleNativeChatStreamRejectsEOFMissingTerminal(t *testing.T) {
@@ -296,6 +307,11 @@ func TestHandleNativeChatStreamRejectsEOFMissingTerminal(t *testing.T) {
 	reason, endErr := info.StreamStatus.End()
 	assert.Equal(t, relaycommon.StreamEndReasonUnexpectedEOF, reason)
 	assert.EqualError(t, endErr, "stream ended before terminal event")
+	assert.True(t, info.StreamStatus.ClientPayloadIsCommitted())
+	partialUsage, hasPartialUsage, estimated := info.StreamStatus.PartialUsageSnapshot()
+	assert.True(t, hasPartialUsage)
+	assert.True(t, estimated)
+	assert.Positive(t, partialUsage.CompletionTokens)
 }
 
 func TestHandleNativeChatStreamAcceptsFinishReasonWithoutDoneMarker(t *testing.T) {

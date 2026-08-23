@@ -31,11 +31,10 @@ func (s *textBillingFinalizerSpy) GetPreConsumedQuota() int { return 10 }
 // Reserve is unused by the finalizer refund branch.
 func (s *textBillingFinalizerSpy) Reserve(int) error { return nil }
 
-func TestTextBillingFinalizationUsesPartialSettleOnlyAfterPayloadCommit(t *testing.T) {
+func TestTextBillingFinalizationUsesLocalPayloadCommitWithoutUpstreamPolicyHeader(t *testing.T) {
 	t.Parallel()
 	relayErr := types.NewOpenAIError(errors.New("stream failed"), types.ErrorCodeBadResponse, http.StatusBadGateway)
 	info := &relaycommon.RelayInfo{IsStream: true, StreamStatus: relaycommon.NewStreamStatus()}
-	info.StreamStatus.SetStreamPolicyVersion("progressive-v1")
 
 	assert.Equal(t, relaycommon.BillingRefunded, textBillingFinalization(info, relayErr))
 	info.StreamStatus.MarkAppHTTPCommitted()
@@ -43,6 +42,15 @@ func TestTextBillingFinalizationUsesPartialSettleOnlyAfterPayloadCommit(t *testi
 	info.StreamStatus.MarkClientPayloadCommitted()
 	assert.Equal(t, relaycommon.BillingSettledPartial, textBillingFinalization(info, relayErr))
 	assert.Equal(t, relaycommon.BillingSettled, textBillingFinalization(info, nil))
+}
+
+func TestTextBillingFinalizationDoesNotPartiallySettleNonStreamRequest(t *testing.T) {
+	t.Parallel()
+	relayErr := types.NewOpenAIError(errors.New("request failed"), types.ErrorCodeBadResponse, http.StatusBadGateway)
+	info := &relaycommon.RelayInfo{StreamStatus: relaycommon.NewStreamStatus()}
+	info.StreamStatus.MarkClientPayloadCommitted()
+
+	assert.Equal(t, relaycommon.BillingRefunded, textBillingFinalization(info, relayErr))
 }
 
 func TestFinalizeTextBillingRefundApplicationIsIdempotent(t *testing.T) {

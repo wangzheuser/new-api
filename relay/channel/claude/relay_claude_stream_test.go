@@ -83,3 +83,25 @@ func TestClaudeStreamHandlerSuccessWritesOneMessageStop(t *testing.T) {
 	assert.Equal(t, relaycommon.StreamEndReasonDone, reason)
 	assert.NoError(t, endErr)
 }
+
+func TestClaudeStreamHandlerConvertedOutputTracksCommittedPayloadWithoutPolicyHeader(t *testing.T) {
+	oldStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldStreamingTimeout })
+	body := strings.Join([]string{
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`,
+		`data: {"type":"error","error":{"type":"api_error","message":"upstream generation stopped"}}`,
+		``,
+	}, "\n")
+	ctx, recorder, info, response := newClaudeStreamFixture(body)
+	info.RelayFormat = types.RelayFormatOpenAI
+	response.Header = http.Header{}
+
+	usage, relayErr := ClaudeStreamHandler(ctx, response, info)
+
+	require.NotNil(t, relayErr)
+	require.NotNil(t, usage)
+	assert.True(t, info.StreamStatus.ClientPayloadIsCommitted())
+	assert.Contains(t, recorder.Body.String(), "partial")
+	assert.Empty(t, info.StreamStatus.StreamPolicyVersion())
+}

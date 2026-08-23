@@ -45,3 +45,25 @@ func TestObserveStreamDataPayloadCountsOnlyBusinessToolFragments(t *testing.T) {
 	assert.Zero(t, control.ToolNameBytes)
 	assert.Zero(t, control.ToolArgumentBytes)
 }
+
+func TestObserveStreamDataPayloadSupportsResponsesAndGemini(t *testing.T) {
+	t.Parallel()
+	responses := ObserveStreamDataPayload(
+		`{"type":"response.function_call_arguments.delta","delta":"{\"city\":\"深圳"}`,
+		types.RelayFormatOpenAIResponses,
+	)
+	gemini := ObserveStreamDataPayload(
+		`{"candidates":[{"content":{"parts":[{"functionCall":{"name":"weather","args":{"city":"深圳"}}}]}}]}`,
+		types.RelayFormatGemini,
+	)
+	responsesControl := ObserveStreamDataPayload(
+		`{"type":"response.created","response":{"id":"resp_1"}}`,
+		types.RelayFormatOpenAIResponses,
+	)
+
+	assert.True(t, responses.Meaningful)
+	assert.Equal(t, len([]byte(`{"city":"深圳`)), responses.ToolArgumentBytes)
+	assert.True(t, gemini.Meaningful)
+	assert.Equal(t, len([]byte("weather")), gemini.ToolNameBytes)
+	assert.False(t, responsesControl.Meaningful)
+}

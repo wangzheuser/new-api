@@ -135,7 +135,21 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 
 		err = helper.ObjectData(c, response)
 		if err != nil {
-			logger.LogError(c, "send_stream_response_failed: "+err.Error())
+			return types.NewError(err, types.ErrorCodeBadResponse)
+		}
+		if info.StreamStatus != nil {
+			responseData, marshalErr := common.Marshal(response)
+			if marshalErr != nil {
+				return types.NewError(marshalErr, types.ErrorCodeBadResponseBody)
+			}
+			observation := helper.ObserveStreamDataPayload(string(responseData), info.RelayFormat)
+			if observation.Meaningful {
+				info.StreamStatus.MarkClientPayloadCommitted()
+			}
+			info.StreamStatus.ObserveToolPayloadBytes(
+				observation.ToolNameBytes,
+				observation.ToolArgumentBytes,
+			)
 		}
 	}
 	if info.StreamStatus != nil && claudeInfo.Usage != nil {

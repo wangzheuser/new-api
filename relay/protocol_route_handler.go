@@ -202,7 +202,7 @@ func handleConvertedTextStream(c *gin.Context, info *relaycommon.RelayInfo, resp
 	var streamErr *types.NewAPIError
 	var usageText strings.Builder
 	helpersWrite := func(result relayconvert.ResponseResult) bool {
-		if err := writeConvertedStreamResult(c, plan.ClientRelayFormat, result.Value); err != nil {
+		if err := writeConvertedStreamResult(c, info, plan.ClientRelayFormat, result.Value); err != nil {
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 			return false
 		}
@@ -253,9 +253,11 @@ func handleConvertedTextStream(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 	})
 	if streamErr != nil {
+		observePartialProtocolStreamUsage(c, info, state, usageText.String())
 		return nil, streamErr
 	}
 	if statusErr := helper.StreamStatusError(c, info); statusErr != nil {
+		observePartialProtocolStreamUsage(c, info, state, usageText.String())
 		return nil, statusErr
 	}
 
@@ -347,7 +349,7 @@ func HandleNativeTextResponse(c *gin.Context, info *relaycommon.RelayInfo, resp 
 			return
 		}
 		for _, result := range results {
-			if writeErr := writeConvertedStreamResult(c, format, result.Value); writeErr != nil {
+			if writeErr := writeConvertedStreamResult(c, info, format, result.Value); writeErr != nil {
 				streamErr = types.NewOpenAIError(writeErr, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 				sr.Stop(streamErr)
 				return
@@ -363,9 +365,11 @@ func HandleNativeTextResponse(c *gin.Context, info *relaycommon.RelayInfo, resp 
 		}
 	})
 	if streamErr != nil {
+		observePartialProtocolStreamUsage(c, info, state, usageText.String())
 		return nil, streamErr
 	}
 	if statusErr := helper.StreamStatusError(c, info); statusErr != nil {
+		observePartialProtocolStreamUsage(c, info, state, usageText.String())
 		return nil, statusErr
 	}
 	if format == types.RelayFormatOpenAI {
@@ -597,59 +601,92 @@ func decodeProtocolPayloadError(data []byte) error {
 	return nil
 }
 
-func writeConvertedStreamResult(c *gin.Context, clientFormat types.RelayFormat, value any) error {
+// writeConvertedStreamResult writes one downstream event and records only payloads that were flushed successfully.
+func writeConvertedStreamResult(c *gin.Context, info *relaycommon.RelayInfo, clientFormat types.RelayFormat, value any) error {
+	var payload []byte
+	var err error
 	switch clientFormat {
 	case types.RelayFormatOpenAI:
-		return helper.ObjectData(c, value)
+		payload, err = common.Marshal(value)
+		if err == nil {
+			err = helper.StringData(c, string(payload))
+		}
 	case types.RelayFormatOpenAIResponses:
 		switch event := value.(type) {
 		case relayconvert.ChatToResponsesStreamEvent:
-			data, err := common.Marshal(event.Payload)
-			if err != nil {
-				return err
+			payload, err = common.Marshal(event.Payload)
+			if err == nil {
+				err = helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: event.Type}, string(payload))
 			}
-			return helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: event.Type}, string(data))
 		case *relayconvert.ChatToResponsesStreamEvent:
 			if event == nil {
 				return nil
 			}
-			data, err := common.Marshal(event.Payload)
-			if err != nil {
-				return err
+			payload, err = common.Marshal(event.Payload)
+			if err == nil {
+				err = helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: event.Type}, string(payload))
 			}
-			return helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: event.Type}, string(data))
 		default:
-			data, err := common.Marshal(value)
-			if err != nil {
-				return err
+			payload, err = common.Marshal(value)
+			if err == nil {
+				var responseEvent dto.ResponsesStreamResponse
+				if err = common.Unmarshal(payload, &responseEvent); err == nil {
+					err = helper.ResponseChunkData(c, responseEvent, string(payload))
+				}
 			}
-			var responseEvent dto.ResponsesStreamResponse
-			if err := common.Unmarshal(data, &responseEvent); err != nil {
-				return err
-			}
-			return helper.ResponseChunkData(c, responseEvent, string(data))
 		}
 	case types.RelayFormatClaude:
 		switch response := value.(type) {
 		case dto.ClaudeResponse:
-			return helper.ClaudeData(c, response)
+			payload, err = common.Marshal(response)
+			if err == nil {
+				err = helper.ClaudeData(c, response)
+			}
 		case *dto.ClaudeResponse:
 			if response == nil {
 				return nil
 			}
-			return helper.ClaudeData(c, *response)
+			payload, err = common.Marshal(response)
+			if err == nil {
+				err = helper.ClaudeData(c, *response)
+			}
 		default:
 			return fmt.Errorf("unexpected messages stream response type %T", value)
 		}
 	case types.RelayFormatGemini:
-		data, err := common.Marshal(value)
-		if err != nil {
-			return err
+		payload, err = common.Marshal(value)
+		if err == nil {
+			err = helper.StringData(c, string(payload))
 		}
-		return helper.StringData(c, string(data))
 	default:
 		return fmt.Errorf("unsupported client stream format: %s", clientFormat)
 	}
+	if err != nil {
+		return err
+	}
+	if info == nil || info.StreamStatus == nil {
+		return nil
+	}
+	observation := helper.ObserveStreamDataPayload(string(payload), clientFormat)
+	if observation.Meaningful {
+		info.StreamStatus.MarkClientPayloadCommitted()
+	}
+	info.StreamStatus.ObserveToolPayloadBytes(observation.ToolNameBytes, observation.ToolArgumentBytes)
+	return nil
+}
+
+// observePartialProtocolStreamUsage records the best available usage after an interrupted decoded stream.
+func observePartialProtocolStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, state *relayconvert.ResponseStreamState, text string) *dto.Usage {
+	if info == nil || state == nil {
+		return nil
+	}
+	upstreamUsage := state.Usage()
+	usage := ensureConvertedUsage(c, info, upstreamUsage, text)
+	if info.StreamStatus != nil {
+		hasUpstreamUsage := upstreamUsage != nil && upstreamUsage.TotalTokens > 0
+		info.StreamStatus.ObservePartialUsage(usage, hasUpstreamUsage, !hasUpstreamUsage)
+	}
+	return usage
 }
 
 func protocolResponseUsageText(response any) string {

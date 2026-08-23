@@ -24,7 +24,8 @@ func ObserveStreamDataPayload(data string, relayFormat types.RelayFormat) Stream
 	if _, isError := payload["error"]; isError || payload["type"] == "error" {
 		return observation
 	}
-	if relayFormat == types.RelayFormatClaude {
+	switch relayFormat {
+	case types.RelayFormatClaude:
 		if payload["type"] == "content_block_start" {
 			block, _ := payload["content_block"].(map[string]interface{})
 			name := stringValue(block["name"])
@@ -44,6 +45,46 @@ func ObserveStreamDataPayload(data string, relayFormat types.RelayFormat) Stream
 			arguments := stringValue(delta["partial_json"])
 			observation.Meaningful = strings.TrimSpace(arguments) != ""
 			observation.ToolArgumentBytes = len([]byte(arguments))
+		}
+		return observation
+	case types.RelayFormatOpenAIResponses:
+		eventType := stringValue(payload["type"])
+		delta := stringValue(payload["delta"])
+		if strings.HasSuffix(eventType, ".delta") && strings.TrimSpace(delta) != "" {
+			observation.Meaningful = true
+			if eventType == "response.function_call_arguments.delta" {
+				observation.ToolArgumentBytes = len([]byte(delta))
+			}
+		}
+		if eventType == "response.output_item.added" {
+			item, _ := payload["item"].(map[string]interface{})
+			if item["type"] == "function_call" {
+				name := stringValue(item["name"])
+				arguments := stringValue(item["arguments"])
+				observation.Meaningful = strings.TrimSpace(name) != "" || strings.TrimSpace(arguments) != ""
+				observation.ToolNameBytes = len([]byte(name))
+				observation.ToolArgumentBytes = len([]byte(arguments))
+			}
+		}
+		return observation
+	case types.RelayFormatGemini:
+		candidates, _ := payload["candidates"].([]interface{})
+		for _, rawCandidate := range candidates {
+			candidate, _ := rawCandidate.(map[string]interface{})
+			content, _ := candidate["content"].(map[string]interface{})
+			parts, _ := content["parts"].([]interface{})
+			for _, rawPart := range parts {
+				part, _ := rawPart.(map[string]interface{})
+				if strings.TrimSpace(stringValue(part["text"])) != "" {
+					observation.Meaningful = true
+				}
+				functionCall, _ := part["functionCall"].(map[string]interface{})
+				name := stringValue(functionCall["name"])
+				if strings.TrimSpace(name) != "" || functionCall["args"] != nil {
+					observation.Meaningful = true
+				}
+				observation.ToolNameBytes += len([]byte(name))
+			}
 		}
 		return observation
 	}

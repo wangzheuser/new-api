@@ -542,8 +542,7 @@ func textBillingFinalization(
 	if relayErr == nil {
 		return relaycommon.BillingSettled
 	}
-	if relayInfo != nil && relayInfo.StreamStatus != nil &&
-		relayInfo.StreamStatus.StreamPolicyVersion() == "progressive-v1" &&
+	if relayInfo != nil && relayInfo.IsStream && relayInfo.StreamStatus != nil &&
 		relayInfo.StreamStatus.ClientPayloadIsCommitted() {
 		return relaycommon.BillingSettledPartial
 	}
