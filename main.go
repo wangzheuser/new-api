@@ -242,6 +242,12 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		common.SysError(fmt.Sprintf("server forced to shutdown: %v", err))
 	}
+	// HTTP 请求退出后再等待会话日志队列落库，避免正常发布期间丢失已接收的记录。
+	flushCtx, flushCancel := context.WithTimeout(context.Background(), 20*time.Second)
+	if err := service.WaitForConversationLogWrites(flushCtx); err != nil {
+		common.SysError(fmt.Sprintf("conversation log flush interrupted: %v", err))
+	}
+	flushCancel()
 	// 内存中的看板数据保存入库，避免重启丢失未落库数据 (issue #5679)
 	if common.DataExportEnabled {
 		model.SaveQuotaDataCache()

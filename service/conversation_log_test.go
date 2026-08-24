@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -100,6 +101,7 @@ func TestRecordConversationLogIncludesResponseOverrideMetadata(t *testing.T) {
 	require.NoError(t, err)
 
 	RecordConversationLog(ctx, info, nil)
+	require.NoError(t, WaitForConversationLogWrites(context.Background()))
 
 	var persisted model.ConversationLog
 	require.NoError(t, model.LOG_DB.Where("request_id = ?", requestID).First(&persisted).Error)

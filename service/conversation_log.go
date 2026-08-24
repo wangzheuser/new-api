@@ -3,8 +3,11 @@ package service
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -14,9 +17,25 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const conversationBinaryOmitted = "[binary data omitted]"
+const (
+	conversationBinaryOmitted = "[binary data omitted]"
+	conversationLogQueueSize  = 8
+	conversationLogBatchSize  = 4
+	conversationLogBatchWait  = 100 * time.Millisecond
+)
 
 var conversationDataURIRegexp = regexp.MustCompile(`(?i)data:[^,"\\\s]*;base64,[A-Za-z0-9+/=_-]*`)
+
+type conversationLogWrite struct {
+	log       *model.ConversationLog
+	requestId string
+}
+
+var (
+	conversationLogQueue      = make(chan conversationLogWrite, conversationLogQueueSize)
+	conversationLogWorkerOnce sync.Once
+	conversationLogWrites     sync.WaitGroup
+)
 
 // RecordConversationLog persists the bounded final relay attempt without affecting the relay result.
 func RecordConversationLog(c *gin.Context, info *relaycommon.RelayInfo, relayErr *types.NewAPIError) {
@@ -89,8 +108,91 @@ func RecordConversationLog(c *gin.Context, info *relaycommon.RelayInfo, relayErr
 	}
 	log.StorageBytes = int64(len(log.ClientRequestBody) + len(log.UpstreamRequestBody) +
 		len(log.UpstreamResponseBody) + len(log.ClientResponseBody) + len(log.Metadata))
-	if err := model.CreateConversationLog(log); err != nil {
-		logger.LogError(c, "failed to record conversation log: "+err.Error())
+	conversationLogWorkerOnce.Do(func() {
+		go runConversationLogWriter()
+	})
+	conversationLogWrites.Add(1)
+	write := conversationLogWrite{log: log, requestId: log.RequestId}
+	select {
+	case conversationLogQueue <- write:
+		return
+	default:
+		// 队列饱和时同步落库，限制内存占用且不丢失审计记录。
+		logger.LogWarn(c, "conversation log queue is full; writing synchronously")
+		persistConversationLogWrites([]conversationLogWrite{write})
+	}
+}
+
+// runConversationLogWriter drains the bounded queue and groups nearby records into small transactions.
+func runConversationLogWriter() {
+	for first := range conversationLogQueue {
+		writes := make([]conversationLogWrite, 1, conversationLogBatchSize)
+		writes[0] = first
+		timer := time.NewTimer(conversationLogBatchWait)
+	collect:
+		for len(writes) < conversationLogBatchSize {
+			select {
+			case write := <-conversationLogQueue:
+				writes = append(writes, write)
+			case <-timer.C:
+				break collect
+			}
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		persistConversationLogWrites(writes)
+	}
+}
+
+// persistConversationLogWrites writes one batch and isolates individual records if the batch fails.
+func persistConversationLogWrites(writes []conversationLogWrite) {
+	defer func() {
+		for range writes {
+			conversationLogWrites.Done()
+		}
+		if recovered := recover(); recovered != nil {
+			common.SysError(fmt.Sprintf("panic while recording conversation logs: %v", recovered))
+		}
+	}()
+	logs := make([]*model.ConversationLog, 0, len(writes))
+	for _, write := range writes {
+		logs = append(logs, write.log)
+	}
+	if err := model.CreateConversationLogs(logs); err == nil {
+		return
+	} else if len(writes) == 1 {
+		common.SysError("failed to record conversation log, request_id=" + writes[0].requestId + ": " + err.Error())
+		return
+	}
+
+	// 批量写入失败后逐条重试，避免一条异常记录影响同批次的其他记录。
+	for _, write := range writes {
+		write.log.Id = 0
+		if err := model.CreateConversationLog(write.log); err != nil {
+			common.SysError("failed to record conversation log, request_id=" + write.requestId + ": " + err.Error())
+		}
+	}
+}
+
+// WaitForConversationLogWrites waits until all accepted records have reached the database.
+func WaitForConversationLogWrites(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	done := make(chan struct{})
+	go func() {
+		conversationLogWrites.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

@@ -2,7 +2,6 @@ package model
 
 import (
 	"context"
-	"database/sql"
 
 	"gorm.io/gorm"
 )
@@ -83,15 +82,23 @@ func CreateConversationLog(log *ConversationLog) error {
 	return LOG_DB.Create(log).Error
 }
 
+// CreateConversationLogs persists a bounded batch of captured relay attempts in one transaction.
+func CreateConversationLogs(logs []*ConversationLog) error {
+	if len(logs) == 0 {
+		return nil
+	}
+	return LOG_DB.CreateInBatches(logs, len(logs)).Error
+}
+
 // GetConversationLogs returns metadata-only rows for a page.
 func GetConversationLogs(query ConversationLogQuery, startIdx int, num int) ([]*ConversationLog, int64, error) {
 	base := applyConversationLogQuery(LOG_DB.Model(&ConversationLog{}), query)
-	var total int64
-	if err := base.Count(&total).Error; err != nil {
+	total, err := countLogsUpToLimit(base)
+	if err != nil {
 		return nil, 0, err
 	}
 	var logs []*ConversationLog
-	err := applyConversationLogQuery(LOG_DB.Model(&ConversationLog{}), query).
+	err = applyConversationLogQuery(LOG_DB.Model(&ConversationLog{}), query).
 		Select("id, created_at, request_id, user_id, username, token_id, channel_id, " + logGroupCol + ", model_name, upstream_model_name, relay_format, request_path, is_stream, status_code, storage_bytes, client_request_truncated, upstream_request_truncated, upstream_response_truncated, client_response_truncated").
 		Order("created_at desc, id desc").Offset(startIdx).Limit(num).Find(&logs).Error
 	return logs, total, err
@@ -108,13 +115,15 @@ func GetConversationLogById(id int) (*ConversationLog, error) {
 
 // GetConversationLogSummary aggregates record count and stored bytes.
 func GetConversationLogSummary() (ConversationLogSummary, error) {
+	return getConversationLogSummary(LOG_DB)
+}
+
+// getConversationLogSummary performs one aggregate scan using the supplied query context.
+func getConversationLogSummary(db *gorm.DB) (ConversationLogSummary, error) {
 	summary := ConversationLogSummary{}
-	if err := LOG_DB.Model(&ConversationLog{}).Count(&summary.RecordCount).Error; err != nil {
-		return summary, err
-	}
-	var storage sql.NullInt64
-	err := LOG_DB.Model(&ConversationLog{}).Select("COALESCE(SUM(storage_bytes), 0)").Scan(&storage).Error
-	summary.StorageBytes = storage.Int64
+	err := db.Model(&ConversationLog{}).
+		Select("COUNT(*) AS record_count, COALESCE(SUM(storage_bytes), 0) AS storage_bytes").
+		Scan(&summary).Error
 	return summary, err
 }
 
@@ -140,17 +149,29 @@ func ForEachConversationLog(ctx context.Context, query ConversationLogQuery, bat
 
 // DeleteConversationLogs deletes matching rows in bounded batches.
 func DeleteConversationLogs(ctx context.Context, query ConversationLogQuery, batchSize int) (int64, error) {
+	if batchSize <= 0 {
+		batchSize = 100
+	}
 	var deleted int64
-	err := ForEachConversationLog(ctx, query, batchSize, func(logs []*ConversationLog) error {
-		ids := make([]int, 0, len(logs))
-		for _, log := range logs {
-			ids = append(ids, log.Id)
+	lastId := 0
+	for {
+		ids := make([]int, 0, batchSize)
+		db := LOG_DB.WithContext(ctx).Model(&ConversationLog{})
+		err := applyConversationLogQuery(db, query).
+			Where("id > ?", lastId).
+			Order("id asc").
+			Limit(batchSize).
+			Pluck("id", &ids).Error
+		if err != nil || len(ids) == 0 {
+			return deleted, err
 		}
+		lastId = ids[len(ids)-1]
 		result := LOG_DB.WithContext(ctx).Where("id IN ?", ids).Delete(&ConversationLog{})
+		if result.Error != nil {
+			return deleted, result.Error
+		}
 		deleted += result.RowsAffected
-		return result.Error
-	})
-	return deleted, err
+	}
 }
 
 // TrimConversationLogs removes oldest rows until storage is within maxBytes.
@@ -158,7 +179,7 @@ func TrimConversationLogs(ctx context.Context, maxBytes int64, batchSize int) (i
 	if maxBytes <= 0 {
 		return 0, nil
 	}
-	summary, err := GetConversationLogSummary()
+	summary, err := getConversationLogSummary(LOG_DB.WithContext(ctx))
 	if err != nil || summary.StorageBytes <= maxBytes {
 		return 0, err
 	}
