@@ -240,7 +240,8 @@ action_backup() {
   docker exec "$PROXY_CONTAINER" nginx -T > "$backup_dir/nginx-config.txt" 2>&1
   printf '%s  nginx-config.txt\n' "$(normalize_nginx_config < "$backup_dir/nginx-config.txt" | sha256sum | awk '{print $1}')" > "$backup_dir/nginx-config.sha256"
   docker inspect "$production" | python3 -c 'import json,sys; env=json.load(sys.stdin)[0]["Config"]["Env"]; sensitive=("SECRET","PASSWORD","TOKEN","DSN","KEY","COOKIE"); print("\n".join(x.split("=",1)[0]+"=<redacted>" if any(k in x.split("=",1)[0].upper() for k in sensitive) else x for x in env))' > "$backup_dir/runtime-env.sanitized"
-  docker exec "$POSTGRES_CONTAINER" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc > "$dump"
+  # Fast compression shortens the high-CPU backup window while preserving the custom restore format.
+  docker exec "$POSTGRES_CONTAINER" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc -Z1 > "$dump"
   (cd "$backup_dir" && sha256sum postgresql.dump > postgresql.dump.sha256)
   docker exec -i "$POSTGRES_CONTAINER" pg_restore -l < "$dump" > "$backup_dir/postgresql.restore-list.txt"
   [[ -s "$backup_dir/postgresql.restore-list.txt" ]]
