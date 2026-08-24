@@ -126,12 +126,20 @@ public_version() {
 }
 
 wait_healthy() {
-  local container="$1" i
+  local container="$1" i status
   # Online index creation can extend startup on large production tables.
-  for i in $(seq 1 300); do
-    [[ "$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container" 2>/dev/null || true)" == healthy ]] && return 0
+  for i in $(seq 1 1800); do
+    status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container" 2>/dev/null || true)"
+    if [[ "$status" == healthy ]]; then
+      printf 'candidate_health=healthy container=%s elapsed_seconds=%s\n' "$container" "$((i * 2))"
+      return 0
+    fi
+    if ((i % 15 == 0)); then
+      printf 'candidate_health=waiting container=%s status=%s elapsed_seconds=%s\n' "$container" "${status:-missing}" "$((i * 2))"
+    fi
     sleep 2
   done
+  printf 'candidate_health=timeout container=%s status=%s elapsed_seconds=3600\n' "$container" "${status:-missing}" >&2
   return 1
 }
 
@@ -250,8 +258,10 @@ action_stage() {
   load_config
   [[ -r "$IMAGE_PATH" ]]
   [[ "$(sha256_file "$IMAGE_PATH")" == "$IMAGE_SHA256" ]]
-  zstd -t "$IMAGE_PATH" >/dev/null
-  zstd -dc "$IMAGE_PATH" | docker load >/dev/null
+  if [[ "$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE_TAG" 2>/dev/null || true)" != "$COMMIT_SHA" ]]; then
+    zstd -t "$IMAGE_PATH" >/dev/null
+    zstd -dc "$IMAGE_PATH" | docker load >/dev/null
+  fi
   [[ "$(docker image inspect -f '{{.Os}}/{{.Architecture}}' "$IMAGE_TAG")" == linux/amd64 ]]
   [[ "$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE_TAG")" == "$COMMIT_SHA" ]]
 
