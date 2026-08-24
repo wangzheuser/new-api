@@ -274,7 +274,8 @@ action_stage() {
   compose_file="$STATE_DIR/$slot.compose.rendered.yml"
   render_compose "$slot" > "$compose_file"
   mkdir -p "$DATA_DIR" "$LOG_DIR"
-  docker compose -p "$project" -f "$compose_file" up -d --force-recreate --no-deps "$service"
+  # Compose recreates the slot when its image or configuration changed; retries keep an already-correct candidate running.
+  docker compose -p "$project" -f "$compose_file" up -d --no-deps "$service"
   wait_healthy "$candidate"
   [[ "$(container_version "$candidate")" == "$VERSION" ]]
   networks="$(docker inspect "$candidate" | python3 -c 'import json,sys; print(",".join(sorted(json.load(sys.stdin)[0]["NetworkSettings"]["Networks"])))')"
