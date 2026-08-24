@@ -76,10 +76,10 @@ func sanitizeClickHouseLikePattern(input string) (string, error) {
 }
 
 type Log struct {
-	Id                  int    `json:"id" gorm:"index:idx_created_at_id,priority:2;index:idx_user_id_id,priority:2"`
+	Id                  int    `json:"id" gorm:"index:idx_user_id_id,priority:2"`
 	UserId              int    `json:"user_id" gorm:"index;index:idx_user_id_id,priority:1"`
-	CreatedAt           int64  `json:"created_at" gorm:"bigint;index:idx_created_at_id,priority:1;index:idx_created_at_type"`
-	Type                int    `json:"type" gorm:"index:idx_created_at_type"`
+	CreatedAt           int64  `json:"created_at" gorm:"bigint"`
+	Type                int    `json:"type"`
 	Content             string `json:"content"`
 	Username            string `json:"username" gorm:"index;index:index_username_model_name,priority:2;default:''"`
 	TokenName           string `json:"token_name" gorm:"index;default:''"`
@@ -98,7 +98,7 @@ type Log struct {
 	TokenId             int    `json:"token_id" gorm:"default:0;index"`
 	Group               string `json:"group" gorm:"index"`
 	Ip                  string `json:"ip" gorm:"index;default:''"`
-	RequestId           string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
+	RequestId           string `json:"request_id,omitempty" gorm:"type:varchar(64);default:''"`
 	UpstreamRequestId   string `json:"upstream_request_id,omitempty" gorm:"type:varchar(128);index:idx_logs_upstream_request_id;default:''"`
 	Other               string `json:"other"`
 }
@@ -527,6 +527,16 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 	}
 }
 
+const logSearchCountLimit = 10000
+
+// countLogsUpToLimit counts at most logSearchCountLimit matching rows to bound list-query work.
+func countLogsUpToLimit(tx *gorm.DB) (int64, error) {
+	limited := tx.Session(&gorm.Session{}).Select("1").Limit(logSearchCountLimit)
+	var total int64
+	err := LOG_DB.Table("(?) AS counted_logs", limited).Count(&total).Error
+	return total, err
+}
+
 func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string, latestPerRequest bool) (logs []*Log, total int64, err error) {
 	tx := LOG_DB.Model(&Log{})
 	if startTimestamp != 0 {
@@ -563,7 +573,7 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 	if group != "" {
 		tx = tx.Where("logs."+logGroupCol+" = ?", group)
 	}
-	err = tx.Model(&Log{}).Count(&total).Error
+	total, err = countLogsUpToLimit(tx)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -622,8 +632,6 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 	return logs, total, err
 }
 
-const logSearchCountLimit = 10000
-
 func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, latestPerRequest bool) (logs []*Log, total int64, err error) {
 	tx := LOG_DB.Model(&Log{}).Where("logs.user_id = ?", userId)
 	if startTimestamp != 0 {
@@ -651,7 +659,7 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 	if group != "" {
 		tx = tx.Where("logs."+logGroupCol+" = ?", group)
 	}
-	err = tx.Model(&Log{}).Limit(logSearchCountLimit).Count(&total).Error
+	total, err = countLogsUpToLimit(tx)
 	if err != nil {
 		common.SysError("failed to count user logs: " + err.Error())
 		return nil, 0, errors.New("查询日志失败")

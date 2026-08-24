@@ -127,7 +127,8 @@ public_version() {
 
 wait_healthy() {
   local container="$1" i
-  for i in $(seq 1 90); do
+  # Online index creation can extend startup on large production tables.
+  for i in $(seq 1 300); do
     [[ "$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container" 2>/dev/null || true)" == healthy ]] && return 0
     sleep 2
   done

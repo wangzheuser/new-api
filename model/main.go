@@ -325,6 +325,14 @@ func migrateDB() error {
 			return err
 		}
 	}
+	if err := ensureMainQueryIndexes(DB); err != nil {
+		return err
+	}
+	if os.Getenv("LOG_SQL_DSN") == "" {
+		if err := ensureLogQueryIndexes(DB); err != nil {
+			return err
+		}
+	}
 	return backfillSubscriptionAllocationCount()
 }
 
@@ -407,6 +415,14 @@ func migrateDBFast() error {
 			return err
 		}
 	}
+	if err := ensureMainQueryIndexes(DB); err != nil {
+		return err
+	}
+	if os.Getenv("LOG_SQL_DSN") == "" {
+		if err := ensureLogQueryIndexes(DB); err != nil {
+			return err
+		}
+	}
 	if err := backfillSubscriptionAllocationCount(); err != nil {
 		return err
 	}
@@ -418,7 +434,10 @@ func migrateLOGDB() error {
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		return migrateClickHouseLogDB()
 	}
-	return LOG_DB.AutoMigrate(&Log{}, &ConversationLog{})
+	if err := LOG_DB.AutoMigrate(&Log{}, &ConversationLog{}); err != nil {
+		return err
+	}
+	return ensureLogQueryIndexes(LOG_DB)
 }
 
 func migrateClickHouseLogDB() error {

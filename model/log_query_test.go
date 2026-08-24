@@ -92,6 +92,31 @@ func TestLogQueriesLatestPerRequestAcrossTimeRange(t *testing.T) {
 	assert.Equal(t, "legacy empty request", userLogs[0].Content)
 }
 
+// TestLogSearchCountIsCapped verifies list endpoints never scan beyond the advertised result ceiling.
+func TestLogSearchCountIsCapped(t *testing.T) {
+	truncateTables(t)
+	logs := make([]Log, logSearchCountLimit+1)
+	for i := range logs {
+		logs[i] = Log{
+			UserId:    1,
+			CreatedAt: int64(i + 1),
+			Type:      LogTypeConsume,
+			RequestId: "request-count-limit",
+		}
+	}
+	require.NoError(t, LOG_DB.CreateInBatches(&logs, 500).Error)
+
+	allLogs, total, err := GetAllLogs(LogTypeUnknown, 0, 0, "", "", "", 0, 1, 0, "", "", "", false)
+	require.NoError(t, err)
+	assert.EqualValues(t, logSearchCountLimit, total)
+	assert.Len(t, allLogs, 1)
+
+	userLogs, total, err := GetUserLogs(1, LogTypeUnknown, 0, 0, "", "", 0, 1, "", "", false)
+	require.NoError(t, err)
+	assert.EqualValues(t, logSearchCountLimit, total)
+	assert.Len(t, userLogs, 1)
+}
+
 // logContents returns log content values for order-independent assertions.
 func logContents(logs []*Log) []string {
 	contents := make([]string, 0, len(logs))

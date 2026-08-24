@@ -1874,14 +1874,52 @@ func ResetDueSubscriptions(limit int) (int, error) {
 	return resetCount, nil
 }
 
-// CleanupSubscriptionPreConsumeRecords removes old idempotency records to keep table small.
+const (
+	subscriptionPreConsumeCleanupBatchSize  = 500
+	subscriptionPreConsumeCleanupMaxBatches = 20
+)
+
+// CleanupSubscriptionPreConsumeRecords removes old idempotency records in bounded batches.
 func CleanupSubscriptionPreConsumeRecords(olderThanSeconds int64) (int64, error) {
 	if olderThanSeconds <= 0 {
 		olderThanSeconds = 7 * 24 * 3600
 	}
 	cutoff := GetDBTimestamp() - olderThanSeconds
-	res := DB.Where("updated_at < ?", cutoff).Delete(&SubscriptionPreConsumeRecord{})
-	return res.RowsAffected, res.Error
+	return cleanupSubscriptionPreConsumeRecords(cutoff, subscriptionPreConsumeCleanupBatchSize, subscriptionPreConsumeCleanupMaxBatches)
+}
+
+// cleanupSubscriptionPreConsumeRecords deletes a bounded number of expired records ordered by age.
+func cleanupSubscriptionPreConsumeRecords(cutoff int64, batchSize int, maxBatches int) (int64, error) {
+	if batchSize <= 0 || maxBatches <= 0 {
+		return 0, nil
+	}
+
+	var deleted int64
+	for range maxBatches {
+		var ids []int
+		if err := DB.Model(&SubscriptionPreConsumeRecord{}).
+			Where("updated_at < ?", cutoff).
+			Order("updated_at asc, id asc").
+			Limit(batchSize).
+			Pluck("id", &ids).Error; err != nil {
+			return deleted, err
+		}
+		if len(ids) == 0 {
+			break
+		}
+
+		// 再次校验截止时间，避免并发更新后的记录被本轮清理。
+		result := DB.Where("id IN ? AND updated_at < ?", ids, cutoff).
+			Delete(&SubscriptionPreConsumeRecord{})
+		deleted += result.RowsAffected
+		if result.Error != nil {
+			return deleted, result.Error
+		}
+		if len(ids) < batchSize {
+			break
+		}
+	}
+	return deleted, nil
 }
 
 type SubscriptionPlanInfo struct {
