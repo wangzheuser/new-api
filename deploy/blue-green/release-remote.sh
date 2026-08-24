@@ -207,13 +207,20 @@ action_status() {
 
 action_backup() {
   load_config
+  umask 077
+  mkdir -p "$BACKUP_ROOT"
+  local backup_lock_fd
+  exec {backup_lock_fd}>"$BACKUP_ROOT/.backup.lock"
+  # Serialize backups across releases so a timed-out caller cannot start a
+  # second pg_dump while the original process is still running.
+  flock "$backup_lock_fd"
+
   local backup_dir="$BACKUP_ROOT/$RELEASE_ID" dump="$BACKUP_ROOT/$RELEASE_ID/postgresql.dump"
   if [[ -r "$dump" && -r "$dump.sha256" && -s "$backup_dir/postgresql.restore-list.txt" ]] && \
     (cd "$backup_dir" && sha256sum -c postgresql.dump.sha256 >/dev/null); then
     printf 'backup=already-complete directory=%s\n' "$backup_dir"
     return
   fi
-  umask 077
   mkdir -p "$backup_dir"
   chmod 700 "$backup_dir"
   local production
