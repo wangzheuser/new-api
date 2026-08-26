@@ -8,6 +8,8 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/samber/lo"
 )
 
@@ -74,6 +76,11 @@ func convertChatResponseFormatToResponsesText(reqFormat *dto.ResponseFormat) jso
 }
 
 func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*dto.OpenAIResponsesRequest, error) {
+	return ChatCompletionsRequestToResponsesRequestWithInfo(req, nil)
+}
+
+// ChatCompletionsRequestToResponsesRequestWithInfo converts Chat history and records payload-free reasoning audit data.
+func ChatCompletionsRequestToResponsesRequestWithInfo(req *dto.GeneralOpenAIRequest, info *relaycommon.RelayInfo) (*dto.OpenAIResponsesRequest, error) {
 	if req == nil {
 		return nil, errors.New("request is nil")
 	}
@@ -150,6 +157,25 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 				instructionsParts = append(instructionsParts, s)
 			}
 			continue
+		}
+
+		if role == "assistant" {
+			if reasoningContent := msg.GetReasoningContent(); reasoningContent != "" {
+				// Responses keeps reasoning as a sibling item immediately before its assistant turn.
+				inputItems = append(inputItems, map[string]any{
+					"type": "reasoning",
+					"id":   fmt.Sprintf("rs_%s", common.GetUUID()),
+					"summary": []map[string]any{
+						{"type": "summary_text", "text": reasoningContent},
+					},
+				})
+				info.AddReasoningHistoryAudit(
+					types.RelayFormatOpenAI,
+					types.RelayFormatOpenAIResponses,
+					relaycommon.ReasoningHistoryReasonPreserved,
+					1, 0, 0, 0,
+				)
+			}
 		}
 
 		item := map[string]any{

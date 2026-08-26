@@ -74,9 +74,6 @@ func StreamResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.ChatCo
 						Arguments: *claudeResponse.Delta.PartialJson,
 					},
 				})
-			case "signature_delta":
-				signatureContent := "\n"
-				choice.Delta.ReasoningContent = &signatureContent
 			case "thinking_delta":
 				choice.Delta.ReasoningContent = claudeResponse.Delta.Thinking
 			}
@@ -109,16 +106,9 @@ func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextRe
 		Object:  "chat.completion",
 		Created: common.GetTimestamp(),
 	}
-	var responseText string
-	var responseThinking string
-	if len(claudeResponse.Content) > 0 {
-		responseText = claudeResponse.Content[0].GetText()
-		if claudeResponse.Content[0].Thinking != nil {
-			responseThinking = *claudeResponse.Content[0].Thinking
-		}
-	}
+	var responseText strings.Builder
+	var responseThinking strings.Builder
 	tools := make([]dto.ToolCallResponse, 0)
-	thinkingContent := ""
 
 	fullTextResponse.Id = claudeResponse.Id
 	for _, message := range claudeResponse.Content {
@@ -135,10 +125,10 @@ func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextRe
 			})
 		case "thinking":
 			if message.Thinking != nil {
-				thinkingContent = *message.Thinking
+				responseThinking.WriteString(*message.Thinking)
 			}
 		case "text":
-			responseText = message.GetText()
+			responseText.WriteString(message.GetText())
 		}
 	}
 	choice := dto.OpenAITextResponseChoice{
@@ -148,15 +138,13 @@ func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextRe
 		},
 		FinishReason: StopReasonClaudeToOpenAI(claudeResponse.StopReason),
 	}
-	choice.SetStringContent(responseText)
-	if len(responseThinking) > 0 {
-		choice.ReasoningContent = &responseThinking
+	choice.SetStringContent(responseText.String())
+	if responseThinking.Len() > 0 {
+		thinking := responseThinking.String()
+		choice.Message.ReasoningContent = &thinking
 	}
 	if len(tools) > 0 {
 		choice.Message.SetToolCalls(tools)
-	}
-	if thinkingContent != "" {
-		choice.Message.ReasoningContent = &thinkingContent
 	}
 	fullTextResponse.Model = claudeResponse.Model
 	choices = append(choices, choice)

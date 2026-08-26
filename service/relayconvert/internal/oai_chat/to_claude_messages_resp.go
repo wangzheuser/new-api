@@ -7,6 +7,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/reasonmap"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/samber/lo"
 )
 
@@ -95,7 +96,19 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 	// so we may have multiple open blocks and must stop each one explicitly.
 	stopOpenBlocks := func() {
 		switch info.ClaudeConvertInfo.LastMessagesType {
-		case relaycommon.LastMessageTypeText, relaycommon.LastMessageTypeThinking:
+		case relaycommon.LastMessageTypeThinking:
+			index := info.ClaudeConvertInfo.Index
+			// Close compatibility thinking with an explicit empty signature before the block stop.
+			claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
+				Type:  "content_block_delta",
+				Index: &index,
+				Delta: &dto.ClaudeMediaMessage{
+					Type:      "signature_delta",
+					Signature: common.GetPointer(""),
+				},
+			})
+			claudeResponses = append(claudeResponses, generateStopBlock(index))
+		case relaycommon.LastMessageTypeText:
 			claudeResponses = append(claudeResponses, generateStopBlock(info.ClaudeConvertInfo.Index))
 		case relaycommon.LastMessageTypeTools:
 			base := info.ClaudeConvertInfo.ToolCallBaseIndex
@@ -212,6 +225,12 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 					},
 				})
 				info.ClaudeConvertInfo.LastMessagesType = relaycommon.LastMessageTypeThinking
+				info.AddReasoningHistoryAudit(
+					types.RelayFormatOpenAI,
+					types.RelayFormatClaude,
+					relaycommon.ReasoningHistoryReasonSyntheticClientSignature,
+					1, 1, 0, 0,
+				)
 			} else if content != "" {
 				if info.ClaudeConvertInfo.LastMessagesType != relaycommon.LastMessageTypeText {
 					stopOpenBlocksAndAdvance()
@@ -371,6 +390,12 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 								Thinking: common.GetPointer[string](""),
 							},
 						})
+						info.AddReasoningHistoryAudit(
+							types.RelayFormatOpenAI,
+							types.RelayFormatClaude,
+							relaycommon.ReasoningHistoryReasonSyntheticClientSignature,
+							1, 1, 0, 0,
+						)
 					}
 					info.ClaudeConvertInfo.LastMessagesType = relaycommon.LastMessageTypeThinking
 					claudeResponse.Delta = &dto.ClaudeMediaMessage{
@@ -443,13 +468,27 @@ func ResponseOpenAI2Claude(openAIResponse *dto.OpenAITextResponse, info *relayco
 	}
 	for _, choice := range openAIResponse.Choices {
 		stopReason = stopReasonOpenAI2Claude(choice.FinishReason)
+		reasoningContent := choice.Message.GetReasoningContent()
 		textContent := choice.Message.StringContent()
 		toolCalls := choice.Message.ParseToolCalls()
-		if textContent != "" || len(toolCalls) == 0 {
-			claudeContent := dto.ClaudeMediaMessage{}
-			claudeContent.Type = "text"
-			claudeContent.SetText(textContent)
-			contents = append(contents, claudeContent)
+		if reasoningContent != "" {
+			contents = append(contents, dto.ClaudeMediaMessage{
+				Type:      "thinking",
+				Thinking:  common.GetPointer(reasoningContent),
+				Signature: common.GetPointer(""),
+			})
+			info.AddReasoningHistoryAudit(
+				types.RelayFormatOpenAI,
+				types.RelayFormatClaude,
+				relaycommon.ReasoningHistoryReasonSyntheticClientSignature,
+				1, 1, 0, 0,
+			)
+		}
+		if textContent != "" {
+			contents = append(contents, dto.ClaudeMediaMessage{
+				Type: "text",
+				Text: common.GetPointer(textContent),
+			})
 		}
 		for _, toolUse := range toolCalls {
 			claudeContent := dto.ClaudeMediaMessage{}
@@ -466,6 +505,12 @@ func ResponseOpenAI2Claude(openAIResponse *dto.OpenAITextResponse, info *relayco
 			claudeContent.Input = mapParams
 			contents = append(contents, claudeContent)
 		}
+	}
+	if len(contents) == 0 {
+		contents = append(contents, dto.ClaudeMediaMessage{
+			Type: "text",
+			Text: common.GetPointer(""),
+		})
 	}
 	claudeResponse.Content = contents
 	claudeResponse.StopReason = stopReason

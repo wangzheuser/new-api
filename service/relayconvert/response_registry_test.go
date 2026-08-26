@@ -232,6 +232,49 @@ func TestConvertResponseMultiHopConverters(t *testing.T) {
 	assert.Equal(t, 11, toGemini.Usage.TotalTokens)
 }
 
+func TestConvertResponseResponsesToClaudePreservesReasoningSummaryWithTools(t *testing.T) {
+	responses := &dto.OpenAIResponsesResponse{
+		ID:     "resp_1",
+		Model:  "gpt-test",
+		Status: []byte(`"completed"`),
+		Output: []dto.ResponsesOutput{
+			{
+				Type: "reasoning",
+				Summary: []dto.ResponsesOutputContent{
+					{Type: "summary_text", Text: "reasoning summary"},
+				},
+			},
+			{
+				Type: "message",
+				Role: "assistant",
+				Content: []dto.ResponsesOutputContent{
+					{Type: "output_text", Text: "visible"},
+				},
+			},
+			{
+				Type: "function_call", CallId: "call_1", Name: "lookup", Arguments: []byte(`{"q":"x"}`),
+			},
+		},
+	}
+
+	info := &relaycommon.RelayInfo{}
+	result, err := ConvertResponse(nil, info, types.RelayFormatClaude, responses)
+	require.NoError(t, err)
+	claudeResponse, ok := result.Value.(*dto.ClaudeResponse)
+	require.True(t, ok)
+	require.Len(t, claudeResponse.Content, 3)
+	assert.Equal(t, "thinking", claudeResponse.Content[0].Type)
+	assert.Equal(t, "reasoning summary", *claudeResponse.Content[0].Thinking)
+	require.NotNil(t, claudeResponse.Content[0].Signature)
+	assert.Empty(t, *claudeResponse.Content[0].Signature)
+	assert.Equal(t, "text", claudeResponse.Content[1].Type)
+	assert.Equal(t, "tool_use", claudeResponse.Content[2].Type)
+	require.NotNil(t, info.ReasoningHistory)
+	assert.Equal(t, 2, info.ReasoningHistory.PreservedMessages)
+	assert.Equal(t, 1, info.ReasoningHistory.SyntheticClientSignatures)
+	require.Len(t, info.ReasoningHistory.Routes, 2)
+}
+
 func TestConvertResponseByIDExecutesMultiHopAndChecksSource(t *testing.T) {
 	responses := textRegistryResponsesResponse()
 

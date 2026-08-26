@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestRequestConverterRegistryListsSupportedTextConverters(t *testing.T) {
@@ -169,6 +170,145 @@ func TestConvertRequestPlansMultiHopPath(t *testing.T) {
 		},
 	}, result.Steps)
 	assert.Equal(t, []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses}, info.RequestConversionChain)
+}
+
+func TestReasoningHistoryRoundTripOpenAIResponseClaudeClientAndNextOpenAIRequest(t *testing.T) {
+	reasoning := "inspect the tool input"
+	message := dto.Message{Role: "assistant", Content: "calling lookup", ReasoningContent: &reasoning}
+	message.SetToolCalls([]dto.ToolCallRequest{{
+		ID: "call_1", Type: "function", Function: dto.FunctionRequest{Name: "lookup", Arguments: `{"q":"x"}`},
+	}})
+
+	claudeResponse := ResponseOpenAI2Claude(&dto.OpenAITextResponse{
+		Id: "chatcmpl_1", Model: "model-test",
+		Choices: []dto.OpenAITextResponseChoice{{Message: message, FinishReason: "tool_calls"}},
+	}, &relaycommon.RelayInfo{})
+	require.Len(t, claudeResponse.Content, 3)
+	require.NotNil(t, claudeResponse.Content[0].Signature)
+	assert.Empty(t, *claudeResponse.Content[0].Signature)
+
+	nextRequest, err := ClaudeMessagesRequestToOpenAIChat(dto.ClaudeRequest{
+		Model: "model-test",
+		Messages: []dto.ClaudeMessage{
+			{Role: "user", Content: "question"},
+			{Role: "assistant", Content: claudeResponse.Content},
+			{Role: "user", Content: []dto.ClaudeMediaMessage{
+				{Type: "tool_result", ToolUseId: "call_1", Content: "result"},
+				{Type: "text", Text: common.GetPointer("continue")},
+			}},
+		},
+	}, &relaycommon.RelayInfo{})
+	require.NoError(t, err)
+	require.Len(t, nextRequest.Messages, 4)
+
+	assistant := nextRequest.Messages[1]
+	assert.Equal(t, reasoning, assistant.GetReasoningContent())
+	require.Len(t, assistant.ParseContent(), 1)
+	assert.Equal(t, "calling lookup", assistant.ParseContent()[0].Text)
+	require.Len(t, assistant.ParseToolCalls(), 1)
+	assert.Equal(t, "call_1", assistant.ParseToolCalls()[0].ID)
+	assert.Equal(t, "tool", nextRequest.Messages[2].Role)
+	assert.Equal(t, "call_1", nextRequest.Messages[2].ToolCallId)
+	assert.Equal(t, "result", nextRequest.Messages[2].StringContent())
+	assert.Equal(t, "user", nextRequest.Messages[3].Role)
+	require.Len(t, nextRequest.Messages[3].ParseContent(), 1)
+	assert.Equal(t, "continue", nextRequest.Messages[3].ParseContent()[0].Text)
+}
+
+func TestConvertRequestClaudeToResponsesPreservesReasoningBeforeFunctionCall(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		RelayFormat:            types.RelayFormatClaude,
+		RequestConversionChain: []types.RelayFormat{types.RelayFormatClaude},
+	}
+	request := claudeReasoningToolRequest()
+
+	result, err := ConvertRequest(nil, info, types.RelayFormatOpenAIResponses, request)
+	require.NoError(t, err)
+	responsesRequest, ok := result.Value.(*dto.OpenAIResponsesRequest)
+	require.True(t, ok)
+	assert.Equal(t, "reasoning", gjson.GetBytes(responsesRequest.Input, "1.type").String())
+	assert.Equal(t, "reasoning history", gjson.GetBytes(responsesRequest.Input, "1.summary.0.text").String())
+	assert.Equal(t, "assistant", gjson.GetBytes(responsesRequest.Input, "2.role").String())
+	assert.Equal(t, "function_call", gjson.GetBytes(responsesRequest.Input, "3.type").String())
+	assert.Equal(t, "function_call_output", gjson.GetBytes(responsesRequest.Input, "4.type").String())
+
+	require.NotNil(t, info.ReasoningHistory)
+	assert.Equal(t, 2, info.ReasoningHistory.PreservedMessages)
+	require.Len(t, info.ReasoningHistory.Routes, 2)
+}
+
+func TestConvertRequestClaudeToGeminiPreservesThoughtBeforeFunctionCall(t *testing.T) {
+	settings := model_setting.GetGeminiSettings()
+	original := settings.FunctionCallThoughtSignatureEnabled
+	settings.FunctionCallThoughtSignatureEnabled = true
+	t.Cleanup(func() {
+		settings.FunctionCallThoughtSignatureEnabled = original
+	})
+	info := &relaycommon.RelayInfo{
+		RelayFormat:            types.RelayFormatClaude,
+		RequestConversionChain: []types.RelayFormat{types.RelayFormatClaude},
+		ChannelMeta:            &relaycommon.ChannelMeta{UpstreamModelName: "gemini-test"},
+	}
+
+	result, err := ConvertRequest(nil, info, types.RelayFormatGemini, claudeReasoningToolRequest())
+	require.NoError(t, err)
+	geminiRequest, ok := result.Value.(*dto.GeminiChatRequest)
+	require.True(t, ok)
+	require.GreaterOrEqual(t, len(geminiRequest.Contents), 2)
+	parts := geminiRequest.Contents[1].Parts
+	require.GreaterOrEqual(t, len(parts), 2)
+	assert.True(t, parts[0].Thought)
+	assert.Equal(t, "reasoning history", parts[0].Text)
+	assert.Empty(t, parts[0].ThoughtSignature)
+	require.NotNil(t, parts[1].FunctionCall)
+	assert.NotEmpty(t, parts[1].ThoughtSignature)
+}
+
+func TestReasoningHistoryRoundTripChatResponsesChatKeepsToolTurn(t *testing.T) {
+	reasoning := "first second"
+	assistant := dto.Message{Role: "assistant", Content: "visible", ReasoningContent: &reasoning}
+	assistant.SetToolCalls([]dto.ToolCallRequest{{
+		ID: "call_1", Type: "function", Function: dto.FunctionRequest{Name: "lookup", Arguments: `{"q":"x"}`},
+	}})
+
+	responsesRequest, err := ChatCompletionsRequestToResponsesRequest(&dto.GeneralOpenAIRequest{
+		Model: "gpt-test",
+		Messages: []dto.Message{
+			{Role: "user", Content: "question"},
+			assistant,
+			{Role: "tool", ToolCallId: "call_1", Content: "result"},
+		},
+	})
+	require.NoError(t, err)
+
+	chatRequest, err := ResponsesRequestToChatCompletionsRequest(responsesRequest)
+	require.NoError(t, err)
+	require.Len(t, chatRequest.Messages, 3)
+	assert.Equal(t, "user", chatRequest.Messages[0].Role)
+	assert.Equal(t, "assistant", chatRequest.Messages[1].Role)
+	assert.Equal(t, reasoning, chatRequest.Messages[1].GetReasoningContent())
+	assert.Equal(t, "visible", chatRequest.Messages[1].StringContent())
+	require.Len(t, chatRequest.Messages[1].ParseToolCalls(), 1)
+	assert.Equal(t, "call_1", chatRequest.Messages[1].ParseToolCalls()[0].ID)
+	assert.Equal(t, "tool", chatRequest.Messages[2].Role)
+	assert.Equal(t, "call_1", chatRequest.Messages[2].ToolCallId)
+}
+
+func claudeReasoningToolRequest() *dto.ClaudeRequest {
+	return &dto.ClaudeRequest{
+		Model: "model-test",
+		Messages: []dto.ClaudeMessage{
+			{Role: "user", Content: "question"},
+			{Role: "assistant", Content: []dto.ClaudeMediaMessage{
+				{Type: "thinking", Thinking: common.GetPointer("reasoning history")},
+				{Type: "text", Text: common.GetPointer("visible")},
+				{Type: "tool_use", Id: "call_1", Name: "lookup", Input: map[string]any{"q": "x"}},
+			}},
+			{Role: "user", Content: []dto.ClaudeMediaMessage{
+				{Type: "tool_result", ToolUseId: "call_1", Content: "result"},
+			}},
+		},
+	}
 }
 
 func TestConvertRequestViaExecutesExplicitPath(t *testing.T) {

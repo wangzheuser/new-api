@@ -7,10 +7,12 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relaymedia "github.com/QuantumNous/new-api/service/relayconvert/internal/media"
 	sharedclaude "github.com/QuantumNous/new-api/service/relayconvert/internal/shared/claude"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/reasoning"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -27,7 +29,8 @@ type openRouterRequestReasoning struct {
 	Exclude   bool   `json:"exclude,omitempty"`
 }
 
-func OpenAIChatRequestToClaudeMessages(c *gin.Context, textRequest dto.GeneralOpenAIRequest) (*dto.ClaudeRequest, error) {
+// OpenAIChatRequestToClaudeMessages converts Chat history to Claude Messages without forging native thinking signatures.
+func OpenAIChatRequestToClaudeMessages(c *gin.Context, textRequest dto.GeneralOpenAIRequest, info *relaycommon.RelayInfo) (*dto.ClaudeRequest, error) {
 	claudeTools := make([]any, 0, len(textRequest.Tools))
 
 	for _, tool := range textRequest.Tools {
@@ -222,42 +225,77 @@ func OpenAIChatRequestToClaudeMessages(c *gin.Context, textRequest dto.GeneralOp
 		}
 	}
 
-	formatMessages := make([]dto.Message, 0)
-	lastMessage := dto.Message{
-		Role: "tool",
-	}
-	for i, message := range textRequest.Messages {
+	formatMessages := make([]dto.Message, 0, len(textRequest.Messages))
+	for _, message := range textRequest.Messages {
 		if message.Role == "" {
-			textRequest.Messages[i].Role = "user"
+			message.Role = "user"
 		}
 		fmtMessage := dto.Message{
-			Role:    message.Role,
-			Content: message.Content,
+			Role:             message.Role,
+			Content:          message.Content,
+			Name:             message.Name,
+			Prefix:           message.Prefix,
+			ReasoningContent: message.ReasoningContent,
+			Reasoning:        message.Reasoning,
+			ToolCalls:        message.ToolCalls,
+			ToolCallId:       message.ToolCallId,
 		}
-		if message.Role == "tool" {
-			fmtMessage.ToolCallId = message.ToolCallId
-		}
-		if message.Role == "assistant" && message.ToolCalls != nil {
-			fmtMessage.ToolCalls = message.ToolCalls
-		}
-		if lastMessage.Role == message.Role && lastMessage.Role != "tool" {
-			if lastMessage.IsStringContent() && message.IsStringContent() {
-				fmtMessage.SetStringContent(strings.Trim(fmt.Sprintf("%s %s", lastMessage.StringContent(), message.StringContent()), "\""))
-				formatMessages = formatMessages[:len(formatMessages)-1]
+
+		if len(formatMessages) > 0 && formatMessages[len(formatMessages)-1].Role == fmtMessage.Role && fmtMessage.Role != "tool" {
+			previous := &formatMessages[len(formatMessages)-1]
+			mergeStringContent := previous.IsStringContent() && fmtMessage.IsStringContent()
+			if mergeStringContent {
+				previous.SetStringContent(strings.Trim(fmt.Sprintf("%s %s", previous.StringContent(), fmtMessage.StringContent()), "\""))
+			}
+
+			// Preserve the existing non-assistant merge behavior; only assistant turns need structural merging.
+			if fmtMessage.Role == "assistant" {
+				if !mergeStringContent {
+					mergedContent := append([]dto.MediaContent{}, previous.ParseContent()...)
+					mergedContent = append(mergedContent, fmtMessage.ParseContent()...)
+					if len(mergedContent) > 0 {
+						previous.SetMediaContent(mergedContent)
+					}
+				}
+
+				previousReasoning := previous.GetReasoningContent()
+				currentReasoning := fmtMessage.GetReasoningContent()
+				if currentReasoning != "" {
+					mergedReasoning := previousReasoning + currentReasoning
+					previous.ReasoningContent = &mergedReasoning
+					previous.Reasoning = nil
+				}
+
+				toolCalls := append([]dto.ToolCallRequest{}, previous.ParseToolCalls()...)
+				toolCalls = append(toolCalls, fmtMessage.ParseToolCalls()...)
+				if len(toolCalls) > 0 {
+					previous.SetToolCalls(toolCalls)
+				}
+			}
+			if mergeStringContent || fmtMessage.Role == "assistant" {
+				continue
 			}
 		}
-		if fmtMessage.Content == nil || (fmtMessage.IsStringContent() && fmtMessage.StringContent() == "") {
+
+		hasAssistantReasoning := fmtMessage.Role == "assistant" && fmtMessage.GetReasoningContent() != ""
+		if (fmtMessage.Content == nil || (fmtMessage.IsStringContent() && fmtMessage.StringContent() == "")) && !hasAssistantReasoning {
 			fmtMessage.SetStringContent("...")
 		}
 		formatMessages = append(formatMessages, fmtMessage)
-		lastMessage = fmtMessage
+	}
+
+	latestAssistantIndex := -1
+	for i := range formatMessages {
+		if formatMessages[i].Role == "assistant" {
+			latestAssistantIndex = i
+		}
 	}
 
 	claudeMessages := make([]dto.ClaudeMessage, 0)
 	isFirstMessage := true
 	var systemMessages []dto.ClaudeMediaMessage
 
-	for _, message := range formatMessages {
+	for messageIndex, message := range formatMessages {
 		if message.Role == "system" {
 			if message.IsStringContent() {
 				if text := message.StringContent(); text != "" {
@@ -326,7 +364,8 @@ func OpenAIChatRequestToClaudeMessages(c *gin.Context, textRequest dto.GeneralOp
 					Content:   message.Content,
 				},
 			}
-		} else if message.IsStringContent() && message.ToolCalls == nil {
+		} else if message.IsStringContent() && message.ToolCalls == nil &&
+			(message.Role != "assistant" || message.GetReasoningContent() == "") {
 			text := message.StringContent()
 			if text == "" {
 				text = "..."
@@ -334,7 +373,39 @@ func OpenAIChatRequestToClaudeMessages(c *gin.Context, textRequest dto.GeneralOp
 			claudeMessage.Content = text
 		} else {
 			claudeMediaMessages := make([]dto.ClaudeMediaMessage, 0)
-			for _, mediaMessage := range message.ParseContent() {
+			reasoningContent := ""
+			if message.Role == "assistant" {
+				reasoningContent = message.GetReasoningContent()
+			}
+			// Native Claude verifies the latest tool-use thinking block; Chat history has no native signature to replay.
+			withholdUnsignedReasoning := messageIndex == latestAssistantIndex && len(message.ParseToolCalls()) > 0 && reasoningContent != ""
+			if reasoningContent != "" && !withholdUnsignedReasoning {
+				claudeMediaMessages = append(claudeMediaMessages, dto.ClaudeMediaMessage{
+					Type:     "thinking",
+					Thinking: common.GetPointer(reasoningContent),
+				})
+				info.AddReasoningHistoryAudit(
+					types.RelayFormatOpenAI,
+					types.RelayFormatClaude,
+					relaycommon.ReasoningHistoryReasonPreserved,
+					1, 0, 0, 0,
+				)
+			} else if withholdUnsignedReasoning {
+				info.AddReasoningHistoryAudit(
+					types.RelayFormatOpenAI,
+					types.RelayFormatClaude,
+					relaycommon.ReasoningHistoryReasonUnsignedLatestTurnWithheld,
+					0, 0, 0, 1,
+				)
+			}
+			mediaContent := message.ParseContent()
+			if withholdUnsignedReasoning && len(mediaContent) == 0 {
+				claudeMediaMessages = append(claudeMediaMessages, dto.ClaudeMediaMessage{
+					Type: "text",
+					Text: common.GetPointer("..."),
+				})
+			}
+			for _, mediaMessage := range mediaContent {
 				switch mediaMessage.Type {
 				case "text":
 					if mediaMessage.Text != "" {

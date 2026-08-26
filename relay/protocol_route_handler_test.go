@@ -105,6 +105,106 @@ func TestExecuteConvertedTextRouteResponsesViaChatJSON(t *testing.T) {
 	assert.Equal(t, types.RelayFormatOpenAI, info.GetFinalRequestRelayFormat())
 }
 
+func TestExecuteConvertedTextRouteMessagesBetaPreservesReasoningToolHistory(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service.InitHttpClient()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/v1/chat/completions", r.URL.Path)
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		var request dto.GeneralOpenAIRequest
+		require.NoError(t, common.Unmarshal(body, &request))
+		require.Len(t, request.Messages, 3)
+		assistant := request.Messages[1]
+		assert.Equal(t, "reasoning history", assistant.GetReasoningContent())
+		require.Len(t, assistant.ParseContent(), 1)
+		assert.Equal(t, "visible", assistant.ParseContent()[0].Text)
+		require.Len(t, assistant.ParseToolCalls(), 1)
+		assert.Equal(t, "call_1", assistant.ParseToolCalls()[0].ID)
+		assert.Equal(t, "tool", request.Messages[2].Role)
+		assert.Equal(t, "call_1", request.Messages[2].ToolCallId)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl_2","object":"chat.completion","created":1,"model":"MODEL_X","choices":[{"index":0,"message":{"role":"assistant","content":"next visible","reasoning_content":"next reasoning","tool_calls":[{"id":"call_2","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"y\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10}}`)
+	}))
+	defer upstream.Close()
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages?beta=true", nil)
+	info := &relaycommon.RelayInfo{
+		RelayFormat:        types.RelayFormatClaude,
+		RequestURLPath:     "/v1/messages?beta=true",
+		IsClaudeBetaQuery:  true,
+		RequestedModelName: "MODEL_X",
+		RoutingModelName:   "MODEL_X",
+		AttemptModelName:   "MODEL_X",
+		OriginModelName:    "MODEL_X",
+		StartTime:          time.Now(),
+		RequestConversionChain: []types.RelayFormat{
+			types.RelayFormatClaude,
+		},
+		ChannelRoutePlan: &types.ChannelRoutePlan{
+			ClientEndpointType:   constant.EndpointTypeAnthropic,
+			UpstreamEndpointType: constant.EndpointTypeOpenAI,
+			ClientRelayFormat:    types.RelayFormatClaude,
+			UpstreamRelayFormat:  types.RelayFormatOpenAI,
+			UpstreamRelayMode:    relayconstant.RelayModeChatCompletions,
+			ClientPath:           "/v1/messages?beta=true",
+			UpstreamPath:         "/v1/chat/completions",
+			RouteMode:            types.ChannelRouteModeConverted,
+			RequestConverter:     relayconvert.ConverterClaudeMessagesToOpenAIChat,
+			ResponseConverter:    relayconvert.ConverterOpenAIChatToClaudeMessages,
+			Quality:              "fair",
+			RequestSteps:         1,
+			ResponseSteps:        1,
+		},
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:       constant.ChannelTypeOpenAI,
+			ChannelId:         42,
+			ChannelBaseUrl:    upstream.URL,
+			ApiType:           constant.APITypeOpenAI,
+			ApiKey:            "TOKEN",
+			UpstreamModelName: "MODEL_X",
+		},
+	}
+	request := &dto.ClaudeRequest{
+		Model: "MODEL_X",
+		Messages: []dto.ClaudeMessage{
+			{Role: "user", Content: "question"},
+			{Role: "assistant", Content: []dto.ClaudeMediaMessage{
+				{Type: "thinking", Thinking: common.GetPointer("reasoning history"), Signature: common.GetPointer("")},
+				{Type: "text", Text: common.GetPointer("visible")},
+				{Type: "tool_use", Id: "call_1", Name: "lookup", Input: map[string]any{"q": "x"}},
+			}},
+			{Role: "user", Content: []dto.ClaudeMediaMessage{
+				{Type: "tool_result", ToolUseId: "call_1", Content: "result"},
+			}},
+		},
+	}
+	adaptor := GetAdaptor(constant.APITypeOpenAI)
+	adaptor.Init(info)
+
+	usage, apiError := executeConvertedTextRoute(c, info, adaptor, request)
+	require.Nil(t, apiError)
+	require.NotNil(t, usage)
+	assert.Equal(t, 10, usage.TotalTokens)
+	assert.Equal(t, http.StatusOK, recorder.Code)
+
+	var response dto.ClaudeResponse
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.Len(t, response.Content, 3)
+	assert.Equal(t, "thinking", response.Content[0].Type)
+	assert.Equal(t, "next reasoning", *response.Content[0].Thinking)
+	require.NotNil(t, response.Content[0].Signature)
+	assert.Empty(t, *response.Content[0].Signature)
+	assert.Equal(t, "text", response.Content[1].Type)
+	assert.Equal(t, "tool_use", response.Content[2].Type)
+	require.NotNil(t, info.ReasoningHistory)
+	assert.Equal(t, 2, info.ReasoningHistory.PreservedMessages)
+	assert.Equal(t, 1, info.ReasoningHistory.SyntheticClientSignatures)
+}
+
 func TestExecuteConvertedTextRouteResponsesViaChatStream(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	service.InitHttpClient()

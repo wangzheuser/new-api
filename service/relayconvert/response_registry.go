@@ -786,7 +786,7 @@ func usageFromClaudeResponse(resp *dto.ClaudeResponse) *dto.Usage {
 	return nil
 }
 
-func convertOAIChatResponseToOAIResponses(_ *gin.Context, _ *relaycommon.RelayInfo, response any) (any, *dto.Usage, error) {
+func convertOAIChatResponseToOAIResponses(_ *gin.Context, info *relaycommon.RelayInfo, response any) (any, *dto.Usage, error) {
 	chatResponse, err := asOAIChatResponse(response)
 	if err != nil {
 		return nil, nil, err
@@ -795,10 +795,19 @@ func convertOAIChatResponseToOAIResponses(_ *gin.Context, _ *relaycommon.RelayIn
 	if id == "" {
 		id = fmt.Sprintf("resp_%s", common.GetUUID())
 	}
-	return ChatCompletionsResponseToResponsesResponse(chatResponse, id)
+	converted, usage, err := ChatCompletionsResponseToResponsesResponse(chatResponse, id)
+	if err == nil && len(chatResponse.Choices) > 0 && chatResponse.Choices[0].Message.GetReasoningContent() != "" {
+		info.AddReasoningHistoryAudit(
+			types.RelayFormatOpenAI,
+			types.RelayFormatOpenAIResponses,
+			relaycommon.ReasoningHistoryReasonPreserved,
+			1, 0, 0, 0,
+		)
+	}
+	return converted, usage, err
 }
 
-func convertOAIResponsesResponseToOAIChat(_ *gin.Context, _ *relaycommon.RelayInfo, response any) (any, *dto.Usage, error) {
+func convertOAIResponsesResponseToOAIChat(_ *gin.Context, info *relaycommon.RelayInfo, response any) (any, *dto.Usage, error) {
 	responsesResponse, err := asOAIResponsesResponse(response)
 	if err != nil {
 		return nil, nil, err
@@ -807,7 +816,16 @@ func convertOAIResponsesResponseToOAIChat(_ *gin.Context, _ *relaycommon.RelayIn
 	if id == "" {
 		id = fmt.Sprintf("chatcmpl-%s", common.GetUUID())
 	}
-	return ResponsesResponseToChatCompletionsResponse(responsesResponse, id)
+	converted, usage, err := ResponsesResponseToChatCompletionsResponse(responsesResponse, id)
+	if err == nil && converted != nil && len(converted.Choices) > 0 && converted.Choices[0].Message.GetReasoningContent() != "" {
+		info.AddReasoningHistoryAudit(
+			types.RelayFormatOpenAIResponses,
+			types.RelayFormatOpenAI,
+			relaycommon.ReasoningHistoryReasonPreserved,
+			1, 0, 0, 0,
+		)
+	}
+	return converted, usage, err
 }
 
 func newOAIChatToOAIResponsesStreamState(options ResponseStreamOptions) any {
@@ -913,13 +931,21 @@ func convertOAIChatStreamResponseToGeminiChat(_ *gin.Context, info *relaycommon.
 	return StreamResponseOpenAI2Gemini(chatResponse, info), canonicalUsageFromResponse(chatResponse), nil
 }
 
-func convertClaudeMessagesResponseToOAIChat(_ *gin.Context, _ *relaycommon.RelayInfo, response any) (any, *dto.Usage, error) {
+func convertClaudeMessagesResponseToOAIChat(_ *gin.Context, info *relaycommon.RelayInfo, response any) (any, *dto.Usage, error) {
 	claudeResponse, err := asClaudeResponse(response)
 	if err != nil {
 		return nil, nil, err
 	}
 	usage := usageFromClaudeResponse(claudeResponse)
 	openAIResponse := ResponseClaude2OpenAI(claudeResponse)
+	if len(openAIResponse.Choices) > 0 && openAIResponse.Choices[0].Message.GetReasoningContent() != "" {
+		info.AddReasoningHistoryAudit(
+			types.RelayFormatClaude,
+			types.RelayFormatOpenAI,
+			relaycommon.ReasoningHistoryReasonPreserved,
+			1, 0, 0, 0,
+		)
+	}
 	if usage != nil {
 		openAIResponse.Usage = *usage
 	}

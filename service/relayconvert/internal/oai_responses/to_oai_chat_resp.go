@@ -219,6 +219,11 @@ func ExtractReasoningTextFromResponses(resp *dto.OpenAIResponsesResponse) string
 		if out.Type != responsesOutputTypeReasoning {
 			continue
 		}
+		for _, summary := range out.Summary {
+			if summary.Text != "" {
+				sb.WriteString(summary.Text)
+			}
+		}
 		for _, c := range out.Content {
 			if c.Text != "" {
 				sb.WriteString(c.Text)

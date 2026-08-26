@@ -12,6 +12,7 @@ import (
 	relaymeta "github.com/QuantumNous/new-api/service/relayconvert/internal/meta"
 	sharedgemini "github.com/QuantumNous/new-api/service/relayconvert/internal/shared/gemini"
 	"github.com/QuantumNous/new-api/setting/model_setting"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -278,6 +279,22 @@ func OpenAIChatRequestToGeminiGenerateContent(c *gin.Context, textRequest dto.Ge
 		}
 		shouldAttachThoughtSignature := (message.Role == "assistant" || message.Role == "model") && sharedgemini.ShouldAttachThoughtSignature()
 		signatureAttached := false
+		reasoningPartCount := 0
+		if reasoningContent := message.GetReasoningContent(); reasoningContent != "" &&
+			(message.Role == "assistant" || message.Role == "model") {
+			// Replayed reasoning is a thought part; signature bypass remains on the callable/text part.
+			parts = append(parts, dto.GeminiPart{
+				Text:    reasoningContent,
+				Thought: true,
+			})
+			reasoningPartCount = 1
+			info.AddReasoningHistoryAudit(
+				types.RelayFormatOpenAI,
+				types.RelayFormatGemini,
+				relaycommon.ReasoningHistoryReasonPreserved,
+				1, 0, 0, 0,
+			)
+		}
 		if message.ToolCalls != nil {
 			for _, call := range message.ParseToolCalls() {
 				args := map[string]interface{}{}
@@ -380,7 +397,7 @@ func OpenAIChatRequestToGeminiGenerateContent(c *gin.Context, textRequest dto.Ge
 		}
 
 		if shouldAttachThoughtSignature && !signatureAttached && len(parts) > 0 {
-			sharedgemini.AttachFirstTextThoughtSignature(parts)
+			sharedgemini.AttachFirstTextThoughtSignature(parts[reasoningPartCount:])
 		}
 
 		content.Parts = parts

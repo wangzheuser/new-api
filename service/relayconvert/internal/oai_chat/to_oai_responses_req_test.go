@@ -46,6 +46,27 @@ func TestChatCompletionsRequestToResponsesRequestRejectsMultipleChoices(t *testi
 	assert.Contains(t, err.Error(), "n>1")
 }
 
+func TestChatCompletionsRequestToResponsesRequestPlacesReasoningBeforeAssistantAndToolCall(t *testing.T) {
+	reasoning := "reasoning history"
+	assistant := assistantMessageWithTool("visible", "call_1", "lookup", `{"q":"x"}`)
+	assistant.ReasoningContent = &reasoning
+
+	got, err := ChatCompletionsRequestToResponsesRequest(&dto.GeneralOpenAIRequest{
+		Model: "gpt-test",
+		Messages: []dto.Message{
+			{Role: "user", Content: "question"},
+			assistant,
+		},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "reasoning", gjson.GetBytes(got.Input, "1.type").String())
+	assert.NotEmpty(t, gjson.GetBytes(got.Input, "1.id").String())
+	assert.Equal(t, "reasoning history", gjson.GetBytes(got.Input, "1.summary.0.text").String())
+	assert.Equal(t, "assistant", gjson.GetBytes(got.Input, "2.role").String())
+	assert.Equal(t, "function_call", gjson.GetBytes(got.Input, "3.type").String())
+}
+
 func assistantMessageWithTool(content string, id string, name string, args string) dto.Message {
 	msg := dto.Message{Role: "assistant", Content: content}
 	msg.SetToolCalls([]dto.ToolCallRequest{

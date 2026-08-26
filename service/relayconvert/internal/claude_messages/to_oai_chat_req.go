@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relaymeta "github.com/QuantumNous/new-api/service/relayconvert/internal/meta"
+	"github.com/QuantumNous/new-api/types"
 )
 
 const (
@@ -148,9 +149,21 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info *re
 			}
 			var toolCalls []dto.ToolCallRequest
 			mediaMessages := make([]dto.MediaContent, 0, len(content))
+			var reasoningContent strings.Builder
+			opaqueBlocksSkipped := 0
 
 			for _, mediaMsg := range content {
 				switch mediaMsg.Type {
+				case "thinking":
+					// Chat wire can carry readable reasoning text, but not Claude's opaque signature.
+					if claudeMessage.Role == "assistant" && mediaMsg.Thinking != nil {
+						reasoningContent.WriteString(*mediaMsg.Thinking)
+					}
+				case "redacted_thinking":
+					// Encrypted payloads stay opaque instead of being mislabeled as readable reasoning.
+					if claudeMessage.Role == "assistant" {
+						opaqueBlocksSkipped++
+					}
 				case "text", "input_text":
 					message := dto.MediaContent{
 						Type:         "text",
@@ -199,11 +212,29 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info *re
 			if len(toolCalls) > 0 {
 				openAIMessage.SetToolCalls(toolCalls)
 			}
-			if len(mediaMessages) > 0 && len(toolCalls) == 0 {
+			if len(mediaMessages) > 0 {
 				openAIMessage.SetMediaContent(mediaMessages)
 			}
+			if reasoningContent.Len() > 0 {
+				reasoning := reasoningContent.String()
+				openAIMessage.ReasoningContent = &reasoning
+				info.AddReasoningHistoryAudit(
+					types.RelayFormatClaude,
+					types.RelayFormatOpenAI,
+					relaycommon.ReasoningHistoryReasonPreserved,
+					1, 0, 0, 0,
+				)
+			}
+			if opaqueBlocksSkipped > 0 {
+				info.AddReasoningHistoryAudit(
+					types.RelayFormatClaude,
+					types.RelayFormatOpenAI,
+					relaycommon.ReasoningHistoryReasonOpaqueBlockSkipped,
+					0, 0, opaqueBlocksSkipped, 0,
+				)
+			}
 		}
-		if len(openAIMessage.ParseContent()) > 0 || len(openAIMessage.ToolCalls) > 0 {
+		if len(openAIMessage.ParseContent()) > 0 || len(openAIMessage.ToolCalls) > 0 || openAIMessage.GetReasoningContent() != "" {
 			openAIMessages = append(openAIMessages, openAIMessage)
 		}
 	}

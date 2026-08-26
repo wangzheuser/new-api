@@ -150,6 +150,63 @@ func TestResponsesRequestToChatCompletionsRequestOnlyFunctionCallCreatesAssistan
 	assert.Equal(t, `{"q":"x"}`, toolCalls[0].Function.Arguments)
 }
 
+func TestResponsesRequestToChatCompletionsRequestAttachesReasoningToFollowingFunctionCall(t *testing.T) {
+	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
+		Model: "gpt-test",
+		Input: mustRawMessage(t, []map[string]any{
+			{
+				"type":    "reasoning",
+				"summary": []map[string]any{{"type": "summary_text", "text": "first "}},
+				"content": []map[string]any{{"type": "reasoning_text", "text": "second"}},
+			},
+			{
+				"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": `{}`,
+			},
+		}),
+	})
+	require.NoError(t, err)
+	require.Len(t, got.Messages, 1)
+	assert.Equal(t, "assistant", got.Messages[0].Role)
+	assert.Equal(t, "first second", got.Messages[0].GetReasoningContent())
+	require.Len(t, got.Messages[0].ParseToolCalls(), 1)
+}
+
+func TestResponsesRequestToChatCompletionsRequestPreservesOrphanReasoningAsAssistant(t *testing.T) {
+	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
+		Model: "gpt-test",
+		Input: mustRawMessage(t, []map[string]any{
+			{
+				"type":    "reasoning",
+				"summary": []map[string]any{{"type": "summary_text", "text": "orphan"}},
+			},
+		}),
+	})
+	require.NoError(t, err)
+	require.Len(t, got.Messages, 1)
+	assert.Equal(t, "assistant", got.Messages[0].Role)
+	assert.Equal(t, "orphan", got.Messages[0].GetReasoningContent())
+	assert.Nil(t, got.Messages[0].Content)
+}
+
+func TestResponsesRequestToChatCompletionsRequestKeepsParallelCallsAndDeduplicatesInlineReasoning(t *testing.T) {
+	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
+		Model: "gpt-test",
+		Input: mustRawMessage(t, []map[string]any{
+			{"type": "reasoning", "summary": []map[string]any{{"type": "summary_text", "text": "shared reasoning"}}},
+			{"type": "function_call", "call_id": "call_1", "name": "first", "arguments": `{}`, "reasoning_content": "shared reasoning"},
+			{"type": "function_call", "call_id": "call_2", "name": "second", "arguments": `{}`},
+			{"type": "function_call_output", "call_id": "call_1", "output": "one"},
+			{"type": "function_call_output", "call_id": "call_2", "output": "two"},
+		}),
+	})
+	require.NoError(t, err)
+	require.Len(t, got.Messages, 3)
+	assert.Equal(t, "shared reasoning", got.Messages[0].GetReasoningContent())
+	require.Len(t, got.Messages[0].ParseToolCalls(), 2)
+	assert.Equal(t, "call_1", got.Messages[0].ParseToolCalls()[0].ID)
+	assert.Equal(t, "call_2", got.Messages[0].ParseToolCalls()[1].ID)
+}
+
 func TestResponsesRequestToChatCompletionsRequestToolsToolChoiceAndTextFormat(t *testing.T) {
 	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
 		Model: "gpt-test",

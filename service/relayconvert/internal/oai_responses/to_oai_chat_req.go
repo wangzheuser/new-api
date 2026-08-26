@@ -8,6 +8,8 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
 )
 
 const (
@@ -15,6 +17,7 @@ const (
 	responsesInputTypeFunctionCallOutput = "function_call_output"
 	responsesInputTypeCustomToolCall     = "custom_tool_call"
 	responsesInputTypeCustomToolOutput   = "custom_tool_call_output"
+	responsesInputTypeReasoning          = "reasoning"
 )
 
 const (
@@ -25,6 +28,11 @@ const (
 )
 
 func ResponsesRequestToChatCompletionsRequest(req *dto.OpenAIResponsesRequest) (*dto.GeneralOpenAIRequest, error) {
+	return ResponsesRequestToChatCompletionsRequestWithInfo(req, nil)
+}
+
+// ResponsesRequestToChatCompletionsRequestWithInfo converts Responses history and records payload-free reasoning audit data.
+func ResponsesRequestToChatCompletionsRequestWithInfo(req *dto.OpenAIResponsesRequest, info *relaycommon.RelayInfo) (*dto.GeneralOpenAIRequest, error) {
 	if req == nil {
 		return nil, errors.New("request is nil")
 	}
@@ -35,7 +43,7 @@ func ResponsesRequestToChatCompletionsRequest(req *dto.OpenAIResponsesRequest) (
 		return nil, err
 	}
 
-	messages, err := responsesRequestMessagesToChat(req)
+	messages, err := responsesRequestMessagesToChat(req, info)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +129,8 @@ func ValidateRequestChatUnsupportedFields(req *dto.OpenAIResponsesRequest) error
 	return validateResponsesRequestChatUnsupportedFields(req)
 }
 
-func responsesRequestMessagesToChat(req *dto.OpenAIResponsesRequest) ([]dto.Message, error) {
+// responsesRequestMessagesToChat rebuilds Chat turns while keeping reasoning attached to its assistant turn.
+func responsesRequestMessagesToChat(req *dto.OpenAIResponsesRequest, info *relaycommon.RelayInfo) ([]dto.Message, error) {
 	messages := make([]dto.Message, 0)
 	if rawJSONPresent(req.Instructions) {
 		instructions, err := responsesJSONString(req.Instructions)
@@ -150,12 +159,30 @@ func responsesRequestMessagesToChat(req *dto.OpenAIResponsesRequest) ([]dto.Mess
 		if err := common.Unmarshal(req.Input, &items); err != nil {
 			return nil, fmt.Errorf("invalid input array: %w", err)
 		}
+		pendingReasoning := ""
 		for _, item := range items {
-			nextMessages, err := responsesInputItemToChatMessages(item, messages)
+			// A reasoning item belongs to the following assistant message or function call.
+			nextMessages, err := responsesInputItemToChatMessages(item, messages, &pendingReasoning)
 			if err != nil {
 				return nil, err
 			}
 			messages = nextMessages
+		}
+		messages = flushPendingReasoningAsAssistant(messages, &pendingReasoning)
+
+		preservedMessages := 0
+		for i := range messages {
+			if messages[i].Role == "assistant" && messages[i].GetReasoningContent() != "" {
+				preservedMessages++
+			}
+		}
+		if preservedMessages > 0 {
+			info.AddReasoningHistoryAudit(
+				types.RelayFormatOpenAIResponses,
+				types.RelayFormatOpenAI,
+				relaycommon.ReasoningHistoryReasonPreserved,
+				preservedMessages, 0, 0, 0,
+			)
 		}
 		return messages, nil
 	default:
@@ -163,22 +190,120 @@ func responsesRequestMessagesToChat(req *dto.OpenAIResponsesRequest) ([]dto.Mess
 	}
 }
 
-func responsesInputItemToChatMessages(item map[string]any, messages []dto.Message) ([]dto.Message, error) {
+// responsesReasoningItemText extracts readable text from one standalone Responses reasoning item.
+func responsesReasoningItemText(item map[string]any) string {
+	var reasoning strings.Builder
+	reasoning.WriteString(responsesReasoningValueText(item["summary"]))
+	reasoning.WriteString(responsesReasoningValueText(item["content"]))
+	reasoning.WriteString(responsesInlineReasoningText(item))
+	if reasoning.Len() == 0 {
+		reasoning.WriteString(common.Interface2String(item["text"]))
+	}
+	return reasoning.String()
+}
+
+// responsesInlineReasoningText extracts a tool or message item's inline reasoning extension.
+func responsesInlineReasoningText(item map[string]any) string {
+	for _, key := range []string{"reasoning_content", "reasoning"} {
+		if reasoning := responsesReasoningValueText(item[key]); reasoning != "" {
+			return reasoning
+		}
+	}
+	return ""
+}
+
+// appendDistinctReasoning avoids duplicating the same reasoning exposed both inline and as a sibling item.
+func appendDistinctReasoning(current, addition string) string {
+	if addition == "" || current == addition {
+		return current
+	}
+	return current + addition
+}
+
+// appendReasoningContent appends readable reasoning to one assistant message in wire order.
+func appendReasoningContent(message *dto.Message, reasoning string) {
+	if message == nil || reasoning == "" {
+		return
+	}
+	mergedReasoning := appendDistinctReasoning(message.GetReasoningContent(), reasoning)
+	message.ReasoningContent = common.GetPointer(mergedReasoning)
+	message.Reasoning = nil
+}
+
+// flushPendingReasoningAsAssistant preserves an orphan reasoning item as an assistant-only turn.
+func flushPendingReasoningAsAssistant(messages []dto.Message, pendingReasoning *string) []dto.Message {
+	if pendingReasoning == nil || *pendingReasoning == "" {
+		return messages
+	}
+	reasoning := *pendingReasoning
+	*pendingReasoning = ""
+	return append(messages, dto.Message{Role: "assistant", ReasoningContent: &reasoning})
+}
+
+// responsesReasoningValueText recursively extracts the documented text-bearing reasoning shapes.
+func responsesReasoningValueText(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case []any:
+		var reasoning strings.Builder
+		for _, item := range typed {
+			reasoning.WriteString(responsesReasoningValueText(item))
+		}
+		return reasoning.String()
+	case []map[string]any:
+		var reasoning strings.Builder
+		for _, item := range typed {
+			reasoning.WriteString(responsesReasoningValueText(item))
+		}
+		return reasoning.String()
+	case map[string]any:
+		if text, ok := typed["text"]; ok {
+			return common.Interface2String(text)
+		}
+		var reasoning strings.Builder
+		for _, key := range []string{"summary", "content", "reasoning_content", "reasoning"} {
+			reasoning.WriteString(responsesReasoningValueText(typed[key]))
+		}
+		return reasoning.String()
+	default:
+		return ""
+	}
+}
+
+// responsesInputItemToChatMessages converts one Responses input item and maintains pending reasoning ownership.
+func responsesInputItemToChatMessages(item map[string]any, messages []dto.Message, pendingReasoning *string) ([]dto.Message, error) {
 	itemType := strings.TrimSpace(common.Interface2String(item["type"]))
 	switch itemType {
+	case responsesInputTypeReasoning:
+		*pendingReasoning = appendDistinctReasoning(*pendingReasoning, responsesReasoningItemText(item))
+		return messages, nil
 	case responsesInputTypeFunctionCall:
 		toolCall, err := responsesFunctionCallItemToChatToolCall(item)
 		if err != nil {
 			return nil, err
 		}
-		return appendToolCallToLastAssistant(messages, toolCall), nil
+		*pendingReasoning = appendDistinctReasoning(*pendingReasoning, responsesInlineReasoningText(item))
+		messages = appendToolCallToLastAssistant(messages, toolCall)
+		if *pendingReasoning != "" {
+			appendReasoningContent(&messages[len(messages)-1], *pendingReasoning)
+			*pendingReasoning = ""
+		}
+		return messages, nil
 	case responsesInputTypeCustomToolCall:
 		toolCall, err := responsesCustomToolCallItemToChatToolCall(item)
 		if err != nil {
 			return nil, err
 		}
-		return appendToolCallToLastAssistant(messages, toolCall), nil
-	case responsesInputTypeFunctionCallOutput:
+		*pendingReasoning = appendDistinctReasoning(*pendingReasoning, responsesInlineReasoningText(item))
+		messages = appendToolCallToLastAssistant(messages, toolCall)
+		if *pendingReasoning != "" {
+			appendReasoningContent(&messages[len(messages)-1], *pendingReasoning)
+			*pendingReasoning = ""
+		}
+		return messages, nil
+	case responsesInputTypeFunctionCallOutput, responsesInputTypeCustomToolOutput:
+		messages = flushPendingReasoningAsAssistant(messages, pendingReasoning)
 		callID := strings.TrimSpace(common.Interface2String(item["call_id"]))
 		content := responseToolOutputToChatContent(item["output"])
 		return append(messages, dto.Message{Role: "tool", ToolCallId: callID, Content: content}), nil
@@ -192,6 +317,16 @@ func responsesInputItemToChatMessages(item map[string]any, messages []dto.Messag
 	if err != nil {
 		return nil, err
 	}
+	if role == "assistant" {
+		message := dto.Message{Role: role, Content: content}
+		if pendingReasoning != nil {
+			appendReasoningContent(&message, *pendingReasoning)
+			*pendingReasoning = ""
+		}
+		appendReasoningContent(&message, responsesInlineReasoningText(item))
+		return append(messages, message), nil
+	}
+	messages = flushPendingReasoningAsAssistant(messages, pendingReasoning)
 	return append(messages, dto.Message{Role: role, Content: content}), nil
 }
 
@@ -231,7 +366,7 @@ func responsesContentPartsToChatContent(parts []any) (any, error) {
 
 		partType := strings.TrimSpace(common.Interface2String(part["type"]))
 		switch partType {
-		case "input_text", "output_text", "text":
+		case "input_text", "output_text", "summary_text", "reasoning_text", "text":
 			text := common.Interface2String(part["text"])
 			textOnly.WriteString(text)
 			chatParts = append(chatParts, map[string]any{

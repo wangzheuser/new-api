@@ -46,6 +46,38 @@ func TestRelayInfoGetFinalRequestRelayFormatNilReceiver(t *testing.T) {
 	require.Equal(t, types.RelayFormat(""), info.GetFinalRequestRelayFormat())
 }
 
+func TestRelayInfoAddReasoningHistoryAuditAggregatesCountsAndRouteReasons(t *testing.T) {
+	info := &RelayInfo{}
+	info.AddReasoningHistoryAudit(
+		types.RelayFormatClaude,
+		types.RelayFormatOpenAI,
+		ReasoningHistoryReasonPreserved,
+		1, 0, 0, 0,
+	)
+	info.AddReasoningHistoryAudit(
+		types.RelayFormatClaude,
+		types.RelayFormatOpenAI,
+		ReasoningHistoryReasonOpaqueBlockSkipped,
+		0, 0, 2, 0,
+	)
+	info.AddReasoningHistoryAudit(
+		types.RelayFormatOpenAI,
+		types.RelayFormatGemini,
+		ReasoningHistoryReasonPreserved,
+		1, 0, 0, 0,
+	)
+
+	require.True(t, info.HasReasoningHistoryAudit())
+	require.NotNil(t, info.ReasoningHistory)
+	assert.Equal(t, 2, info.ReasoningHistory.PreservedMessages)
+	assert.Equal(t, 2, info.ReasoningHistory.OpaqueBlocksSkipped)
+	require.Len(t, info.ReasoningHistory.Routes, 2)
+	assert.Equal(t, []string{
+		ReasoningHistoryReasonPreserved,
+		ReasoningHistoryReasonOpaqueBlockSkipped,
+	}, info.ReasoningHistory.Routes[0].ReasonCodes)
+}
+
 func TestRelayInfoAcceptStreamPolicyVersionOnlyForNativeChatAndClaude(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

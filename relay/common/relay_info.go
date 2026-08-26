@@ -112,6 +112,29 @@ type ContextFallbackDecision struct {
 	TargetDemandTokens          int64
 }
 
+const (
+	ReasoningHistoryReasonPreserved                  = "readable_reasoning_preserved"
+	ReasoningHistoryReasonSyntheticClientSignature   = "synthetic_client_signature"
+	ReasoningHistoryReasonOpaqueBlockSkipped         = "opaque_block_skipped"
+	ReasoningHistoryReasonUnsignedLatestTurnWithheld = "unsigned_latest_tool_turn_withheld"
+)
+
+// ReasoningHistoryRouteAudit records one protocol edge and its non-sensitive conversion reasons.
+type ReasoningHistoryRouteAudit struct {
+	SourceFormat types.RelayFormat `json:"source_format"`
+	TargetFormat types.RelayFormat `json:"target_format"`
+	ReasonCodes  []string          `json:"reason_codes,omitempty"`
+}
+
+// ReasoningHistoryAudit summarizes reasoning-history preservation without storing payload contents.
+type ReasoningHistoryAudit struct {
+	PreservedMessages          int                          `json:"preserved_messages,omitempty"`
+	SyntheticClientSignatures  int                          `json:"synthetic_client_signatures,omitempty"`
+	OpaqueBlocksSkipped        int                          `json:"opaque_blocks_skipped,omitempty"`
+	UnsignedLatestTurnWithheld int                          `json:"unsigned_latest_turn_withheld,omitempty"`
+	Routes                     []ReasoningHistoryRouteAudit `json:"routes,omitempty"`
+}
+
 type streamLifecycleState struct {
 	mu             sync.Mutex
 	writeMu        sync.Mutex
@@ -200,6 +223,7 @@ type RelayInfo struct {
 	RuntimeHeadersOverride                map[string]interface{}
 	UseRuntimeHeadersOverride             bool
 	ParamOverrideAudit                    []string
+	ReasoningHistory                      *ReasoningHistoryAudit
 	ResponseSemantics                     ResponseSemantics
 	ResponseOverride                      *ResponseOverrideDecision
 	ConversationCapture                   *ConversationCapture
@@ -243,6 +267,52 @@ type RelayInfo struct {
 	*ResponsesUsageInfo
 	*ChannelMeta
 	*TaskRelayInfo
+}
+
+// AddReasoningHistoryAudit adds a payload-free reasoning conversion event to the request audit.
+func (info *RelayInfo) AddReasoningHistoryAudit(sourceFormat, targetFormat types.RelayFormat, reasonCode string,
+	preservedMessages, syntheticClientSignatures, opaqueBlocksSkipped, unsignedLatestTurnWithheld int,
+) {
+	if info == nil {
+		return
+	}
+	if info.ReasoningHistory == nil {
+		info.ReasoningHistory = &ReasoningHistoryAudit{}
+	}
+	audit := info.ReasoningHistory
+	audit.PreservedMessages += preservedMessages
+	audit.SyntheticClientSignatures += syntheticClientSignatures
+	audit.OpaqueBlocksSkipped += opaqueBlocksSkipped
+	audit.UnsignedLatestTurnWithheld += unsignedLatestTurnWithheld
+
+	for i := range audit.Routes {
+		route := &audit.Routes[i]
+		if route.SourceFormat != sourceFormat || route.TargetFormat != targetFormat {
+			continue
+		}
+		for _, existing := range route.ReasonCodes {
+			if existing == reasonCode {
+				return
+			}
+		}
+		route.ReasonCodes = append(route.ReasonCodes, reasonCode)
+		return
+	}
+	audit.Routes = append(audit.Routes, ReasoningHistoryRouteAudit{
+		SourceFormat: sourceFormat,
+		TargetFormat: targetFormat,
+		ReasonCodes:  []string{reasonCode},
+	})
+}
+
+// HasReasoningHistoryAudit reports whether any reasoning conversion event was recorded.
+func (info *RelayInfo) HasReasoningHistoryAudit() bool {
+	if info == nil || info.ReasoningHistory == nil {
+		return false
+	}
+	audit := info.ReasoningHistory
+	return audit.PreservedMessages > 0 || audit.SyntheticClientSignatures > 0 ||
+		audit.OpaqueBlocksSkipped > 0 || audit.UnsignedLatestTurnWithheld > 0
 }
 
 func (info *RelayInfo) getStreamLifecycle() *streamLifecycleState {

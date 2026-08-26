@@ -131,6 +131,51 @@ func TestAppendStreamStatusIncludesProtocolTerminalAndTransportEnd(t *testing.T)
 	assert.Equal(t, int64(21), streamInfo["partial_tool_argument_bytes"])
 }
 
+func TestAppendChannelRoutePlanIncludesReasoningHistoryAuditWithoutSensitivePayload(t *testing.T) {
+	adminInfo := map[string]interface{}{}
+	info := &relaycommon.RelayInfo{
+		ChannelRoutePlan: &types.ChannelRoutePlan{RouteMode: types.ChannelRouteModeConverted},
+		ReasoningHistory: &relaycommon.ReasoningHistoryAudit{
+			PreservedMessages:          2,
+			SyntheticClientSignatures:  1,
+			OpaqueBlocksSkipped:        3,
+			UnsignedLatestTurnWithheld: 4,
+			Routes: []relaycommon.ReasoningHistoryRouteAudit{{
+				SourceFormat: types.RelayFormatClaude,
+				TargetFormat: types.RelayFormatOpenAI,
+				ReasonCodes:  []string{relaycommon.ReasoningHistoryReasonPreserved},
+			}},
+		},
+	}
+
+	appendChannelRoutePlan(info, adminInfo)
+
+	protocolRoute, ok := adminInfo["protocol_route"].(map[string]interface{})
+	require.True(t, ok)
+	reasoningHistory, ok := protocolRoute["reasoning_history"].(*relaycommon.ReasoningHistoryAudit)
+	require.True(t, ok)
+	assert.Same(t, info.ReasoningHistory, reasoningHistory)
+	require.Len(t, reasoningHistory.Routes, 1)
+	assert.Equal(t, types.RelayFormat(types.RelayFormatClaude), reasoningHistory.Routes[0].SourceFormat)
+	assert.Equal(t, types.RelayFormat(types.RelayFormatOpenAI), reasoningHistory.Routes[0].TargetFormat)
+	assert.Equal(t, []string{relaycommon.ReasoningHistoryReasonPreserved}, reasoningHistory.Routes[0].ReasonCodes)
+	raw, err := common.Marshal(protocolRoute)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "thinking body")
+	assert.NotContains(t, string(raw), "signature value")
+}
+
+func TestAppendChannelRoutePlanOmitsReasoningHistoryWithoutEvents(t *testing.T) {
+	adminInfo := map[string]interface{}{}
+	appendChannelRoutePlan(&relaycommon.RelayInfo{
+		ChannelRoutePlan: &types.ChannelRoutePlan{RouteMode: types.ChannelRouteModeConverted},
+	}, adminInfo)
+
+	protocolRoute, ok := adminInfo["protocol_route"].(map[string]interface{})
+	require.True(t, ok)
+	assert.NotContains(t, protocolRoute, "reasoning_history")
+}
+
 func TestAppendStreamStatusMarksUnexpectedEOFWithoutTerminal(t *testing.T) {
 	streamStatus := relaycommon.NewStreamStatus()
 	streamStatus.SetEndReason(relaycommon.StreamEndReasonUnexpectedEOF, errors.New("stream ended before terminal event"))

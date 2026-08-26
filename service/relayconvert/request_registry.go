@@ -399,7 +399,7 @@ func isNilRequest(request any) bool {
 	}
 }
 
-func convertChatRequestToResponses(_ *gin.Context, _ *relaycommon.RelayInfo, request any) (any, error) {
+func convertChatRequestToResponses(_ *gin.Context, info *relaycommon.RelayInfo, request any) (any, error) {
 	chatRequest, ok := request.(*dto.GeneralOpenAIRequest)
 	if !ok {
 		if value, ok := request.(dto.GeneralOpenAIRequest); ok {
@@ -409,7 +409,7 @@ func convertChatRequestToResponses(_ *gin.Context, _ *relaycommon.RelayInfo, req
 	if chatRequest == nil {
 		return nil, fmt.Errorf("expected OpenAI chat completions request, got %T", request)
 	}
-	return oaichat.ChatCompletionsRequestToResponsesRequest(chatRequest)
+	return oaichat.ChatCompletionsRequestToResponsesRequestWithInfo(chatRequest, info)
 }
 
 func convertClaudeRequestToOpenAI(_ *gin.Context, info *relaycommon.RelayInfo, request any) (any, error) {
@@ -425,7 +425,7 @@ func convertClaudeRequestToOpenAI(_ *gin.Context, info *relaycommon.RelayInfo, r
 	return claudemessages.ClaudeMessagesRequestToOpenAIChat(*claudeRequest, info)
 }
 
-func convertOpenAIRequestToClaude(c *gin.Context, _ *relaycommon.RelayInfo, request any) (any, error) {
+func convertOpenAIRequestToClaude(c *gin.Context, info *relaycommon.RelayInfo, request any) (any, error) {
 	openAIRequest, ok := request.(*dto.GeneralOpenAIRequest)
 	if !ok {
 		if value, ok := request.(dto.GeneralOpenAIRequest); ok {
@@ -435,7 +435,7 @@ func convertOpenAIRequestToClaude(c *gin.Context, _ *relaycommon.RelayInfo, requ
 	if openAIRequest == nil {
 		return nil, fmt.Errorf("expected OpenAI chat completions request, got %T", request)
 	}
-	return oaichat.OpenAIChatRequestToClaudeMessages(c, *openAIRequest)
+	return oaichat.OpenAIChatRequestToClaudeMessages(c, *openAIRequest, info)
 }
 
 func convertGeminiRequestToOpenAI(_ *gin.Context, info *relaycommon.RelayInfo, request any) (any, error) {
@@ -485,7 +485,7 @@ func convertOpenAIResponsesRequestToGeminiChat(c *gin.Context, info *relaycommon
 	return oairesponses.OpenAIResponsesRequestToGeminiChat(c, &prepared, info)
 }
 
-func convertResponsesRequestToChat(_ *gin.Context, _ *relaycommon.RelayInfo, request any) (any, error) {
+func convertResponsesRequestToChat(_ *gin.Context, info *relaycommon.RelayInfo, request any) (any, error) {
 	responsesRequest, ok := request.(*dto.OpenAIResponsesRequest)
 	if !ok {
 		if value, ok := request.(dto.OpenAIResponsesRequest); ok {
@@ -495,5 +495,5 @@ func convertResponsesRequestToChat(_ *gin.Context, _ *relaycommon.RelayInfo, req
 	if responsesRequest == nil {
 		return nil, fmt.Errorf("expected OpenAI responses request, got %T", request)
 	}
-	return oairesponses.ResponsesRequestToChatCompletionsRequest(responsesRequest)
+	return oairesponses.ResponsesRequestToChatCompletionsRequestWithInfo(responsesRequest, info)
 }

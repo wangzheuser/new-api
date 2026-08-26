@@ -138,24 +138,32 @@ func AppendResponseOverrideAdminInfo(relayInfo *relaycommon.RelayInfo, adminInfo
 }
 
 func appendChannelRoutePlan(relayInfo *relaycommon.RelayInfo, adminInfo map[string]interface{}) {
-	if relayInfo == nil || relayInfo.ChannelRoutePlan == nil || adminInfo == nil {
+	if relayInfo == nil || adminInfo == nil {
 		return
 	}
-	plan := relayInfo.ChannelRoutePlan
-	adminInfo["protocol_route"] = map[string]interface{}{
-		"mode":                      plan.RouteMode,
-		"client_endpoint_type":      plan.ClientEndpointType,
-		"upstream_endpoint_type":    plan.UpstreamEndpointType,
-		"client_relay_format":       plan.ClientRelayFormat,
-		"upstream_relay_format":     plan.UpstreamRelayFormat,
-		"upstream_path":             plan.UpstreamPath,
-		"quality":                   plan.Quality,
-		"request_converter":         plan.RequestConverter,
-		"response_converter":        plan.ResponseConverter,
-		"request_conversion_steps":  plan.RequestSteps,
-		"response_conversion_steps": plan.ResponseSteps,
-		"stream":                    plan.Stream,
-		"capability_source":         plan.CapabilitySource,
+	protocolRoute := map[string]interface{}{}
+	if plan := relayInfo.ChannelRoutePlan; plan != nil {
+		protocolRoute = map[string]interface{}{
+			"mode":                      plan.RouteMode,
+			"client_endpoint_type":      plan.ClientEndpointType,
+			"upstream_endpoint_type":    plan.UpstreamEndpointType,
+			"client_relay_format":       plan.ClientRelayFormat,
+			"upstream_relay_format":     plan.UpstreamRelayFormat,
+			"upstream_path":             plan.UpstreamPath,
+			"quality":                   plan.Quality,
+			"request_converter":         plan.RequestConverter,
+			"response_converter":        plan.ResponseConverter,
+			"request_conversion_steps":  plan.RequestSteps,
+			"response_conversion_steps": plan.ResponseSteps,
+			"stream":                    plan.Stream,
+			"capability_source":         plan.CapabilitySource,
+		}
+	}
+	if relayInfo.HasReasoningHistoryAudit() {
+		protocolRoute["reasoning_history"] = relayInfo.ReasoningHistory
+	}
+	if len(protocolRoute) > 0 {
+		adminInfo["protocol_route"] = protocolRoute
 	}
 }
 
