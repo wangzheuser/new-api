@@ -74,6 +74,30 @@ func TestClaudeMessagesRequestToOpenAIChatDropsReasoningOnlyAssistantWithAudit(t
 	assert.Contains(t, info.ReasoningHistory.Routes[0].ReasonCodes, relaycommon.ReasoningHistoryReasonReasoningOnlyDropped)
 }
 
+func TestClaudeMessagesRequestToOpenAIChatDropsStructurallyBlankAssistantContent(t *testing.T) {
+	info := &relaycommon.RelayInfo{}
+	converted, err := ClaudeMessagesRequestToOpenAIChat(dto.ClaudeRequest{
+		Model: "model-test",
+		Messages: []dto.ClaudeMessage{
+			{Role: "assistant", Content: ""},
+			{Role: "assistant", Content: "  "},
+			{Role: "assistant", Content: []dto.ClaudeMediaMessage{{Type: "text", Text: common.GetPointer("")}}},
+			{Role: "assistant", Content: []dto.ClaudeMediaMessage{
+				{Type: "thinking", Thinking: common.GetPointer("hidden")},
+				{Type: "text", Text: common.GetPointer("  ")},
+			}},
+			{Role: "assistant", Content: []dto.ClaudeMediaMessage{{Type: "text", Text: common.GetPointer("visible")}}},
+		},
+	}, info)
+	require.NoError(t, err)
+	require.Len(t, converted.Messages, 1)
+	content := converted.Messages[0].ParseContent()
+	require.Len(t, content, 1)
+	assert.Equal(t, "visible", content[0].Text)
+	require.NotNil(t, info.ReasoningHistory)
+	assert.Equal(t, 1, info.ReasoningHistory.DroppedReasoningOnlyMessages)
+}
+
 func TestClaudeMessagesRequestToOpenAIChatNormalizesToolIDsAndResolvesCollisions(t *testing.T) {
 	converted, err := ClaudeMessagesRequestToOpenAIChat(dto.ClaudeRequest{
 		Model: "model-test",
@@ -105,7 +129,13 @@ func TestClaudeMessagesRequestToOpenAIChatNormalizesToolIDsAndResolvesCollisions
 
 func TestValidateOpenAIAssistantMessagesRequiresWirePayload(t *testing.T) {
 	require.ErrorContains(t, validateOpenAIAssistantMessages([]dto.Message{{Role: "assistant"}}), "must have content")
-	require.NoError(t, validateOpenAIAssistantMessages([]dto.Message{{Role: "assistant", Content: ""}}))
+	require.ErrorContains(t, validateOpenAIAssistantMessages([]dto.Message{{Role: "assistant", Content: ""}}), "must have content")
+	require.ErrorContains(t, validateOpenAIAssistantMessages([]dto.Message{{Role: "assistant", Content: "  "}}), "must have content")
+	require.ErrorContains(t, validateOpenAIAssistantMessages([]dto.Message{{
+		Role:    "assistant",
+		Content: []dto.MediaContent{{Type: "text", Text: ""}},
+	}}), "must have content")
+	require.NoError(t, validateOpenAIAssistantMessages([]dto.Message{{Role: "assistant", Content: "visible"}}))
 	require.NoError(t, validateOpenAIAssistantMessages([]dto.Message{{
 		Role:      "assistant",
 		ToolCalls: json.RawMessage(`[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"}}]`),

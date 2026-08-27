@@ -83,6 +83,40 @@ func TestNormalizeAnthropicMessagesCompatibleDropsReasoningAndSynchronizesToolID
 	assert.Equal(t, "missing_id", request.Messages[3].Content[1]["tool_use_id"])
 }
 
+func TestNormalizeAnthropicMessagesCompatibleDropsStructurallyBlankAssistantContent(t *testing.T) {
+	body := []byte(`{
+      "messages":[
+        {"role":"assistant","content":""},
+        {"role":"assistant","content":"   "},
+        {"role":"assistant","content":null},
+        {"role":"assistant"},
+        {"role":"assistant","content":[{"type":"text","text":""}]},
+        {"role":"assistant","content":[{"type":"input_text","text":"  "}]},
+        {"role":"assistant","content":[{"type":"text","text":null}]},
+        {"role":"assistant","content":[{"type":"thinking","thinking":"hidden"},{"type":"text","text":"  "}]},
+        {"role":"assistant","content":[{"type":"redacted_thinking","data":"opaque"},{"type":"input_text","text":""}]},
+        {"role":"assistant","content":[{"type":"thinking","thinking":"kept"},{"type":"text","text":"visible"},{"type":"text","text":""}]},
+        {"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"lookup","input":{}}]},
+        {"role":"user","content":"question"}
+      ]
+    }`)
+
+	normalized, audit, err := NormalizeRequestByID(RequestNormalizerAnthropicMessagesCompatible, body)
+	require.NoError(t, err)
+	require.NoError(t, ValidateRequestByID(RequestNormalizerAnthropicMessagesCompatible, normalized))
+	assert.Equal(t, 7, audit.EmptyAssistantMessagesDropped)
+	assert.Equal(t, 2, audit.ReasoningOnlyAssistantDropped)
+	assert.Equal(t, 1, audit.ReasoningAssistantMessagesPreserved)
+
+	var root map[string]json.RawMessage
+	require.NoError(t, common.Unmarshal(normalized, &root))
+	var messages []json.RawMessage
+	require.NoError(t, common.Unmarshal(root["messages"], &messages))
+	assert.Len(t, messages, 3)
+	assert.Contains(t, string(normalized), `"text":"visible"`)
+	assert.Contains(t, string(normalized), `"id":"call_1"`)
+}
+
 func TestNormalizeAnthropicMessagesCompatibleHandlesBoundaryIDs(t *testing.T) {
 	body := []byte(`{
       "messages":[
@@ -145,4 +179,13 @@ func TestNormalizeAnthropicMessagesCompatibleRejectsUnknownNormalizerAndInvalidI
 	require.ErrorContains(t, validateAnthropicMessagesCompatible([]byte(`{
       "messages":[{"role":"assistant","content":[]}]
     }`)), "empty assistant message")
+	require.ErrorContains(t, validateAnthropicMessagesCompatible([]byte(`{
+      "messages":[{"role":"assistant","content":"  "}]
+    }`)), "empty assistant message")
+	require.ErrorContains(t, validateAnthropicMessagesCompatible([]byte(`{
+      "messages":[{"role":"assistant","content":[{"type":"text","text":""}]}]
+    }`)), "empty assistant message")
+	require.ErrorContains(t, validateAnthropicMessagesCompatible([]byte(`{
+      "messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"hidden"},{"type":"text","text":" "}]}]
+    }`)), "reasoning-only assistant message")
 }

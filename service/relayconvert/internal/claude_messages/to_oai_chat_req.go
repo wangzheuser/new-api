@@ -159,7 +159,11 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info *re
 			Role: claudeMessage.Role,
 		}
 		if claudeMessage.IsStringContent() {
-			openAIMessage.SetStringContent(claudeMessage.GetStringContent())
+			content := claudeMessage.GetStringContent()
+			if claudeMessage.Role == "assistant" && strings.TrimSpace(content) == "" {
+				continue
+			}
+			openAIMessage.SetStringContent(content)
 		} else {
 			content, err := claudeMessage.ParseContent()
 			if err != nil {
@@ -183,9 +187,13 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info *re
 						opaqueBlocksSkipped++
 					}
 				case "text", "input_text":
+					text := mediaMsg.GetText()
+					if claudeMessage.Role == "assistant" && strings.TrimSpace(text) == "" {
+						continue
+					}
 					message := dto.MediaContent{
 						Type:         "text",
-						Text:         mediaMsg.GetText(),
+						Text:         text,
 						CacheControl: mediaMsg.CacheControl,
 					}
 					mediaMessages = append(mediaMessages, message)
@@ -279,7 +287,24 @@ func validateOpenAIAssistantMessages(messages []dto.Message) error {
 		}
 		functionCall := bytes.TrimSpace(message.FunctionCall)
 		hasFunctionCall := len(functionCall) > 0 && !bytes.Equal(functionCall, []byte("null"))
-		if message.Content == nil && len(message.ParseToolCalls()) == 0 && !hasFunctionCall {
+		hasContent := false
+		if message.Content != nil {
+			if message.IsStringContent() {
+				hasContent = strings.TrimSpace(message.StringContent()) != ""
+			} else {
+				for _, content := range message.ParseContent() {
+					if content.Type != "text" && content.Type != "input_text" {
+						hasContent = true
+						break
+					}
+					if strings.TrimSpace(content.Text) != "" {
+						hasContent = true
+						break
+					}
+				}
+			}
+		}
+		if !hasContent && len(message.ParseToolCalls()) == 0 && !hasFunctionCall {
 			return fmt.Errorf("assistant message %d must have content, tool_calls, or function_call", index)
 		}
 	}
