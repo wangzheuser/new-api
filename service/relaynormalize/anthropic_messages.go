@@ -45,13 +45,16 @@ func normalizeAnthropicMessagesCompatible(body []byte) ([]byte, types.ProtocolNo
 
 	normalizedMessages := make([]json.RawMessage, 0, len(messages))
 	for _, messageRaw := range messages {
-		drop, dropErr := isReasoningOnlyAssistantMessage(messageRaw)
-		if dropErr != nil {
-			return nil, audit, dropErr
+		hasReasoning, reasoningOnly, reasoningErr := classifyAssistantReasoning(messageRaw)
+		if reasoningErr != nil {
+			return nil, audit, reasoningErr
 		}
-		if drop {
+		if reasoningOnly {
 			audit.ReasoningOnlyAssistantDropped++
 			continue
+		}
+		if hasReasoning {
+			audit.ReasoningAssistantMessagesPreserved++
 		}
 
 		message, messageErr := decodeJSONObject(messageRaw, "claude message")
@@ -133,11 +136,11 @@ func validateAnthropicMessagesCompatible(body []byte) error {
 		return err
 	}
 	for _, messageRaw := range messages {
-		drop, dropErr := isReasoningOnlyAssistantMessage(messageRaw)
-		if dropErr != nil {
-			return dropErr
+		_, reasoningOnly, reasoningErr := classifyAssistantReasoning(messageRaw)
+		if reasoningErr != nil {
+			return reasoningErr
 		}
-		if drop {
+		if reasoningOnly {
 			return fmt.Errorf("reasoning-only assistant message remains after normalization")
 		}
 		blocks, parseErr := parseClaudeContentBlocks(messageRaw)
@@ -220,38 +223,40 @@ func parseClaudeContentBlock(blockRaw json.RawMessage) (map[string]json.RawMessa
 	return block, blockType, nil
 }
 
-func isReasoningOnlyAssistantMessage(messageRaw json.RawMessage) (bool, error) {
+// classifyAssistantReasoning reports whether an Assistant message has reasoning and whether it lacks visible payload.
+func classifyAssistantReasoning(messageRaw json.RawMessage) (bool, bool, error) {
 	message, err := decodeJSONObject(messageRaw, "claude message")
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	var role string
 	if roleRaw, exists := message["role"]; exists {
 		if err := common.Unmarshal(roleRaw, &role); err != nil {
-			return false, fmt.Errorf("claude message role must be a string: %w", err)
+			return false, false, fmt.Errorf("claude message role must be a string: %w", err)
 		}
 	}
 	if role != "assistant" {
-		return false, nil
+		return false, false, nil
 	}
 	blocks, err := parseClaudeContentBlocks(messageRaw)
 	if err != nil || len(blocks) == 0 {
-		return false, err
+		return false, false, err
 	}
 	hasReasoning := false
+	hasVisiblePayload := false
 	for _, blockRaw := range blocks {
 		_, blockType, blockErr := parseClaudeContentBlock(blockRaw)
 		if blockErr != nil {
-			return false, blockErr
+			return false, false, blockErr
 		}
 		switch blockType {
 		case "thinking", "redacted_thinking":
 			hasReasoning = true
 		default:
-			return false, nil
+			hasVisiblePayload = true
 		}
 	}
-	return hasReasoning, nil
+	return hasReasoning, hasReasoning && !hasVisiblePayload, nil
 }
 
 func claudeToolIDField(block map[string]json.RawMessage, field string) (string, error) {

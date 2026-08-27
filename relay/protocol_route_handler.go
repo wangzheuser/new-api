@@ -172,6 +172,15 @@ func prepareTextRouteRequest(c *gin.Context, info *relaycommon.RelayInfo, reques
 	if info.ChannelRoutePlan != nil && info.ChannelRoutePlan.RequestNormalizer != "" {
 		normalized, audit, normalizeErr := relaynormalize.NormalizeRequestByID(info.ChannelRoutePlan.RequestNormalizer, jsonData)
 		info.ProtocolNormalization = &audit
+		if audit.ReasoningAssistantMessagesPreserved > 0 {
+			info.AddReasoningHistoryAudit(
+				info.ChannelRoutePlan.UpstreamRelayFormat,
+				info.ChannelRoutePlan.UpstreamRelayFormat,
+				relaycommon.ReasoningHistoryReasonPreserved,
+				audit.ReasoningAssistantMessagesPreserved,
+				0, 0, 0,
+			)
+		}
 		if audit.ReasoningOnlyAssistantDropped > 0 {
 			info.AddDroppedReasoningOnlyMessages(
 				info.ChannelRoutePlan.UpstreamRelayFormat,

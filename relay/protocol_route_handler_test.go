@@ -668,10 +668,12 @@ func TestExecuteNormalizedTextRouteAppliesParamOverrideThenClaudeNormalization(t
 	require.Nil(t, apiError)
 	require.NotNil(t, usage)
 	require.NotNil(t, info.ProtocolNormalization)
+	assert.Equal(t, 1, info.ProtocolNormalization.ReasoningAssistantMessagesPreserved)
 	assert.Equal(t, 1, info.ProtocolNormalization.ReasoningOnlyAssistantDropped)
 	assert.Equal(t, 2, info.ProtocolNormalization.ToolIDsNormalized)
 	assert.Zero(t, info.ProtocolNormalization.ToolIDCollisions)
 	require.NotNil(t, info.ReasoningHistory)
+	assert.Equal(t, 1, info.ReasoningHistory.PreservedMessages)
 	assert.Equal(t, 1, info.ReasoningHistory.DroppedReasoningOnlyMessages)
 	assert.Equal(t, types.RelayFormat(types.RelayFormatClaude), info.GetFinalRequestRelayFormat())
 }

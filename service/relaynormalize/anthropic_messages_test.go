@@ -56,11 +56,12 @@ func TestNormalizeAnthropicMessagesCompatibleDropsReasoningAndSynchronizesToolID
 	require.NoError(t, err)
 	require.NoError(t, ValidateRequestByID(RequestNormalizerAnthropicMessagesCompatible, normalized))
 	assert.Equal(t, types.ProtocolNormalizationAudit{
-		Normalizer:                    RequestNormalizerAnthropicMessagesCompatible,
-		ReasoningOnlyAssistantDropped: 1,
-		ToolIDsNormalized:             5,
-		ToolIDCollisions:              1,
-		OrphanToolResultIDs:           1,
+		Normalizer:                          RequestNormalizerAnthropicMessagesCompatible,
+		ReasoningAssistantMessagesPreserved: 1,
+		ReasoningOnlyAssistantDropped:       1,
+		ToolIDsNormalized:                   5,
+		ToolIDCollisions:                    1,
+		OrphanToolResultIDs:                 1,
 	}, audit)
 	assert.Contains(t, string(normalized), `90071992547409931234`)
 	assert.NotContains(t, string(normalized), `"thinking":"hidden"`)
@@ -121,6 +122,7 @@ func TestNormalizeAnthropicMessagesCompatiblePreservesVisibleAssistantVariants(t
 	normalized, audit, err := NormalizeRequestByID(RequestNormalizerAnthropicMessagesCompatible, body)
 	require.NoError(t, err)
 	require.NoError(t, ValidateRequestByID(RequestNormalizerAnthropicMessagesCompatible, normalized))
+	assert.Equal(t, 3, audit.ReasoningAssistantMessagesPreserved)
 	assert.Zero(t, audit.ReasoningOnlyAssistantDropped)
 	assert.Zero(t, audit.ToolIDsNormalized)
 	var root map[string]json.RawMessage
