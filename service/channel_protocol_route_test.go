@@ -59,6 +59,84 @@ func TestPlanChannelProtocolRouteUsesNormalizedModelOverrideForClaude(t *testing
 	assert.Empty(t, native.RequestNormalizer)
 }
 
+func TestPlanChannelProtocolRouteUsesNormalizedModelOverrideForResponses(t *testing.T) {
+	channel := protocolTestChannel(t, dto.ChannelSettings{ProtocolPolicy: &dto.ChannelProtocolPolicy{
+		Native: map[constant.EndpointType]dto.ProtocolCapability{
+			constant.EndpointTypeOpenAI: {NonStream: true, Stream: true},
+		},
+		ModelOverrides: map[string]dto.ModelProtocolProfile{
+			"MODEL_X": {Native: map[constant.EndpointType]dto.ProtocolCapability{
+				constant.EndpointTypeOpenAIResponse: {
+					NonStream: true,
+					Stream:    true,
+					Mode:      dto.ProtocolHandlingModeNormalized,
+				},
+			}},
+		},
+		AutoConvert: true,
+		MaxQuality:  dto.ProtocolConversionQualityFair,
+	}})
+
+	for _, stream := range []bool{false, true} {
+		plan, err := PlanChannelProtocolRoute(channel, "MODEL_X", "/v1/responses", stream)
+		require.NoError(t, err)
+		require.NotNil(t, plan)
+		assert.Equal(t, types.ChannelRouteModeNormalized, plan.RouteMode)
+		assert.Equal(t, relaynormalize.RequestNormalizerOpenAIResponsesCompatible, plan.RequestNormalizer)
+		assert.Equal(t, types.RelayFormat(types.RelayFormatOpenAIResponses), plan.ClientRelayFormat)
+		assert.Equal(t, types.RelayFormat(types.RelayFormatOpenAIResponses), plan.UpstreamRelayFormat)
+		assert.Equal(t, "/v1/responses", plan.UpstreamPath)
+		assert.Empty(t, plan.ResponseConverter)
+		assert.Equal(t, "model_override", plan.CapabilitySource)
+		assert.Equal(t, stream, plan.Stream)
+	}
+}
+
+func TestPlanChannelProtocolRouteNormalizesConvertedTargetProtocol(t *testing.T) {
+	tests := []struct {
+		name               string
+		path               string
+		target             constant.EndpointType
+		expectedNormalizer string
+	}{
+		{
+			name:               "anthropic target",
+			path:               "/v1/chat/completions",
+			target:             constant.EndpointTypeAnthropic,
+			expectedNormalizer: relaynormalize.RequestNormalizerAnthropicMessagesCompatible,
+		},
+		{
+			name:               "responses target",
+			path:               "/v1/messages",
+			target:             constant.EndpointTypeOpenAIResponse,
+			expectedNormalizer: relaynormalize.RequestNormalizerOpenAIResponsesCompatible,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			channel := protocolTestChannel(t, dto.ChannelSettings{ProtocolPolicy: &dto.ChannelProtocolPolicy{
+				Native: map[constant.EndpointType]dto.ProtocolCapability{
+					tt.target: {
+						NonStream: true,
+						Stream:    true,
+						Mode:      dto.ProtocolHandlingModeNormalized,
+					},
+				},
+				AutoConvert: true,
+				MaxQuality:  dto.ProtocolConversionQualityFair,
+			}})
+
+			plan, err := PlanChannelProtocolRoute(channel, "MODEL_X", tt.path, false)
+			require.NoError(t, err)
+			require.NotNil(t, plan)
+			assert.Equal(t, types.ChannelRouteModeConverted, plan.RouteMode)
+			assert.Equal(t, tt.target, plan.UpstreamEndpointType)
+			assert.Equal(t, tt.expectedNormalizer, plan.RequestNormalizer)
+		})
+	}
+}
+
 func TestPlanChannelProtocolRoutePrefersNativeAndModelOverride(t *testing.T) {
 	channel := protocolTestChannel(t, dto.ChannelSettings{ProtocolPolicy: &dto.ChannelProtocolPolicy{
 		Native: map[constant.EndpointType]dto.ProtocolCapability{

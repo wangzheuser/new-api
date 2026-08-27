@@ -109,7 +109,11 @@ func PlanChannelProtocolRoute(channel *model.Channel, modelName string, clientPa
 				return nil, fmt.Errorf("normalized protocol handling conflicts with request body pass-through")
 			}
 			routeMode = types.ChannelRouteModeNormalized
-			requestNormalizer = relaynormalize.RequestNormalizerAnthropicMessagesCompatible
+			var supported bool
+			requestNormalizer, supported = requestNormalizerForEndpoint(clientEndpoint)
+			if !supported {
+				return nil, fmt.Errorf("normalized protocol handling is unsupported for %s", clientEndpoint)
+			}
 		default:
 			return nil, fmt.Errorf("invalid protocol handling mode: %s", clientCapability.Mode)
 		}
@@ -150,6 +154,19 @@ func PlanChannelProtocolRoute(channel *model.Channel, modelName string, clientPa
 	})
 
 	selected := candidates[0]
+	requestNormalizer := ""
+	selectedCapability := native[selected.descriptor.EndpointType]
+	switch selectedCapability.EffectiveMode() {
+	case dto.ProtocolHandlingModeNative:
+	case dto.ProtocolHandlingModeNormalized:
+		var supported bool
+		requestNormalizer, supported = requestNormalizerForEndpoint(selected.descriptor.EndpointType)
+		if !supported {
+			return nil, fmt.Errorf("normalized protocol handling is unsupported for %s", selected.descriptor.EndpointType)
+		}
+	default:
+		return nil, fmt.Errorf("invalid protocol handling mode: %s", selectedCapability.Mode)
+	}
 	return &types.ChannelRoutePlan{
 		ClientEndpointType:   clientEndpoint,
 		UpstreamEndpointType: selected.descriptor.EndpointType,
@@ -161,6 +178,7 @@ func PlanChannelProtocolRoute(channel *model.Channel, modelName string, clientPa
 		UpstreamPath:         protocolPath(selected.descriptor, modelName, stream),
 		RouteMode:            types.ChannelRouteModeConverted,
 		RequestConverter:     selected.route.RequestConverter,
+		RequestNormalizer:    requestNormalizer,
 		ResponseConverter:    selected.route.ResponseConverter,
 		Quality:              string(selected.route.Quality),
 		RequestSteps:         len(selected.route.RequestSteps),
@@ -168,6 +186,18 @@ func PlanChannelProtocolRoute(channel *model.Channel, modelName string, clientPa
 		Stream:               stream,
 		CapabilitySource:     source,
 	}, nil
+}
+
+// requestNormalizerForEndpoint resolves the final-wire normalizer registered for one protocol endpoint.
+func requestNormalizerForEndpoint(endpoint constant.EndpointType) (string, bool) {
+	switch endpoint {
+	case constant.EndpointTypeAnthropic:
+		return relaynormalize.RequestNormalizerAnthropicMessagesCompatible, true
+	case constant.EndpointTypeOpenAIResponse:
+		return relaynormalize.RequestNormalizerOpenAIResponsesCompatible, true
+	default:
+		return "", false
+	}
 }
 
 func newUnconvertedRoutePlan(endpoint constant.EndpointType, format types.RelayFormat, relayMode int, path string, stream bool, routeMode types.ChannelRouteMode, source string) *types.ChannelRoutePlan {

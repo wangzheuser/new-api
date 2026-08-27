@@ -424,8 +424,8 @@ action_observe() {
   fi
   # shellcheck disable=SC1090
   source "$STATE_DIR/role-state.env"
-  local baseline_hash start end start_tick deadline now remaining sleep_seconds
-  local checks=0 baseline_lines end_lines sample_count errors_5xx elapsed_seconds
+  local baseline_hash start end start_tick deadline now remaining sleep_seconds observation_log
+  local checks=0 sample_count errors_5xx elapsed_seconds
   observe_on_error() {
     local rc=$?
     trap - ERR
@@ -442,7 +442,6 @@ action_observe() {
   deadline=$(( start_tick + seconds ))
   printf 'observation=running release_id=%s production=%s requested_seconds=%s interval=%s start=%s\n' \
     "$RELEASE_ID" "$NEW" "$seconds" "$interval" "$start" > "$STATE_DIR/observation.result"
-  baseline_lines="$(docker exec "$PROXY_CONTAINER" sh -c "wc -l < '$NGINX_ACCESS_LOG'")"
   [[ "$(public_version)" == "$VERSION" ]]
   while true; do
     [[ "$(docker inspect -f '{{.State.Health.Status}}' "$NEW")" == healthy ]]
@@ -462,11 +461,14 @@ action_observe() {
   end="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   elapsed_seconds=$(( SECONDS - start_tick ))
   (( elapsed_seconds >= seconds ))
-  end_lines="$(docker exec "$PROXY_CONTAINER" sh -c "wc -l < '$NGINX_ACCESS_LOG'")"
-  (( end_lines >= baseline_lines ))
-  sample_count=$(( end_lines - baseline_lines ))
+  observation_log="$STATE_DIR/observation-app.log"
+  docker logs --since "$start" "$NEW" > "$observation_log" 2>&1
+  chmod 600 "$observation_log"
+  # The shared Nginx access log contains unrelated virtual hosts. Count only
+  # requests handled by this release's production application container.
+  sample_count="$(grep -Ec '^\[GIN\].*\|[[:space:]]+[0-9]{3}[[:space:]]+\|' "$observation_log" || true)"
   (( sample_count > 0 ))
-  errors_5xx="$(docker exec "$PROXY_CONTAINER" sh -c "tail -n '$sample_count' '$NGINX_ACCESS_LOG'" | grep -Ec '" 5[0-9][0-9] ' || true)"
+  errors_5xx="$(grep -Ec '^\[GIN\].*\|[[:space:]]+5[0-9][0-9][[:space:]]+\|' "$observation_log" || true)"
   [[ "$errors_5xx" -eq 0 ]]
   trap - ERR
   printf 'observation=passed release_id=%s production=%s version=%s requested_seconds=%s elapsed_seconds=%s interval=%s checks=%s start=%s end=%s samples=%s errors_5xx=%s\n' \

@@ -6,17 +6,22 @@ import (
 	"github.com/QuantumNous/new-api/types"
 )
 
-const RequestNormalizerAnthropicMessagesCompatible = "anthropic_messages_compatible"
+const (
+	RequestNormalizerAnthropicMessagesCompatible = "anthropic_messages_compatible"
+	RequestNormalizerOpenAIResponsesCompatible   = "openai_responses_compatible"
+)
 
 type requestNormalizer func([]byte) ([]byte, types.ProtocolNormalizationAudit, error)
 type requestValidator func([]byte) error
 
 var requestNormalizers = map[string]requestNormalizer{
 	RequestNormalizerAnthropicMessagesCompatible: normalizeAnthropicMessagesCompatible,
+	RequestNormalizerOpenAIResponsesCompatible:   normalizeOpenAIResponsesCompatible,
 }
 
 var requestValidators = map[string]requestValidator{
 	RequestNormalizerAnthropicMessagesCompatible: validateAnthropicMessagesCompatible,
+	RequestNormalizerOpenAIResponsesCompatible:   validateOpenAIResponsesCompatible,
 }
 
 // NormalizeRequestByID applies one registered final-wire request normalizer.

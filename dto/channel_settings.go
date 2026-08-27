@@ -168,8 +168,10 @@ func validateNativeProtocolCapabilities(capabilities map[constant.EndpointType]P
 		if mode != ProtocolHandlingModeNative && mode != ProtocolHandlingModeNormalized {
 			return fmt.Errorf("invalid protocol handling mode %s for %s in %s", capability.Mode, endpointType, scope)
 		}
-		if mode == ProtocolHandlingModeNormalized && endpointType != constant.EndpointTypeAnthropic {
-			return fmt.Errorf("normalized protocol handling is only supported for anthropic, got %s in %s", endpointType, scope)
+		if mode == ProtocolHandlingModeNormalized &&
+			endpointType != constant.EndpointTypeAnthropic &&
+			endpointType != constant.EndpointTypeOpenAIResponse {
+			return fmt.Errorf("normalized protocol handling is unsupported for %s in %s", endpointType, scope)
 		}
 	}
 	return nil
