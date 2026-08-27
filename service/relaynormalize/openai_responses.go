@@ -21,6 +21,20 @@ func normalizeOpenAIResponsesCompatible(body []byte) ([]byte, types.ProtocolNorm
 		return body, audit, nil
 	}
 
+	normalizedInput := make([]json.RawMessage, 0, len(input))
+	for _, itemRaw := range input {
+		emptyAssistant, classifyErr := classifyResponsesAssistantItem(itemRaw)
+		if classifyErr != nil {
+			return nil, audit, classifyErr
+		}
+		if emptyAssistant {
+			audit.EmptyAssistantMessagesDropped++
+			continue
+		}
+		normalizedInput = append(normalizedInput, itemRaw)
+	}
+	input = normalizedInput
+
 	normalizer := NewClaudeToolIDNormalizer()
 	callIDs := make(map[string]struct{})
 	for _, itemRaw := range input {
@@ -89,6 +103,13 @@ func validateOpenAIResponsesCompatible(body []byte) error {
 		return err
 	}
 	for _, itemRaw := range input {
+		emptyAssistant, classifyErr := classifyResponsesAssistantItem(itemRaw)
+		if classifyErr != nil {
+			return classifyErr
+		}
+		if emptyAssistant {
+			return fmt.Errorf("empty responses assistant item remains after normalization")
+		}
 		item, itemType, itemErr := parseResponsesInputItem(itemRaw)
 		if itemErr != nil {
 			return itemErr
@@ -105,6 +126,88 @@ func validateOpenAIResponsesCompatible(body []byte) error {
 		}
 	}
 	return nil
+}
+
+// classifyResponsesAssistantItem identifies Assistant input items that compatible upstream bridges collapse to an empty message.
+func classifyResponsesAssistantItem(itemRaw json.RawMessage) (bool, error) {
+	if firstJSONByte(itemRaw) != '{' {
+		return false, nil
+	}
+	item, err := decodeJSONObject(itemRaw, "responses input item")
+	if err != nil {
+		return false, err
+	}
+	roleRaw, exists := item["role"]
+	if !exists {
+		return false, nil
+	}
+	var role string
+	if err := common.Unmarshal(roleRaw, &role); err != nil {
+		return false, fmt.Errorf("responses input item role must be a string: %w", err)
+	}
+	if role != "assistant" {
+		return false, nil
+	}
+
+	contentRaw, exists := item["content"]
+	if !exists || bytes.Equal(bytes.TrimSpace(contentRaw), []byte("null")) {
+		return true, nil
+	}
+	switch firstJSONByte(contentRaw) {
+	case '"':
+		var content string
+		if err := common.Unmarshal(contentRaw, &content); err != nil {
+			return false, fmt.Errorf("responses assistant content must be a string: %w", err)
+		}
+		return strings.TrimSpace(content) == "", nil
+	case '[':
+		var blocks []json.RawMessage
+		if err := common.Unmarshal(contentRaw, &blocks); err != nil {
+			return false, fmt.Errorf("responses assistant content must be an array: %w", err)
+		}
+		for _, blockRaw := range blocks {
+			trimmed := bytes.TrimSpace(blockRaw)
+			if bytes.Equal(trimmed, []byte("null")) {
+				continue
+			}
+			if firstJSONByte(blockRaw) == '"' {
+				var text string
+				if err := common.Unmarshal(blockRaw, &text); err != nil {
+					return false, fmt.Errorf("responses assistant text block must be a string: %w", err)
+				}
+				if strings.TrimSpace(text) != "" {
+					return false, nil
+				}
+				continue
+			}
+			if firstJSONByte(blockRaw) != '{' {
+				return false, nil
+			}
+			block, blockType, blockErr := parseResponsesInputItem(blockRaw)
+			if blockErr != nil {
+				return false, blockErr
+			}
+			switch blockType {
+			case "input_text", "output_text", "text":
+				textRaw, textExists := block["text"]
+				if !textExists || bytes.Equal(bytes.TrimSpace(textRaw), []byte("null")) {
+					continue
+				}
+				var text string
+				if err := common.Unmarshal(textRaw, &text); err != nil {
+					return false, fmt.Errorf("responses assistant text block text must be a string: %w", err)
+				}
+				if strings.TrimSpace(text) != "" {
+					return false, nil
+				}
+			default:
+				return false, nil
+			}
+		}
+		return true, nil
+	default:
+		return false, nil
+	}
 }
 
 // parseOpenAIResponsesBody decodes the request while preserving unmodified JSON values exactly.

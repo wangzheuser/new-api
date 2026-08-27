@@ -86,6 +86,72 @@ func TestNormalizeOpenAIResponsesCompatibleLeavesStringInputUnchanged(t *testing
 	require.NoError(t, ValidateRequestByID(RequestNormalizerOpenAIResponsesCompatible, normalized))
 }
 
+func TestNormalizeOpenAIResponsesCompatibleDropsStructurallyEmptyAssistantItems(t *testing.T) {
+	body := []byte(`{
+		"model":"MODEL_X",
+		"input":[
+			{"role":"user","content":"keep user"},
+			{"role":"assistant","content":""},
+			{"role":"assistant","content":"  \n\t "},
+			{"role":"assistant","content":null},
+			{"role":"assistant"},
+			{"type":"message","role":"assistant","content":[]},
+			{"role":"assistant","content":[
+				{"type":"output_text","text":"   "},
+				{"type":"input_text","text":""},
+				{"type":"text","text":null},
+				null,
+				"  "
+			]},
+			{"role":"assistant","content":"keep string"},
+			{"role":"assistant","content":[{"type":"output_text","text":"keep block"}]},
+			{"role":"assistant","content":[{"type":"refusal","refusal":"keep refusal"}]}
+		]
+	}`)
+
+	normalized, audit, err := NormalizeRequestByID(RequestNormalizerOpenAIResponsesCompatible, body)
+	require.NoError(t, err)
+	require.NoError(t, ValidateRequestByID(RequestNormalizerOpenAIResponsesCompatible, normalized))
+	assert.Equal(t, types.ProtocolNormalizationAudit{
+		Normalizer:                    RequestNormalizerOpenAIResponsesCompatible,
+		EmptyAssistantMessagesDropped: 6,
+	}, audit)
+
+	var request struct {
+		Input []map[string]json.RawMessage `json:"input"`
+	}
+	require.NoError(t, common.Unmarshal(normalized, &request))
+	require.Len(t, request.Input, 4)
+	assert.Equal(t, "keep user", responseTestString(t, request.Input[0]["content"]))
+	assert.Equal(t, "keep string", responseTestString(t, request.Input[1]["content"]))
+	assert.Contains(t, string(request.Input[2]["content"]), "keep block")
+	assert.Contains(t, string(request.Input[3]["content"]), "keep refusal")
+}
+
+func TestValidateOpenAIResponsesCompatibleRejectsStructurallyEmptyAssistantItems(t *testing.T) {
+	tests := []struct {
+		name string
+		item string
+	}{
+		{name: "empty string", item: `{"role":"assistant","content":""}`},
+		{name: "whitespace string", item: `{"role":"assistant","content":"  "}`},
+		{name: "null content", item: `{"role":"assistant","content":null}`},
+		{name: "missing content", item: `{"role":"assistant"}`},
+		{name: "empty array", item: `{"role":"assistant","content":[]}`},
+		{name: "blank blocks", item: `{"role":"assistant","content":[{"type":"output_text","text":" "}]}`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := ValidateRequestByID(
+				RequestNormalizerOpenAIResponsesCompatible,
+				[]byte(`{"input":[`+test.item+`]}`),
+			)
+			require.ErrorContains(t, err, "empty responses assistant item")
+		})
+	}
+}
+
 func TestValidateOpenAIResponsesCompatibleRejectsInvalidCallIDs(t *testing.T) {
 	require.ErrorContains(t, ValidateRequestByID(
 		RequestNormalizerOpenAIResponsesCompatible,
