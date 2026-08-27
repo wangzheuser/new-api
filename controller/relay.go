@@ -640,6 +640,7 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		return nil, modalityErr
 	}
 	info.ProtocolEndpointMismatch = false
+	info.ProtocolNormalization = nil
 	if routePlan, ok := common.GetContextKeyType[types.ChannelRoutePlan](c, constant.ContextKeyChannelRoutePlan); ok {
 		info.ChannelRoutePlan = &routePlan
 		info.RequestConversionChain = []types.RelayFormat{routePlan.ClientRelayFormat}
@@ -794,6 +795,7 @@ func recordRelayErrorLog(c *gin.Context, relayInfo *relaycommon.RelayInfo, err *
 	service.AppendChannelAffinityAdminInfo(c, adminInfo)
 	service.AppendContextFallbackAdminInfo(relayInfo, adminInfo)
 	service.AppendResponseOverrideAdminInfo(relayInfo, adminInfo)
+	service.AppendRelayProtocolInfo(relayInfo, other, adminInfo)
 	service.AppendStreamStatus(relayInfo, other)
 	if rawError != nil {
 		adminInfo["upstream_error"] = common.LocalLogPreview(rawError.MaskSensitiveErrorWithStatusCode())

@@ -42,6 +42,19 @@ func TestChannelValidateSettingsProtocolPolicyScopeAndPassThrough(t *testing.T) 
 	unsupportedType := &Channel{Type: constant.ChannelTypeAnthropic}
 	unsupportedType.SetSetting(dto.ChannelSettings{ProtocolPolicy: policy})
 	assert.ErrorContains(t, unsupportedType.ValidateSettings(), "standard compatible channels")
+
+	normalizedPolicy := &dto.ChannelProtocolPolicy{
+		Native: map[constant.EndpointType]dto.ProtocolCapability{
+			constant.EndpointTypeAnthropic: {NonStream: true, Mode: dto.ProtocolHandlingModeNormalized},
+		},
+		MaxQuality: dto.ProtocolConversionQualityFair,
+	}
+	normalizedPassThrough := &Channel{Type: constant.ChannelTypeOpenAI}
+	normalizedPassThrough.SetSetting(dto.ChannelSettings{
+		PassThroughBodyEnabled: true,
+		ProtocolPolicy:         normalizedPolicy,
+	})
+	assert.ErrorContains(t, normalizedPassThrough.ValidateSettings(), "normalized protocol handling conflicts")
 }
 
 func TestChannelValidateSettingsInputModalities(t *testing.T) {

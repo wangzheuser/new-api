@@ -149,6 +149,29 @@ func TestChannelProtocolPolicyValidateAndResolveModelOverride(t *testing.T) {
 	native, source = policy.NativeForModel("MODEL_Y")
 	assert.Equal(t, "channel_default", source)
 	assert.Contains(t, native, constant.EndpointTypeOpenAI)
+	assert.Equal(t, ProtocolHandlingModeNative, native[constant.EndpointTypeOpenAI].EffectiveMode())
+}
+
+func TestChannelProtocolPolicyValidateNormalizedAnthropicOnly(t *testing.T) {
+	valid := ChannelProtocolPolicy{Native: map[constant.EndpointType]ProtocolCapability{
+		constant.EndpointTypeAnthropic: {
+			NonStream: true,
+			Stream:    true,
+			Mode:      ProtocolHandlingModeNormalized,
+		},
+	}}
+	require.NoError(t, valid.Validate())
+	assert.True(t, valid.HasNormalizedCapability())
+
+	invalidEndpoint := ChannelProtocolPolicy{Native: map[constant.EndpointType]ProtocolCapability{
+		constant.EndpointTypeOpenAI: {NonStream: true, Mode: ProtocolHandlingModeNormalized},
+	}}
+	require.ErrorContains(t, invalidEndpoint.Validate(), "only supported for anthropic")
+
+	invalidMode := ChannelProtocolPolicy{Native: map[constant.EndpointType]ProtocolCapability{
+		constant.EndpointTypeAnthropic: {NonStream: true, Mode: "rewritten"},
+	}}
+	require.ErrorContains(t, invalidMode.Validate(), "invalid protocol handling mode")
 }
 
 func TestChannelProtocolPolicyValidateRejectsInvalidConfigurations(t *testing.T) {

@@ -114,6 +114,7 @@ type ContextFallbackDecision struct {
 
 const (
 	ReasoningHistoryReasonPreserved                  = "readable_reasoning_preserved"
+	ReasoningHistoryReasonReasoningOnlyDropped       = "reasoning_only_assistant_dropped"
 	ReasoningHistoryReasonSyntheticClientSignature   = "synthetic_client_signature"
 	ReasoningHistoryReasonOpaqueBlockSkipped         = "opaque_block_skipped"
 	ReasoningHistoryReasonUnsignedLatestTurnWithheld = "unsigned_latest_tool_turn_withheld"
@@ -128,11 +129,12 @@ type ReasoningHistoryRouteAudit struct {
 
 // ReasoningHistoryAudit summarizes reasoning-history preservation without storing payload contents.
 type ReasoningHistoryAudit struct {
-	PreservedMessages          int                          `json:"preserved_messages,omitempty"`
-	SyntheticClientSignatures  int                          `json:"synthetic_client_signatures,omitempty"`
-	OpaqueBlocksSkipped        int                          `json:"opaque_blocks_skipped,omitempty"`
-	UnsignedLatestTurnWithheld int                          `json:"unsigned_latest_turn_withheld,omitempty"`
-	Routes                     []ReasoningHistoryRouteAudit `json:"routes,omitempty"`
+	PreservedMessages            int                          `json:"preserved_messages,omitempty"`
+	DroppedReasoningOnlyMessages int                          `json:"dropped_reasoning_only_messages,omitempty"`
+	SyntheticClientSignatures    int                          `json:"synthetic_client_signatures,omitempty"`
+	OpaqueBlocksSkipped          int                          `json:"opaque_blocks_skipped,omitempty"`
+	UnsignedLatestTurnWithheld   int                          `json:"unsigned_latest_turn_withheld,omitempty"`
+	Routes                       []ReasoningHistoryRouteAudit `json:"routes,omitempty"`
 }
 
 type streamLifecycleState struct {
@@ -224,6 +226,7 @@ type RelayInfo struct {
 	UseRuntimeHeadersOverride             bool
 	ParamOverrideAudit                    []string
 	ReasoningHistory                      *ReasoningHistoryAudit
+	ProtocolNormalization                 *types.ProtocolNormalizationAudit
 	ResponseSemantics                     ResponseSemantics
 	ResponseOverride                      *ResponseOverrideDecision
 	ConversationCapture                   *ConversationCapture
@@ -269,6 +272,20 @@ type RelayInfo struct {
 	*TaskRelayInfo
 }
 
+// AddDroppedReasoningOnlyMessages records assistant history removed because it had no visible payload.
+func (info *RelayInfo) AddDroppedReasoningOnlyMessages(sourceFormat, targetFormat types.RelayFormat, count int) {
+	if info == nil || count <= 0 {
+		return
+	}
+	info.AddReasoningHistoryAudit(
+		sourceFormat,
+		targetFormat,
+		ReasoningHistoryReasonReasoningOnlyDropped,
+		0, 0, 0, 0,
+	)
+	info.ReasoningHistory.DroppedReasoningOnlyMessages += count
+}
+
 // AddReasoningHistoryAudit adds a payload-free reasoning conversion event to the request audit.
 func (info *RelayInfo) AddReasoningHistoryAudit(sourceFormat, targetFormat types.RelayFormat, reasonCode string,
 	preservedMessages, syntheticClientSignatures, opaqueBlocksSkipped, unsignedLatestTurnWithheld int,
@@ -311,7 +328,7 @@ func (info *RelayInfo) HasReasoningHistoryAudit() bool {
 		return false
 	}
 	audit := info.ReasoningHistory
-	return audit.PreservedMessages > 0 || audit.SyntheticClientSignatures > 0 ||
+	return audit.PreservedMessages > 0 || audit.DroppedReasoningOnlyMessages > 0 || audit.SyntheticClientSignatures > 0 ||
 		audit.OpaqueBlocksSkipped > 0 || audit.UnsignedLatestTurnWithheld > 0
 }
 

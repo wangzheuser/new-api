@@ -108,6 +108,9 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	}
 
 	passThroughRequest := model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled
+	if isNormalizedProtocolRoute(info) {
+		passThroughRequest = false
+	}
 	if !passThroughRequest {
 		before := request.GetTokenCountMeta()
 		if applyClaudeSystemPrompt(c, request, systemPrompt, prependSystemPrompt) {
@@ -116,7 +119,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 			}
 		}
 	}
-	if isNativeProtocolRoute(info) {
+	if isUnconvertedProtocolRoute(info) {
 		usage, nativeErr := executeNativeTextRoute(c, info, adaptor, request, passThroughRequest)
 		if nativeErr != nil {
 			return nativeErr

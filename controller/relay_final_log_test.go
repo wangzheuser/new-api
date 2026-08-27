@@ -131,6 +131,67 @@ func TestRecordRelayErrorLogPreservesDiscardedResponseOverrideAttempt(t *testing
 	assert.Equal(t, relaycommon.ResponseOverrideNotAppliedRelayError, responseOverride["not_applied_reason"])
 }
 
+func TestRecordRelayErrorLogPersistsProtocolRouteAndNormalizationAudit(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Log{}))
+
+	previousErrorLogEnabled := constant.ErrorLogEnabled
+	constant.ErrorLogEnabled = true
+	t.Cleanup(func() {
+		constant.ErrorLogEnabled = previousErrorLogEnabled
+	})
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	ctx.Set("id", 1)
+	ctx.Set("username", "test-user")
+	ctx.Set("original_model", "MODEL_X")
+	ctx.Set("channel_id", 54)
+	ctx.Set(common.RequestIdKey, "req-protocol-audit")
+	info := &relaycommon.RelayInfo{
+		RelayFormat:             types.RelayFormatClaude,
+		RequestConversionChain:  []types.RelayFormat{types.RelayFormatClaude},
+		FinalRequestRelayFormat: types.RelayFormatClaude,
+		ChannelRoutePlan: &types.ChannelRoutePlan{
+			RouteMode:           types.ChannelRouteModeNormalized,
+			ClientRelayFormat:   types.RelayFormatClaude,
+			UpstreamRelayFormat: types.RelayFormatClaude,
+			UpstreamPath:        "/v1/messages",
+			RequestNormalizer:   "anthropic_messages_compatible",
+			CapabilitySource:    "model_override",
+		},
+		ProtocolNormalization: &types.ProtocolNormalizationAudit{
+			Normalizer:                    "anthropic_messages_compatible",
+			ReasoningOnlyAssistantDropped: 1,
+			ToolIDsNormalized:             2,
+		},
+	}
+	relayError := types.NewOpenAIError(
+		errors.New("upstream rejected request"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusBadRequest,
+	)
+
+	recordRelayErrorLog(ctx, info, relayError, "", nil, false)
+
+	var log model.Log
+	require.NoError(t, db.First(&log).Error)
+	var other map[string]interface{}
+	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	require.True(t, ok)
+	protocolRoute, ok := adminInfo["protocol_route"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, string(types.ChannelRouteModeNormalized), protocolRoute["mode"])
+	assert.Equal(t, "anthropic_messages_compatible", protocolRoute["request_normalizer"])
+	protocolNormalization, ok := adminInfo["protocol_normalization"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, float64(1), protocolNormalization["reasoning_only_assistant_dropped"])
+	assert.Equal(t, float64(2), protocolNormalization["tool_ids_normalized"])
+	assert.Equal(t, []interface{}{"Claude Messages"}, other["request_conversion"])
+	assert.Equal(t, string(types.RelayFormatClaude), other["final_request_relay_format"])
+}
+
 // TestResolveConfiguredFinalRelayError verifies channel precedence, system fallback, and leak-safe fallback.
 func TestResolveConfiguredFinalRelayError(t *testing.T) {
 	gin.SetMode(gin.TestMode)

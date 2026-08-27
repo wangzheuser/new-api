@@ -974,6 +974,9 @@ func (channel *Channel) ValidateSettings() error {
 		if channel.Type != constant.ChannelTypeOpenAI {
 			return fmt.Errorf("protocol policy is only available for standard compatible channels")
 		}
+		if channelParams.PassThroughBodyEnabled && channelParams.ProtocolPolicy.HasNormalizedCapability() {
+			return fmt.Errorf("normalized protocol handling conflicts with request body pass-through")
+		}
 		if channelParams.PassThroughBodyEnabled && channelParams.ProtocolPolicy.AutoConvert {
 			return fmt.Errorf("protocol auto conversion conflicts with request body pass-through")
 		}

@@ -16,6 +16,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/relayconvert"
+	"github.com/QuantumNous/new-api/service/relaynormalize"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -582,6 +583,97 @@ func TestExecuteNativeTextRouteMessagesKeepsPathAndWireFormat(t *testing.T) {
 	assert.Equal(t, 5, usage.TotalTokens)
 	assert.Contains(t, recorder.Body.String(), `"type":"message"`)
 	assert.EqualValues(t, types.RelayFormatClaude, info.GetFinalRequestRelayFormat())
+}
+
+func TestExecuteNormalizedTextRouteAppliesParamOverrideThenClaudeNormalization(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service.InitHttpClient()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/v1/messages", r.URL.Path)
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		var request dto.ClaudeRequest
+		require.NoError(t, common.Unmarshal(body, &request))
+		require.Len(t, request.Messages, 3)
+		assistantContent, err := request.Messages[1].ParseContent()
+		require.NoError(t, err)
+		require.Len(t, assistantContent, 2)
+		assert.Equal(t, "thinking", assistantContent[0].Type)
+		assert.Equal(t, "a_b", assistantContent[1].Id)
+		resultContent, err := request.Messages[2].ParseContent()
+		require.NoError(t, err)
+		require.Len(t, resultContent, 1)
+		assert.Equal(t, "a_b", resultContent[0].ToolUseId)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"msg_1","type":"message","role":"assistant","model":"MODEL_X","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":2}}`)
+	}))
+	defer upstream.Close()
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	info := &relaycommon.RelayInfo{
+		RelayFormat:        types.RelayFormatClaude,
+		RequestURLPath:     "/v1/messages",
+		RequestedModelName: "MODEL_X",
+		RoutingModelName:   "MODEL_X",
+		AttemptModelName:   "MODEL_X",
+		OriginModelName:    "MODEL_X",
+		StartTime:          time.Now(),
+		ChannelRoutePlan: &types.ChannelRoutePlan{
+			ClientEndpointType:   constant.EndpointTypeAnthropic,
+			UpstreamEndpointType: constant.EndpointTypeAnthropic,
+			ClientRelayFormat:    types.RelayFormatClaude,
+			UpstreamRelayFormat:  types.RelayFormatClaude,
+			RouteMode:            types.ChannelRouteModeNormalized,
+			ClientPath:           "/v1/messages",
+			UpstreamPath:         "/v1/messages",
+			RequestNormalizer:    relaynormalize.RequestNormalizerAnthropicMessagesCompatible,
+			CapabilitySource:     "model_override",
+		},
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:       constant.ChannelTypeOpenAI,
+			ChannelId:         1,
+			ChannelBaseUrl:    upstream.URL,
+			ApiType:           constant.APITypeOpenAI,
+			ApiKey:            "TOKEN",
+			UpstreamModelName: "MODEL_X",
+			ParamOverride: map[string]interface{}{
+				"operations": []interface{}{
+					map[string]interface{}{"path": "messages.2.content.1.id", "mode": "set", "value": "a:b"},
+					map[string]interface{}{"path": "messages.3.content.0.tool_use_id", "mode": "set", "value": "a:b"},
+				},
+			},
+		},
+	}
+	maxTokens := uint(16)
+	request := &dto.ClaudeRequest{
+		Model: "MODEL_X",
+		Messages: []dto.ClaudeMessage{
+			{Role: "user", Content: "question"},
+			{Role: "assistant", Content: []dto.ClaudeMediaMessage{{Type: "thinking", Thinking: common.GetPointer("hidden")}}},
+			{Role: "assistant", Content: []dto.ClaudeMediaMessage{
+				{Type: "thinking", Thinking: common.GetPointer("kept")},
+				{Type: "tool_use", Id: "call_1", Name: "lookup", Input: map[string]any{}},
+			}},
+			{Role: "user", Content: []dto.ClaudeMediaMessage{{Type: "tool_result", ToolUseId: "call_1", Content: "result"}}},
+		},
+		MaxTokens: &maxTokens,
+	}
+	adaptor := GetAdaptor(constant.APITypeOpenAI)
+	adaptor.Init(info)
+
+	usage, apiError := executeNativeTextRoute(c, info, adaptor, request, true)
+
+	require.Nil(t, apiError)
+	require.NotNil(t, usage)
+	require.NotNil(t, info.ProtocolNormalization)
+	assert.Equal(t, 1, info.ProtocolNormalization.ReasoningOnlyAssistantDropped)
+	assert.Equal(t, 2, info.ProtocolNormalization.ToolIDsNormalized)
+	assert.Zero(t, info.ProtocolNormalization.ToolIDCollisions)
+	require.NotNil(t, info.ReasoningHistory)
+	assert.Equal(t, 1, info.ReasoningHistory.DroppedReasoningOnlyMessages)
+	assert.Equal(t, types.RelayFormat(types.RelayFormatClaude), info.GetFinalRequestRelayFormat())
 }
 
 func TestValidateNativeTextResponseRejectsEmptyProtocolPayloads(t *testing.T) {

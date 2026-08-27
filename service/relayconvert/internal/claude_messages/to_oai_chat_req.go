@@ -1,6 +1,7 @@
 package claudemessages
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relaymeta "github.com/QuantumNous/new-api/service/relayconvert/internal/meta"
+	"github.com/QuantumNous/new-api/service/relaynormalize"
 	"github.com/QuantumNous/new-api/types"
 )
 
@@ -136,6 +138,22 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info *re
 		}
 	}
 
+	toolIDNormalizer := relaynormalize.NewClaudeToolIDNormalizer()
+	for _, claudeMessage := range claudeRequest.Messages {
+		if claudeMessage.IsStringContent() {
+			continue
+		}
+		content, err := claudeMessage.ParseContent()
+		if err != nil {
+			return nil, err
+		}
+		for _, mediaMsg := range content {
+			if mediaMsg.Type == "tool_use" {
+				toolIDNormalizer.Normalize(mediaMsg.Id)
+			}
+		}
+	}
+
 	for _, claudeMessage := range claudeRequest.Messages {
 		openAIMessage := dto.Message{
 			Role: claudeMessage.Role,
@@ -179,8 +197,9 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info *re
 					}
 					mediaMessages = append(mediaMessages, mediaMessage)
 				case "tool_use":
+					normalizedID, _, _ := toolIDNormalizer.Normalize(mediaMsg.Id)
 					toolCall := dto.ToolCallRequest{
-						ID:   mediaMsg.Id,
+						ID:   normalizedID,
 						Type: "function",
 						Function: dto.FunctionRequest{
 							Name:      mediaMsg.Name,
@@ -189,6 +208,7 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info *re
 					}
 					toolCalls = append(toolCalls, toolCall)
 				case "tool_result":
+					normalizedID, _, _ := toolIDNormalizer.Normalize(mediaMsg.ToolUseId)
 					toolName := mediaMsg.Name
 					if toolName == "" {
 						toolName = claudeRequest.SearchToolNameByToolCallId(mediaMsg.ToolUseId)
@@ -196,7 +216,7 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info *re
 					oaiToolMessage := dto.Message{
 						Role:       "tool",
 						Name:       &toolName,
-						ToolCallId: mediaMsg.ToolUseId,
+						ToolCallId: normalizedID,
 					}
 					if mediaMsg.IsStringContent() {
 						oaiToolMessage.SetStringContent(mediaMsg.GetStringContent())
@@ -215,7 +235,8 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info *re
 			if len(mediaMessages) > 0 {
 				openAIMessage.SetMediaContent(mediaMessages)
 			}
-			if reasoningContent.Len() > 0 {
+			hasVisibleAssistantPayload := len(mediaMessages) > 0 || len(toolCalls) > 0
+			if reasoningContent.Len() > 0 && hasVisibleAssistantPayload {
 				reasoning := reasoningContent.String()
 				openAIMessage.ReasoningContent = &reasoning
 				info.AddReasoningHistoryAudit(
@@ -233,14 +254,36 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info *re
 					0, 0, opaqueBlocksSkipped, 0,
 				)
 			}
+			if claudeMessage.Role == "assistant" && !hasVisibleAssistantPayload &&
+				(reasoningContent.Len() > 0 || opaqueBlocksSkipped > 0) {
+				info.AddDroppedReasoningOnlyMessages(types.RelayFormatClaude, types.RelayFormatOpenAI, 1)
+			}
 		}
-		if len(openAIMessage.ParseContent()) > 0 || len(openAIMessage.ToolCalls) > 0 || openAIMessage.GetReasoningContent() != "" {
+		if openAIMessage.Content != nil || len(openAIMessage.ParseToolCalls()) > 0 {
 			openAIMessages = append(openAIMessages, openAIMessage)
 		}
 	}
 
 	openAIRequest.Messages = openAIMessages
+	if err := validateOpenAIAssistantMessages(openAIRequest.Messages); err != nil {
+		return nil, err
+	}
 	return &openAIRequest, nil
+}
+
+// validateOpenAIAssistantMessages prevents invalid assistant history from reaching the OpenAI wire format.
+func validateOpenAIAssistantMessages(messages []dto.Message) error {
+	for index, message := range messages {
+		if message.Role != "assistant" {
+			continue
+		}
+		functionCall := bytes.TrimSpace(message.FunctionCall)
+		hasFunctionCall := len(functionCall) > 0 && !bytes.Equal(functionCall, []byte("null"))
+		if message.Content == nil && len(message.ParseToolCalls()) == 0 && !hasFunctionCall {
+			return fmt.Errorf("assistant message %d must have content, tool_calls, or function_call", index)
+		}
+	}
+	return nil
 }
 
 func requestToJSONString(v interface{}) string {

@@ -117,16 +117,27 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	}
 
 	AppendChannelAffinityAdminInfo(ctx, adminInfo)
-	appendChannelRoutePlan(relayInfo, adminInfo)
+	AppendRelayProtocolInfo(relayInfo, other, adminInfo)
 
 	other["admin_info"] = adminInfo
 	appendRequestPath(ctx, relayInfo, other)
-	appendRequestConversionChain(relayInfo, other)
-	appendFinalRequestFormat(relayInfo, other)
 	appendBillingInfo(relayInfo, other)
 	appendParamOverrideInfo(relayInfo, other)
 	AppendStreamStatus(relayInfo, other)
 	return other
+}
+
+// AppendRelayProtocolInfo adds route, normalization, conversion, and final format audit fields.
+func AppendRelayProtocolInfo(relayInfo *relaycommon.RelayInfo, other, adminInfo map[string]interface{}) {
+	if relayInfo == nil {
+		return
+	}
+	appendChannelRoutePlan(relayInfo, adminInfo)
+	if adminInfo != nil && relayInfo.ProtocolNormalization != nil {
+		adminInfo["protocol_normalization"] = relayInfo.ProtocolNormalization
+	}
+	appendRequestConversionChain(relayInfo, other)
+	appendFinalRequestFormat(relayInfo, other)
 }
 
 // AppendResponseOverrideAdminInfo records the response-stage decision without exposing response bodies.
@@ -152,6 +163,7 @@ func appendChannelRoutePlan(relayInfo *relaycommon.RelayInfo, adminInfo map[stri
 			"upstream_path":             plan.UpstreamPath,
 			"quality":                   plan.Quality,
 			"request_converter":         plan.RequestConverter,
+			"request_normalizer":        plan.RequestNormalizer,
 			"response_converter":        plan.ResponseConverter,
 			"request_conversion_steps":  plan.RequestSteps,
 			"response_conversion_steps": plan.ResponseSteps,
@@ -364,7 +376,12 @@ func appendFinalRequestFormat(relayInfo *relaycommon.RelayInfo, other map[string
 	if relayInfo == nil || other == nil {
 		return
 	}
-	if relayInfo.GetFinalRequestRelayFormat() == types.RelayFormatClaude {
+	finalFormat := relayInfo.GetFinalRequestRelayFormat()
+	if finalFormat == "" {
+		return
+	}
+	other["final_request_relay_format"] = finalFormat
+	if finalFormat == types.RelayFormatClaude {
 		// claude indicates the final upstream request format is Claude Messages.
 		// Frontend log rendering uses this to keep the original Claude input display.
 		other["claude"] = true

@@ -7,6 +7,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service/relaynormalize"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,6 +18,45 @@ func protocolTestChannel(t *testing.T, settings dto.ChannelSettings) *model.Chan
 	raw, err := common.Marshal(settings)
 	require.NoError(t, err)
 	return &model.Channel{Id: 1, Type: constant.ChannelTypeOpenAI, Setting: common.GetPointer(string(raw))}
+}
+
+func TestPlanChannelProtocolRouteUsesNormalizedModelOverrideForClaude(t *testing.T) {
+	channel := protocolTestChannel(t, dto.ChannelSettings{ProtocolPolicy: &dto.ChannelProtocolPolicy{
+		Native: map[constant.EndpointType]dto.ProtocolCapability{
+			constant.EndpointTypeOpenAI: {NonStream: true, Stream: true},
+		},
+		ModelOverrides: map[string]dto.ModelProtocolProfile{
+			"MODEL_X": {Native: map[constant.EndpointType]dto.ProtocolCapability{
+				constant.EndpointTypeAnthropic: {
+					NonStream: true,
+					Stream:    true,
+					Mode:      dto.ProtocolHandlingModeNormalized,
+				},
+			}},
+		},
+		AutoConvert: true,
+		MaxQuality:  dto.ProtocolConversionQualityFair,
+	}})
+
+	for _, stream := range []bool{false, true} {
+		plan, err := PlanChannelProtocolRoute(channel, "MODEL_X", "/v1/messages", stream)
+		require.NoError(t, err)
+		require.NotNil(t, plan)
+		assert.Equal(t, types.ChannelRouteModeNormalized, plan.RouteMode)
+		assert.Equal(t, relaynormalize.RequestNormalizerAnthropicMessagesCompatible, plan.RequestNormalizer)
+		assert.Equal(t, types.RelayFormat(types.RelayFormatClaude), plan.ClientRelayFormat)
+		assert.Equal(t, types.RelayFormat(types.RelayFormatClaude), plan.UpstreamRelayFormat)
+		assert.Equal(t, "/v1/messages", plan.UpstreamPath)
+		assert.Empty(t, plan.ResponseConverter)
+		assert.Equal(t, "model_override", plan.CapabilitySource)
+		assert.Equal(t, stream, plan.Stream)
+	}
+
+	native, err := PlanChannelProtocolRoute(channel, "MODEL_Y", "/v1/chat/completions", false)
+	require.NoError(t, err)
+	require.NotNil(t, native)
+	assert.Equal(t, types.ChannelRouteModeNative, native.RouteMode)
+	assert.Empty(t, native.RequestNormalizer)
 }
 
 func TestPlanChannelProtocolRoutePrefersNativeAndModelOverride(t *testing.T) {

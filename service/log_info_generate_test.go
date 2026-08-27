@@ -176,6 +176,41 @@ func TestAppendChannelRoutePlanOmitsReasoningHistoryWithoutEvents(t *testing.T) 
 	assert.NotContains(t, protocolRoute, "reasoning_history")
 }
 
+func TestAppendRelayProtocolInfoIncludesRouteNormalizationAndFinalFormat(t *testing.T) {
+	other := map[string]interface{}{}
+	adminInfo := map[string]interface{}{}
+	info := &relaycommon.RelayInfo{
+		RelayFormat:             types.RelayFormatClaude,
+		RequestConversionChain:  []types.RelayFormat{types.RelayFormatClaude},
+		FinalRequestRelayFormat: types.RelayFormatClaude,
+		ChannelRoutePlan: &types.ChannelRoutePlan{
+			RouteMode:           types.ChannelRouteModeNormalized,
+			ClientRelayFormat:   types.RelayFormatClaude,
+			UpstreamRelayFormat: types.RelayFormatClaude,
+			UpstreamPath:        "/v1/messages",
+			RequestNormalizer:   "anthropic_messages_compatible",
+			CapabilitySource:    "model_override",
+		},
+		ProtocolNormalization: &types.ProtocolNormalizationAudit{
+			Normalizer:                    "anthropic_messages_compatible",
+			ReasoningOnlyAssistantDropped: 1,
+			ToolIDsNormalized:             2,
+		},
+	}
+
+	AppendRelayProtocolInfo(info, other, adminInfo)
+
+	protocolRoute, ok := adminInfo["protocol_route"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, types.ChannelRouteModeNormalized, protocolRoute["mode"])
+	assert.Equal(t, "anthropic_messages_compatible", protocolRoute["request_normalizer"])
+	assert.Equal(t, "model_override", protocolRoute["capability_source"])
+	assert.Same(t, info.ProtocolNormalization, adminInfo["protocol_normalization"])
+	assert.Equal(t, []string{"Claude Messages"}, other["request_conversion"])
+	assert.Equal(t, types.RelayFormat(types.RelayFormatClaude), other["final_request_relay_format"])
+	assert.Equal(t, true, other["claude"])
+}
+
 func TestAppendStreamStatusMarksUnexpectedEOFWithoutTerminal(t *testing.T) {
 	streamStatus := relaycommon.NewStreamStatus()
 	streamStatus.SetEndReason(relaycommon.StreamEndReasonUnexpectedEOF, errors.New("stream ended before terminal event"))

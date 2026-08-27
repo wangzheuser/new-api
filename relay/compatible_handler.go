@@ -81,7 +81,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 			}
 		}
 	}
-	if isNativeProtocolRoute(info) {
+	if isUnconvertedProtocolRoute(info) {
 		nativeRequest := any(request)
 		if !passThroughRequest {
 			convertedRequest, convertErr := adaptor.ConvertOpenAIRequest(c, info, request)

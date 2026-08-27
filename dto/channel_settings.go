@@ -25,14 +25,19 @@ const (
 
 type ProtocolConversionQuality string
 
+type ProtocolHandlingMode string
+
 const (
-	ProtocolConversionQualityGood ProtocolConversionQuality = "good"
-	ProtocolConversionQualityFair ProtocolConversionQuality = "fair"
+	ProtocolConversionQualityGood  ProtocolConversionQuality = "good"
+	ProtocolConversionQualityFair  ProtocolConversionQuality = "fair"
+	ProtocolHandlingModeNative     ProtocolHandlingMode      = "native"
+	ProtocolHandlingModeNormalized ProtocolHandlingMode      = "normalized"
 )
 
 type ProtocolCapability struct {
-	NonStream bool `json:"non_stream"`
-	Stream    bool `json:"stream"`
+	NonStream bool                 `json:"non_stream"`
+	Stream    bool                 `json:"stream"`
+	Mode      ProtocolHandlingMode `json:"mode,omitempty"`
 }
 
 type ModelProtocolProfile struct {
@@ -99,6 +104,31 @@ func (p ChannelProtocolPolicy) NativeForModel(model string) (map[constant.Endpoi
 	return p.Native, "channel_default"
 }
 
+// HasNormalizedCapability reports whether any channel or model capability requires wire normalization.
+func (p ChannelProtocolPolicy) HasNormalizedCapability() bool {
+	for _, capability := range p.Native {
+		if capability.EffectiveMode() == ProtocolHandlingModeNormalized {
+			return true
+		}
+	}
+	for _, profile := range p.ModelOverrides {
+		for _, capability := range profile.Native {
+			if capability.EffectiveMode() == ProtocolHandlingModeNormalized {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// EffectiveMode keeps existing capability JSON backward compatible by treating an empty mode as native.
+func (c ProtocolCapability) EffectiveMode() ProtocolHandlingMode {
+	if c.Mode == "" {
+		return ProtocolHandlingModeNative
+	}
+	return c.Mode
+}
+
 // Validate validates protocol capability declarations stored on a channel.
 func (p ChannelProtocolPolicy) Validate() error {
 	if err := validateNativeProtocolCapabilities(p.Native, "channel"); err != nil {
@@ -133,6 +163,13 @@ func validateNativeProtocolCapabilities(capabilities map[constant.EndpointType]P
 		}
 		if !capability.NonStream && !capability.Stream {
 			return fmt.Errorf("protocol capability %s for %s must enable non-stream or stream", endpointType, scope)
+		}
+		mode := capability.EffectiveMode()
+		if mode != ProtocolHandlingModeNative && mode != ProtocolHandlingModeNormalized {
+			return fmt.Errorf("invalid protocol handling mode %s for %s in %s", capability.Mode, endpointType, scope)
+		}
+		if mode == ProtocolHandlingModeNormalized && endpointType != constant.EndpointTypeAnthropic {
+			return fmt.Errorf("normalized protocol handling is only supported for anthropic, got %s in %s", endpointType, scope)
 		}
 	}
 	return nil

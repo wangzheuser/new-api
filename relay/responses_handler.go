@@ -95,7 +95,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 			}
 		}
 	}
-	if isNativeProtocolRoute(info) {
+	if isUnconvertedProtocolRoute(info) {
 		nativeRequest := any(request)
 		if !passThroughRequest {
 			convertedRequest, convertErr := adaptor.ConvertOpenAIResponsesRequest(c, info, *request)

@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/relayconvert"
+	"github.com/QuantumNous/new-api/service/relaynormalize"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
@@ -25,9 +26,18 @@ func isConvertedProtocolRoute(info *relaycommon.RelayInfo) bool {
 	return info != nil && info.ChannelRoutePlan != nil && info.ChannelRoutePlan.RouteMode == types.ChannelRouteModeConverted
 }
 
-// isNativeProtocolRoute reports whether the current attempt must preserve the client wire protocol.
-func isNativeProtocolRoute(info *relaycommon.RelayInfo) bool {
-	return info != nil && info.ChannelRoutePlan != nil && info.ChannelRoutePlan.RouteMode == types.ChannelRouteModeNative
+// isUnconvertedProtocolRoute reports whether the current attempt preserves the client wire protocol.
+func isUnconvertedProtocolRoute(info *relaycommon.RelayInfo) bool {
+	if info == nil || info.ChannelRoutePlan == nil {
+		return false
+	}
+	mode := info.ChannelRoutePlan.RouteMode
+	return mode == types.ChannelRouteModeNative || mode == types.ChannelRouteModeNormalized
+}
+
+// isNormalizedProtocolRoute reports whether the current attempt requires final-wire normalization.
+func isNormalizedProtocolRoute(info *relaycommon.RelayInfo) bool {
+	return info != nil && info.ChannelRoutePlan != nil && info.ChannelRoutePlan.RouteMode == types.ChannelRouteModeNormalized
 }
 
 // executeConvertedTextRoute converts the request, calls the planned upstream endpoint, and converts the response back.
@@ -86,10 +96,13 @@ func executeConvertedTextRoute(c *gin.Context, info *relaycommon.RelayInfo, adap
 
 // executeNativeTextRoute sends Messages or GenerateContent through a standard compatible channel without format conversion.
 func executeNativeTextRoute(c *gin.Context, info *relaycommon.RelayInfo, adaptor channel.Adaptor, request any, passThrough bool) (*dto.Usage, *types.NewAPIError) {
-	if info == nil || info.ChannelRoutePlan == nil || info.ChannelRoutePlan.RouteMode != types.ChannelRouteModeNative {
+	if !isUnconvertedProtocolRoute(info) {
 		return nil, types.NewError(fmt.Errorf("native protocol route plan is missing"), types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
 	plan := info.ChannelRoutePlan
+	if plan.RouteMode == types.ChannelRouteModeNormalized {
+		passThrough = false
+	}
 	info.ProtocolEndpointMismatch = false
 	info.FinalRequestRelayFormat = plan.UpstreamRelayFormat
 	var body io.Reader
@@ -155,6 +168,24 @@ func prepareTextRouteRequest(c *gin.Context, info *relaycommon.RelayInfo, reques
 		if err != nil {
 			return nil, nil, newAPIErrorFromParamOverride(err)
 		}
+	}
+	if info.ChannelRoutePlan != nil && info.ChannelRoutePlan.RequestNormalizer != "" {
+		normalized, audit, normalizeErr := relaynormalize.NormalizeRequestByID(info.ChannelRoutePlan.RequestNormalizer, jsonData)
+		info.ProtocolNormalization = &audit
+		if audit.ReasoningOnlyAssistantDropped > 0 {
+			info.AddDroppedReasoningOnlyMessages(
+				info.ChannelRoutePlan.UpstreamRelayFormat,
+				info.ChannelRoutePlan.UpstreamRelayFormat,
+				audit.ReasoningOnlyAssistantDropped,
+			)
+		}
+		if normalizeErr != nil {
+			return nil, nil, types.NewError(normalizeErr, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+		if validateErr := relaynormalize.ValidateRequestByID(info.ChannelRoutePlan.RequestNormalizer, normalized); validateErr != nil {
+			return nil, nil, types.NewError(validateErr, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+		jsonData = normalized
 	}
 	logger.LogDebug(c, "planned text request body: %s", jsonData)
 	body, size, closer, err := relaycommon.NewOutboundJSONBody(jsonData)

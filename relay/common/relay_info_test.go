@@ -54,6 +54,7 @@ func TestRelayInfoAddReasoningHistoryAuditAggregatesCountsAndRouteReasons(t *tes
 		ReasoningHistoryReasonPreserved,
 		1, 0, 0, 0,
 	)
+	info.AddDroppedReasoningOnlyMessages(types.RelayFormatClaude, types.RelayFormatOpenAI, 3)
 	info.AddReasoningHistoryAudit(
 		types.RelayFormatClaude,
 		types.RelayFormatOpenAI,
@@ -70,10 +71,12 @@ func TestRelayInfoAddReasoningHistoryAuditAggregatesCountsAndRouteReasons(t *tes
 	require.True(t, info.HasReasoningHistoryAudit())
 	require.NotNil(t, info.ReasoningHistory)
 	assert.Equal(t, 2, info.ReasoningHistory.PreservedMessages)
+	assert.Equal(t, 3, info.ReasoningHistory.DroppedReasoningOnlyMessages)
 	assert.Equal(t, 2, info.ReasoningHistory.OpaqueBlocksSkipped)
 	require.Len(t, info.ReasoningHistory.Routes, 2)
 	assert.Equal(t, []string{
 		ReasoningHistoryReasonPreserved,
+		ReasoningHistoryReasonReasoningOnlyDropped,
 		ReasoningHistoryReasonOpaqueBlockSkipped,
 	}, info.ReasoningHistory.Routes[0].ReasonCodes)
 }

@@ -118,7 +118,7 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 			request.SystemInstructions = nil
 		}
 	}
-	if isNativeProtocolRoute(info) {
+	if isUnconvertedProtocolRoute(info) {
 		usage, nativeErr := executeNativeTextRoute(c, info, adaptor, request, passThroughRequest)
 		if nativeErr != nil {
 			return nativeErr

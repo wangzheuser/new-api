@@ -152,6 +152,7 @@ func formatUserLogs(logs []*Log, startIdx int) {
 				"is_model_mapped",
 				"upstream_model_name",
 				"request_conversion",
+				"final_request_relay_format",
 				"po",
 				"is_system_prompt_overwritten",
 				"admin_info",

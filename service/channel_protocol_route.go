@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/service/relayconvert"
+	"github.com/QuantumNous/new-api/service/relaynormalize"
 	"github.com/QuantumNous/new-api/types"
 )
 
@@ -97,8 +98,24 @@ func PlanChannelProtocolRoute(channel *model.Channel, modelName string, clientPa
 	}
 
 	native, source := policy.NativeForModel(modelName)
-	if protocolCapabilitySupports(native[clientEndpoint], stream) {
-		return newUnconvertedRoutePlan(clientEndpoint, clientFormat, clientMode, clientPath, stream, types.ChannelRouteModeNative, source), nil
+	clientCapability := native[clientEndpoint]
+	if protocolCapabilitySupports(clientCapability, stream) {
+		routeMode := types.ChannelRouteModeNative
+		requestNormalizer := ""
+		switch clientCapability.EffectiveMode() {
+		case dto.ProtocolHandlingModeNative:
+		case dto.ProtocolHandlingModeNormalized:
+			if settings.PassThroughBodyEnabled {
+				return nil, fmt.Errorf("normalized protocol handling conflicts with request body pass-through")
+			}
+			routeMode = types.ChannelRouteModeNormalized
+			requestNormalizer = relaynormalize.RequestNormalizerAnthropicMessagesCompatible
+		default:
+			return nil, fmt.Errorf("invalid protocol handling mode: %s", clientCapability.Mode)
+		}
+		plan := newUnconvertedRoutePlan(clientEndpoint, clientFormat, clientMode, clientPath, stream, routeMode, source)
+		plan.RequestNormalizer = requestNormalizer
+		return plan, nil
 	}
 	if !policy.AutoConvert || settings.PassThroughBodyEnabled {
 		return nil, nil
