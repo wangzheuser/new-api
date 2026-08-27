@@ -163,6 +163,7 @@ func TestRecordRelayErrorLogPersistsProtocolRouteAndNormalizationAudit(t *testin
 		ProtocolNormalization: &types.ProtocolNormalizationAudit{
 			Normalizer:                    "anthropic_messages_compatible",
 			ReasoningOnlyAssistantDropped: 1,
+			EmptyAssistantMessagesDropped: 1,
 			ToolIDsNormalized:             2,
 		},
 	}
@@ -187,6 +188,7 @@ func TestRecordRelayErrorLogPersistsProtocolRouteAndNormalizationAudit(t *testin
 	protocolNormalization, ok := adminInfo["protocol_normalization"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, float64(1), protocolNormalization["reasoning_only_assistant_dropped"])
+	assert.Equal(t, float64(1), protocolNormalization["empty_assistant_messages_dropped"])
 	assert.Equal(t, float64(2), protocolNormalization["tool_ids_normalized"])
 	assert.Equal(t, []interface{}{"Claude Messages"}, other["request_conversion"])
 	assert.Equal(t, string(types.RelayFormatClaude), other["final_request_relay_format"])

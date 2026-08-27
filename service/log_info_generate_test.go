@@ -194,6 +194,7 @@ func TestAppendRelayProtocolInfoIncludesRouteNormalizationAndFinalFormat(t *test
 		ProtocolNormalization: &types.ProtocolNormalizationAudit{
 			Normalizer:                    "anthropic_messages_compatible",
 			ReasoningOnlyAssistantDropped: 1,
+			EmptyAssistantMessagesDropped: 1,
 			ToolIDsNormalized:             2,
 		},
 	}

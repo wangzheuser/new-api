@@ -44,6 +44,7 @@ func TestNormalizeAnthropicMessagesCompatibleDropsReasoningAndSynchronizesToolID
       "model":"MODEL_X",
       "metadata":{"large":90071992547409931234},
       "messages":[
+		{"role":"assistant","content":[]},
         {"role":"assistant","content":[{"type":"thinking","thinking":"hidden"},{"type":"redacted_thinking","data":"opaque"}]},
         {"role":"assistant","content":[{"type":"thinking","thinking":"kept"},{"type":"text","text":"visible"},{"type":"tool_use","id":"a:b","name":"lookup","input":{"q":"x"}}]},
         {"role":"user","content":[{"type":"tool_result","tool_use_id":"a:b","content":"one"}]},
@@ -59,6 +60,7 @@ func TestNormalizeAnthropicMessagesCompatibleDropsReasoningAndSynchronizesToolID
 		Normalizer:                          RequestNormalizerAnthropicMessagesCompatible,
 		ReasoningAssistantMessagesPreserved: 1,
 		ReasoningOnlyAssistantDropped:       1,
+		EmptyAssistantMessagesDropped:       1,
 		ToolIDsNormalized:                   5,
 		ToolIDCollisions:                    1,
 		OrphanToolResultIDs:                 1,
@@ -140,4 +142,7 @@ func TestNormalizeAnthropicMessagesCompatibleRejectsUnknownNormalizerAndInvalidI
 	require.ErrorContains(t, validateAnthropicMessagesCompatible([]byte(`{
       "messages":[{"role":"assistant","content":[{"type":"tool_use","id":"bad:id"}]}]
     }`)), "does not match")
+	require.ErrorContains(t, validateAnthropicMessagesCompatible([]byte(`{
+      "messages":[{"role":"assistant","content":[]}]
+    }`)), "empty assistant message")
 }

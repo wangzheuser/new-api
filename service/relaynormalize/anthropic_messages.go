@@ -45,6 +45,14 @@ func normalizeAnthropicMessagesCompatible(body []byte) ([]byte, types.ProtocolNo
 
 	normalizedMessages := make([]json.RawMessage, 0, len(messages))
 	for _, messageRaw := range messages {
+		emptyAssistant, emptyErr := isEmptyClaudeAssistantContent(messageRaw)
+		if emptyErr != nil {
+			return nil, audit, emptyErr
+		}
+		if emptyAssistant {
+			audit.EmptyAssistantMessagesDropped++
+			continue
+		}
 		hasReasoning, reasoningOnly, reasoningErr := classifyAssistantReasoning(messageRaw)
 		if reasoningErr != nil {
 			return nil, audit, reasoningErr
@@ -136,6 +144,13 @@ func validateAnthropicMessagesCompatible(body []byte) error {
 		return err
 	}
 	for _, messageRaw := range messages {
+		emptyAssistant, emptyErr := isEmptyClaudeAssistantContent(messageRaw)
+		if emptyErr != nil {
+			return emptyErr
+		}
+		if emptyAssistant {
+			return fmt.Errorf("empty assistant message remains after normalization")
+		}
 		_, reasoningOnly, reasoningErr := classifyAssistantReasoning(messageRaw)
 		if reasoningErr != nil {
 			return reasoningErr
@@ -221,6 +236,32 @@ func parseClaudeContentBlock(blockRaw json.RawMessage) (map[string]json.RawMessa
 		}
 	}
 	return block, blockType, nil
+}
+
+// isEmptyClaudeAssistantContent identifies Assistant messages whose content array has no payload blocks.
+func isEmptyClaudeAssistantContent(messageRaw json.RawMessage) (bool, error) {
+	message, err := decodeJSONObject(messageRaw, "claude message")
+	if err != nil {
+		return false, err
+	}
+	var role string
+	if roleRaw, exists := message["role"]; exists {
+		if err := common.Unmarshal(roleRaw, &role); err != nil {
+			return false, fmt.Errorf("claude message role must be a string: %w", err)
+		}
+	}
+	if role != "assistant" {
+		return false, nil
+	}
+	contentRaw, exists := message["content"]
+	if !exists || firstJSONByte(contentRaw) != '[' {
+		return false, nil
+	}
+	var blocks []json.RawMessage
+	if err := common.Unmarshal(contentRaw, &blocks); err != nil {
+		return false, fmt.Errorf("invalid claude message content: %w", err)
+	}
+	return len(blocks) == 0, nil
 }
 
 // classifyAssistantReasoning reports whether an Assistant message has reasoning and whether it lacks visible payload.
