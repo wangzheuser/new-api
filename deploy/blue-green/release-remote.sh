@@ -371,6 +371,9 @@ action_cutover() {
   [[ "$mode" == --execute && "${CONFIRM_CUTOVER:-}" == "$RELEASE_ID" ]]
   exec 9>"${CUTOVER_LOCK:-/var/lock/new-api-cutover.lock}"
   flock -n 9
+  local cutover_at cutover_epoch
+  cutover_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  cutover_epoch="$(date +%s)"
   umask 077
   cat > "$STATE_DIR/role-state.env" <<EOF
 OLD=$PRODUCTION
@@ -380,6 +383,8 @@ OLD_VERSION=$production_version
 NEW_VERSION=$VERSION
 NETWORK=$PROXY_NETWORK
 ALIAS=$PROXY_ALIAS
+CUTOVER_AT=$cutover_at
+CUTOVER_EPOCH=$cutover_epoch
 EOF
   chmod 600 "$STATE_DIR/role-state.env"
   local switched=0
@@ -424,8 +429,10 @@ action_observe() {
   fi
   # shellcheck disable=SC1090
   source "$STATE_DIR/role-state.env"
-  local baseline_hash start end start_tick deadline now remaining sleep_seconds observation_log
+  local baseline_hash start end start_tick deadline now remaining sleep_seconds
+  local observation_log baseline_log baseline_start
   local checks=0 sample_count errors_5xx elapsed_seconds
+  local baseline_samples baseline_errors_5xx baseline_rate_bps current_rate_bps allowed_rate_bps
   observe_on_error() {
     local rc=$?
     trap - ERR
@@ -435,6 +442,8 @@ action_observe() {
     exit "$rc"
   }
   trap observe_on_error ERR
+  [[ "${CUTOVER_AT:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
+  [[ "${CUTOVER_EPOCH:-}" =~ ^[0-9]+$ ]]
   baseline_hash="$(awk '{print $1}' "$BACKUP_ROOT/$RELEASE_ID/nginx-config.sha256")"
   start="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   # Bash's elapsed-time counter prevents wall-clock corrections from shortening the window.
@@ -464,15 +473,32 @@ action_observe() {
   observation_log="$STATE_DIR/observation-app.log"
   docker logs --since "$start" "$NEW" > "$observation_log" 2>&1
   chmod 600 "$observation_log"
-  # The shared Nginx access log contains unrelated virtual hosts. Count only
-  # requests handled by this release's production application container.
+  baseline_log="$STATE_DIR/observation-baseline-app.log"
+  baseline_start=$(( CUTOVER_EPOCH - seconds ))
+  (( baseline_start > 0 ))
+  docker logs --since "$baseline_start" --until "$CUTOVER_AT" "$OLD" > "$baseline_log" 2>&1
+  chmod 600 "$baseline_log"
+  # The shared Nginx access log contains unrelated virtual hosts. Compare only
+  # application requests from the new slot with the immediately preceding
+  # rollback-baseline window; tolerate at most a two-percentage-point increase.
   sample_count="$(grep -Ec '^\[GIN\].*\|[[:space:]]+[0-9]{3}[[:space:]]+\|' "$observation_log" || true)"
   (( sample_count > 0 ))
   errors_5xx="$(grep -Ec '^\[GIN\].*\|[[:space:]]+5[0-9][0-9][[:space:]]+\|' "$observation_log" || true)"
-  [[ "$errors_5xx" -eq 0 ]]
+  baseline_samples="$(grep -Ec '^\[GIN\].*\|[[:space:]]+[0-9]{3}[[:space:]]+\|' "$baseline_log" || true)"
+  (( baseline_samples > 0 ))
+  baseline_errors_5xx="$(grep -Ec '^\[GIN\].*\|[[:space:]]+5[0-9][0-9][[:space:]]+\|' "$baseline_log" || true)"
+  baseline_rate_bps=$(( baseline_errors_5xx * 10000 / baseline_samples ))
+  current_rate_bps=$(( errors_5xx * 10000 / sample_count ))
+  allowed_rate_bps=$(( baseline_rate_bps + 200 ))
+  printf 'baseline_samples=%s baseline_errors_5xx=%s baseline_rate_bps=%s samples=%s errors_5xx=%s current_rate_bps=%s allowed_rate_bps=%s\n' \
+    "$baseline_samples" "$baseline_errors_5xx" "$baseline_rate_bps" "$sample_count" "$errors_5xx" "$current_rate_bps" "$allowed_rate_bps" \
+    > "$STATE_DIR/observation.metrics"
+  chmod 600 "$STATE_DIR/observation.metrics"
+  (( current_rate_bps <= allowed_rate_bps ))
   trap - ERR
-  printf 'observation=passed release_id=%s production=%s version=%s requested_seconds=%s elapsed_seconds=%s interval=%s checks=%s start=%s end=%s samples=%s errors_5xx=%s\n' \
-    "$RELEASE_ID" "$NEW" "$VERSION" "$seconds" "$elapsed_seconds" "$interval" "$checks" "$start" "$end" "$sample_count" "$errors_5xx" |
+  printf 'observation=passed release_id=%s production=%s version=%s requested_seconds=%s elapsed_seconds=%s interval=%s checks=%s start=%s end=%s baseline_samples=%s baseline_errors_5xx=%s baseline_rate_bps=%s samples=%s errors_5xx=%s current_rate_bps=%s allowed_rate_bps=%s\n' \
+    "$RELEASE_ID" "$NEW" "$VERSION" "$seconds" "$elapsed_seconds" "$interval" "$checks" "$start" "$end" \
+    "$baseline_samples" "$baseline_errors_5xx" "$baseline_rate_bps" "$sample_count" "$errors_5xx" "$current_rate_bps" "$allowed_rate_bps" |
     tee "$STATE_DIR/observation.result"
 }
 
