@@ -432,7 +432,7 @@ action_observe() {
   local baseline_hash start end start_tick deadline now remaining sleep_seconds
   local observation_log baseline_log baseline_start
   local checks=0 sample_count errors_5xx elapsed_seconds
-  local baseline_samples baseline_errors_5xx baseline_rate_bps current_rate_bps allowed_rate_bps
+  local baseline_samples baseline_errors_5xx baseline_rate_bps current_rate_bps allowed_rate_bps allowed_errors_5xx
   observe_on_error() {
     local rc=$?
     trap - ERR
@@ -490,15 +490,18 @@ action_observe() {
   baseline_rate_bps=$(( baseline_errors_5xx * 10000 / baseline_samples ))
   current_rate_bps=$(( errors_5xx * 10000 / sample_count ))
   allowed_rate_bps=$(( baseline_rate_bps + 200 ))
-  printf 'baseline_samples=%s baseline_errors_5xx=%s baseline_rate_bps=%s samples=%s errors_5xx=%s current_rate_bps=%s allowed_rate_bps=%s\n' \
-    "$baseline_samples" "$baseline_errors_5xx" "$baseline_rate_bps" "$sample_count" "$errors_5xx" "$current_rate_bps" "$allowed_rate_bps" \
+  # A finite request window cannot realize every basis-point rate exactly. Round
+  # the allowed error count up so the fractional boundary does not reject one request.
+  allowed_errors_5xx=$(( (sample_count * allowed_rate_bps + 9999) / 10000 ))
+  printf 'baseline_samples=%s baseline_errors_5xx=%s baseline_rate_bps=%s samples=%s errors_5xx=%s current_rate_bps=%s allowed_rate_bps=%s allowed_errors_5xx=%s\n' \
+    "$baseline_samples" "$baseline_errors_5xx" "$baseline_rate_bps" "$sample_count" "$errors_5xx" "$current_rate_bps" "$allowed_rate_bps" "$allowed_errors_5xx" \
     > "$STATE_DIR/observation.metrics"
   chmod 600 "$STATE_DIR/observation.metrics"
-  (( current_rate_bps <= allowed_rate_bps ))
+  (( errors_5xx <= allowed_errors_5xx ))
   trap - ERR
-  printf 'observation=passed release_id=%s production=%s version=%s requested_seconds=%s elapsed_seconds=%s interval=%s checks=%s start=%s end=%s baseline_samples=%s baseline_errors_5xx=%s baseline_rate_bps=%s samples=%s errors_5xx=%s current_rate_bps=%s allowed_rate_bps=%s\n' \
+  printf 'observation=passed release_id=%s production=%s version=%s requested_seconds=%s elapsed_seconds=%s interval=%s checks=%s start=%s end=%s baseline_samples=%s baseline_errors_5xx=%s baseline_rate_bps=%s samples=%s errors_5xx=%s current_rate_bps=%s allowed_rate_bps=%s allowed_errors_5xx=%s\n' \
     "$RELEASE_ID" "$NEW" "$VERSION" "$seconds" "$elapsed_seconds" "$interval" "$checks" "$start" "$end" \
-    "$baseline_samples" "$baseline_errors_5xx" "$baseline_rate_bps" "$sample_count" "$errors_5xx" "$current_rate_bps" "$allowed_rate_bps" |
+    "$baseline_samples" "$baseline_errors_5xx" "$baseline_rate_bps" "$sample_count" "$errors_5xx" "$current_rate_bps" "$allowed_rate_bps" "$allowed_errors_5xx" |
     tee "$STATE_DIR/observation.result"
 }
 
