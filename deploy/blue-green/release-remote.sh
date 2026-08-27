@@ -143,12 +143,8 @@ wait_healthy() {
   return 1
 }
 
-normalize_nginx_config() {
-  sed -E '/^nginx: (the )?configuration file .* (syntax is ok|test is successful)$/d'
-}
-
 nginx_hash() {
-  docker exec "$PROXY_CONTAINER" nginx -T 2>&1 | normalize_nginx_config | sha256sum | awk '{print $1}'
+  docker exec "$PROXY_CONTAINER" nginx -T 2>/dev/null | sha256sum | awk '{print $1}'
 }
 
 nginx_hash_matches() {
@@ -249,8 +245,10 @@ action_backup() {
   docker image inspect "$(docker inspect -f '{{.Image}}' "$production")" > "$backup_dir/production-image.inspect.json"
   docker network inspect "$APP_NETWORK" > "$backup_dir/app-network.inspect.json"
   docker network inspect "$PROXY_NETWORK" > "$backup_dir/proxy-network.inspect.json"
-  docker exec "$PROXY_CONTAINER" nginx -T > "$backup_dir/nginx-config.txt" 2>&1
-  printf '%s  nginx-config.txt\n' "$(normalize_nginx_config < "$backup_dir/nginx-config.txt" | sha256sum | awk '{print $1}')" > "$backup_dir/nginx-config.sha256"
+  docker exec "$PROXY_CONTAINER" nginx -T \
+    > "$backup_dir/nginx-config.txt" \
+    2> "$backup_dir/nginx-config.stderr.txt"
+  printf '%s  nginx-config.txt\n' "$(sha256_file "$backup_dir/nginx-config.txt")" > "$backup_dir/nginx-config.sha256"
   docker inspect "$production" | python3 -c 'import json,sys; env=json.load(sys.stdin)[0]["Config"]["Env"]; sensitive=("SECRET","PASSWORD","TOKEN","DSN","KEY","COOKIE"); print("\n".join(x.split("=",1)[0]+"=<redacted>" if any(k in x.split("=",1)[0].upper() for k in sensitive) else x for x in env))' > "$backup_dir/runtime-env.sanitized"
   # Retain log table schemas while omitting their high-volume row data.
   docker exec "$POSTGRES_CONTAINER" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc -Z1 \
