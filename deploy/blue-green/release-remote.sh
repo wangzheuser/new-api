@@ -192,7 +192,7 @@ render_compose() {
 }
 
 action_self_check() {
-  for command in bash curl docker flock python3 sha256sum tar zstd; do
+  for command in bash cmp curl docker flock python3 sha256sum tar zstd; do
     require_command "$command"
   done
   bash -n "$0"
@@ -224,8 +224,20 @@ action_backup() {
   flock "$backup_lock_fd"
 
   local backup_dir="$BACKUP_ROOT/$RELEASE_ID" dump="$BACKUP_ROOT/$RELEASE_ID/postgresql.dump"
+  local exclusion_manifest="$backup_dir/postgresql.excluded-table-data.txt"
+  local -a excluded_table_data=(
+    public.logs
+    public.conversation_logs
+  )
+  local -a exclude_table_data_args=()
+  local qualified_table
+  for qualified_table in "${excluded_table_data[@]}"; do
+    exclude_table_data_args+=("--exclude-table-data=$qualified_table")
+  done
   if [[ -r "$dump" && -r "$dump.sha256" && -s "$backup_dir/postgresql.restore-list.txt" ]] && \
-    (cd "$backup_dir" && sha256sum -c postgresql.dump.sha256 >/dev/null); then
+    (cd "$backup_dir" && sha256sum -c postgresql.dump.sha256 >/dev/null) && \
+    [[ -r "$exclusion_manifest" ]] && \
+    cmp -s "$exclusion_manifest" <(printf '%s\n' "${excluded_table_data[@]}"); then
     printf 'backup=already-complete directory=%s\n' "$backup_dir"
     return
   fi
@@ -240,11 +252,21 @@ action_backup() {
   docker exec "$PROXY_CONTAINER" nginx -T > "$backup_dir/nginx-config.txt" 2>&1
   printf '%s  nginx-config.txt\n' "$(normalize_nginx_config < "$backup_dir/nginx-config.txt" | sha256sum | awk '{print $1}')" > "$backup_dir/nginx-config.sha256"
   docker inspect "$production" | python3 -c 'import json,sys; env=json.load(sys.stdin)[0]["Config"]["Env"]; sensitive=("SECRET","PASSWORD","TOKEN","DSN","KEY","COOKIE"); print("\n".join(x.split("=",1)[0]+"=<redacted>" if any(k in x.split("=",1)[0].upper() for k in sensitive) else x for x in env))' > "$backup_dir/runtime-env.sanitized"
-  # Fast compression shortens the high-CPU backup window while preserving the custom restore format.
-  docker exec "$POSTGRES_CONTAINER" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc -Z1 > "$dump"
+  # Retain log table schemas while omitting their high-volume row data.
+  docker exec "$POSTGRES_CONTAINER" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc -Z1 \
+    "${exclude_table_data_args[@]}" > "$dump"
+  printf '%s\n' "${excluded_table_data[@]}" > "$exclusion_manifest"
   (cd "$backup_dir" && sha256sum postgresql.dump > postgresql.dump.sha256)
   docker exec -i "$POSTGRES_CONTAINER" pg_restore -l < "$dump" > "$backup_dir/postgresql.restore-list.txt"
   [[ -s "$backup_dir/postgresql.restore-list.txt" ]]
+  while IFS=. read -r excluded_schema excluded_table; do
+    if awk -v schema="$excluded_schema" -v table="$excluded_table" \
+      '$4 == "TABLE" && $5 == "DATA" && $6 == schema && $7 == table { found = 1 } END { exit found ? 0 : 1 }' \
+      "$backup_dir/postgresql.restore-list.txt"; then
+      printf 'excluded_table_data_present=%s.%s\n' "$excluded_schema" "$excluded_table" >&2
+      return 1
+    fi
+  done < "$exclusion_manifest"
   (cd "$backup_dir" && sha256sum -c postgresql.dump.sha256 >/dev/null)
   find "$backup_dir" -type f -exec chmod 600 {} +
   # Keep only the newest verified backup, as required by the current retention policy.

@@ -166,8 +166,11 @@ deploy/blue-green/build-local.sh prepare \
 ```
 
 备份包括 PostgreSQL custom-format dump、SHA-256、`pg_restore -l`、脱敏运行快照、容器、
-镜像、应用网络、代理网络和 Nginx 配置。新备份校验成功前不得删除旧备份；校验成功后按
-当前策略只保留最近一份。备份清理不进入切流关键路径。
+镜像、应用网络、代理网络和 Nginx 配置。数据库 dump 保留 `public.logs` 和
+`public.conversation_logs` 的表结构、索引及约束，但通过 `--exclude-table-data` 排除这两张
+高容量日志表的行数据；恢复后这两张表为空，其余表的结构和数据正常恢复。排除清单随备份
+保存并与 restore list 交叉校验，清单变化时不得复用同一 release 的旧备份。新备份校验成功
+前不得删除旧备份；校验成功后按当前策略只保留最近一份。备份清理不进入切流关键路径。
 
 ## 7. 候选槽位与门禁
 
