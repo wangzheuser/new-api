@@ -39,6 +39,18 @@ export const PROTOCOL_PROBE_CASES = [
   'tool_id_collision',
 ] as const
 
+export const PROTOCOL_PROBE_CLASSIFICATION_LABEL_KEYS = {
+  confirmed: 'Confirmed',
+  path_mismatch: 'Path mismatch',
+  auth_error: 'Authentication failed',
+  rate_limited: 'Rate limited',
+  upstream_error: 'Upstream error',
+  transport_error: 'Transport error',
+} as const satisfies Record<
+  ChannelProtocolProbeResponse['classification'],
+  string
+>
+
 export type ProtocolProbeCase = (typeof PROTOCOL_PROBE_CASES)[number]
 export type ProtocolCapabilityState = 'unavailable' | 'native' | 'normalized'
 export type ProtocolRequestMode = 'non_stream' | 'stream'

@@ -48,6 +48,7 @@ import {
   promoteCommonModelProtocolCapabilities,
   protocolCapabilityState,
   protocolProbeKey,
+  PROTOCOL_PROBE_CLASSIFICATION_LABEL_KEYS,
   PROTOCOL_PROBE_CASES,
   summarizeModelProtocolOverrides,
   supportsNormalizedProtocol,
@@ -971,7 +972,13 @@ export function ProtocolPolicyEditor({
                                         }
                                       >
                                         {probeCaseLabels[probeCase]}:{' '}
-                                        {typedResult?.classification ?? '—'}
+                                        {typedResult
+                                          ? t(
+                                              PROTOCOL_PROBE_CLASSIFICATION_LABEL_KEYS[
+                                                typedResult.classification
+                                              ]
+                                            )
+                                          : '—'}
                                       </Badge>
                                     )
                                   )}

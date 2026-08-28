@@ -11,6 +11,9 @@ const newKeys = {
   en: {
     Abnormal: 'Abnormal',
     'Authentication failed': 'Authentication failed',
+    Confirmed: 'Confirmed',
+    'Path mismatch': 'Path mismatch',
+    'Transport error': 'Transport error',
     'Configuration error': 'Configuration error',
     'Disable all keys that failed authentication? Keys with temporary upstream errors will not be changed.':
       'Disable all keys that failed authentication? Keys with temporary upstream errors will not be changed.',
@@ -84,6 +87,9 @@ const newKeys = {
   zh: {
     Abnormal: '异常',
     'Authentication failed': '认证失败',
+    Confirmed: '已确认',
+    'Path mismatch': '路径不匹配',
+    'Transport error': '传输错误',
     'Configuration error': '配置错误',
     'Disable all keys that failed authentication? Keys with temporary upstream errors will not be changed.':
       '禁用所有认证失败的密钥？临时上游错误的密钥不会被更改。',
@@ -150,6 +156,9 @@ const newKeys = {
   'zh-TW': {
     Abnormal: '異常',
     'Authentication failed': '驗證失敗',
+    Confirmed: '已確認',
+    'Path mismatch': '路徑不匹配',
+    'Transport error': '傳輸錯誤',
     'Configuration error': '設定錯誤',
     'Disable all keys that failed authentication? Keys with temporary upstream errors will not be changed.':
       '停用所有驗證失敗的金鑰？暫時性上游錯誤的金鑰不會被變更。',
@@ -216,6 +225,9 @@ const newKeys = {
   fr: {
     Abnormal: 'Anormal',
     'Authentication failed': 'Échec de l’authentification',
+    Confirmed: 'Confirmé',
+    'Path mismatch': 'Chemin incompatible',
+    'Transport error': 'Erreur de transport',
     'Configuration error': 'Erreur de configuration',
     'Disable all keys that failed authentication? Keys with temporary upstream errors will not be changed.':
       'Désactiver toutes les clés dont l’authentification a échoué ? Les clés affectées par des erreurs temporaires en amont ne seront pas modifiées.',
@@ -292,6 +304,9 @@ const newKeys = {
   ja: {
     Abnormal: '異常',
     'Authentication failed': '認証失敗',
+    Confirmed: '確認済み',
+    'Path mismatch': 'パス不一致',
+    'Transport error': '転送エラー',
     'Configuration error': '設定エラー',
     'Disable all keys that failed authentication? Keys with temporary upstream errors will not be changed.':
       '認証に失敗したすべてのキーを無効にしますか？一時的なアップストリームエラーのキーは変更されません。',
@@ -363,6 +378,9 @@ const newKeys = {
   ru: {
     Abnormal: 'С ошибками',
     'Authentication failed': 'Ошибка аутентификации',
+    Confirmed: 'Подтверждено',
+    'Path mismatch': 'Несоответствие пути',
+    'Transport error': 'Ошибка передачи',
     'Configuration error': 'Ошибка конфигурации',
     'Disable all keys that failed authentication? Keys with temporary upstream errors will not be changed.':
       'Отключить все ключи с ошибкой аутентификации? Ключи с временными ошибками вышестоящего сервиса не будут изменены.',
@@ -436,6 +454,9 @@ const newKeys = {
   vi: {
     Abnormal: 'Bất thường',
     'Authentication failed': 'Xác thực thất bại',
+    Confirmed: 'Đã xác nhận',
+    'Path mismatch': 'Đường dẫn không khớp',
+    'Transport error': 'Lỗi truyền tải',
     'Configuration error': 'Lỗi cấu hình',
     'Disable all keys that failed authentication? Keys with temporary upstream errors will not be changed.':
       'Tắt tất cả khóa xác thực thất bại? Các khóa gặp lỗi tạm thời từ thượng nguồn sẽ không bị thay đổi.',

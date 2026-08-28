@@ -33,6 +33,7 @@ import {
   promoteCommonModelProtocolCapabilities,
   protocolCapabilityState,
   protocolProbeKey,
+  PROTOCOL_PROBE_CLASSIFICATION_LABEL_KEYS,
   summarizeModelProtocolOverrides,
   TEXT_PROTOCOLS,
   updateProtocolCapabilityState,
@@ -41,6 +42,24 @@ import {
 } from './protocol-policy'
 
 type ProbeRecommendation = 'native' | 'normalized' | 'unsupported'
+
+describe('protocol probe classification labels', () => {
+  test('maps every response classification to a stable translation key', () => {
+    const expected: Record<
+      ChannelProtocolProbeResponse['classification'],
+      string
+    > = {
+      confirmed: 'Confirmed',
+      path_mismatch: 'Path mismatch',
+      auth_error: 'Authentication failed',
+      rate_limited: 'Rate limited',
+      upstream_error: 'Upstream error',
+      transport_error: 'Transport error',
+    }
+
+    assert.deepEqual(PROTOCOL_PROBE_CLASSIFICATION_LABEL_KEYS, expected)
+  })
+})
 
 /**
  * Build a deterministic complete result set for one probe batch.
