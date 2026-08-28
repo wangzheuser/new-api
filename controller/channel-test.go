@@ -1819,32 +1819,41 @@ type channelTestSummary struct {
 	Enabled   int `json:"enabled"`
 }
 
+// channelTestTarget identifies either a channel or one exact multi-key entry to probe.
+type channelTestTarget struct {
+	channel  *model.Channel
+	keyIndex *int
+}
+
 // performChannelTests runs the channel test loop synchronously, honoring ctx
 // cancellation so a system-task runner that loses its lease stops promptly. When
-// report is non-nil it is called after each channel with (processed, total) so
+// report is non-nil it is called after each probe with (processed, total) so
 // the system task can surface progress.
-func performChannelTests(ctx context.Context, channels []*model.Channel, testUserID int, allowDisable bool, report func(processed, total int)) channelTestSummary {
+func performChannelTests(ctx context.Context, targets []channelTestTarget, testUserID int, allowDisable bool, report func(processed, total int)) channelTestSummary {
 	summary := channelTestSummary{}
 	var disableThreshold = int64(common.ChannelDisableThreshold * 1000)
 	if disableThreshold == 0 {
 		disableThreshold = 10000000 // a impossible value
 	}
 
-	total := len(channels)
-	for index, channel := range channels {
+	total := len(targets)
+	for index, target := range targets {
 		if ctx != nil && ctx.Err() != nil {
 			break
 		}
 		if report != nil {
-			report(index, total) // channels completed before this one
+			report(index, total) // probes completed before this one
 		}
-		if channel.Status == common.ChannelStatusManuallyDisabled {
-			continue
+		channel := target.channel
+		testedStatus := channel.Status
+		if target.keyIndex != nil {
+			testedStatus = common.ChannelStatusAutoDisabled
 		}
-		isChannelEnabled := channel.Status == common.ChannelStatusEnabled
+		isChannelEnabled := testedStatus == common.ChannelStatusEnabled
 		tik := time.Now()
 		result := testChannel(ctx, channel, testUserID, channelTestOptions{
 			isStream: shouldUseStreamForAutomaticChannelTest(channel),
+			keyIndex: target.keyIndex,
 		})
 		tok := time.Now()
 		milliseconds := tok.Sub(tik).Milliseconds()
@@ -1875,6 +1884,17 @@ func performChannelTests(ctx context.Context, channels []*model.Channel, testUse
 		} else {
 			summary.Failed++
 		}
+		if target.keyIndex != nil && (newAPIError != nil || result.localErr != nil) {
+			errorCode := types.ErrorCode("")
+			errorType := types.ErrorType("local_error")
+			statusCode := 0
+			if newAPIError != nil {
+				errorCode = newAPIError.GetErrorCode()
+				errorType = newAPIError.GetErrorType()
+				statusCode = newAPIError.StatusCode
+			}
+			common.SysLog(fmt.Sprintf("multi-key passive recovery failed: channel_id=%d, key_index=%d, error_code=%s, error_type=%s, status_code=%d", channel.Id, *target.keyIndex, errorCode, errorType, statusCode))
+		}
 
 		// disable channel
 		if allowDisable && isChannelEnabled && shouldBanChannel && channel.GetAutoBan() {
@@ -1884,9 +1904,10 @@ func performChannelTests(ctx context.Context, channels []*model.Channel, testUse
 		}
 
 		// enable channel
-		if result.localErr == nil && !isChannelEnabled && service.ShouldEnableChannel(newAPIError, channel.Status) {
-			service.EnableChannel(channel.Id, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.Name)
-			summary.Enabled++
+		if result.localErr == nil && !isChannelEnabled && service.ShouldEnableChannel(newAPIError, testedStatus) {
+			if service.EnableChannel(channel.Id, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.Name) {
+				summary.Enabled++
+			}
 		}
 
 		channel.UpdateResponseTime(milliseconds)
@@ -1928,27 +1949,41 @@ func runChannelTestTask(ctx context.Context, mode string, notify bool, report fu
 	if strings.TrimSpace(mode) == "" {
 		mode = operation_setting.GetMonitorSetting().ChannelTestMode
 	}
-	selected := selectChannelsForAutomaticTest(channels, mode)
+	targets := buildChannelTestTargets(channels, mode)
 	allowDisable := mode != operation_setting.ChannelTestModePassiveRecovery
-	summary := performChannelTests(ctx, selected, testUserID, allowDisable, report)
+	summary := performChannelTests(ctx, targets, testUserID, allowDisable, report)
 	if notify && (ctx == nil || ctx.Err() == nil) {
 		service.NotifyRootUser(dto.NotifyTypeChannelTest, "通道测试完成", "所有通道测试已完成")
 	}
 	return summary, nil
 }
 
-func selectChannelsForAutomaticTest(channels []*model.Channel, mode string) []*model.Channel {
-	selected := make([]*model.Channel, 0, len(channels))
+// buildChannelTestTargets expands passive recovery into one probe per auto-disabled key.
+func buildChannelTestTargets(channels []*model.Channel, mode string) []channelTestTarget {
+	targets := make([]channelTestTarget, 0, len(channels))
 	for _, channel := range channels {
 		if channel.Status == common.ChannelStatusManuallyDisabled {
 			continue
 		}
-		if mode == operation_setting.ChannelTestModePassiveRecovery && channel.Status != common.ChannelStatusAutoDisabled {
+		if mode != operation_setting.ChannelTestModePassiveRecovery {
+			targets = append(targets, channelTestTarget{channel: channel})
 			continue
 		}
-		selected = append(selected, channel)
+		if !channel.ChannelInfo.IsMultiKey {
+			if channel.Status == common.ChannelStatusAutoDisabled {
+				targets = append(targets, channelTestTarget{channel: channel})
+			}
+			continue
+		}
+		for keyIndex := range channel.GetKeys() {
+			if channel.ChannelInfo.MultiKeyStatusList[keyIndex] != common.ChannelStatusAutoDisabled {
+				continue
+			}
+			index := keyIndex
+			targets = append(targets, channelTestTarget{channel: channel, keyIndex: &index})
+		}
 	}
-	return selected
+	return targets
 }
 
 // TestAllChannels enqueues a channel_test system task instead of running the

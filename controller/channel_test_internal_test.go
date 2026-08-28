@@ -1268,31 +1268,77 @@ func TestRespondMultiKeyConnectionTestMasksSensitiveError(t *testing.T) {
 	assert.NotContains(t, response["message"], "sk-secret-value")
 }
 
-func TestSelectChannelsForAutomaticTestPassiveRecoveryOnlyUsesAutoDisabled(t *testing.T) {
+func TestBuildChannelTestTargetsPassiveRecoveryExpandsAutoDisabledKeys(t *testing.T) {
 	channels := []*model.Channel{
-		{Id: 1, Status: common.ChannelStatusEnabled},
-		{Id: 2, Status: common.ChannelStatusAutoDisabled},
-		{Id: 3, Status: common.ChannelStatusManuallyDisabled},
+		{
+			Id:     43,
+			Key:    "43-0\n43-1\n43-2\n43-3\n43-4",
+			Status: common.ChannelStatusAutoDisabled,
+			ChannelInfo: model.ChannelInfo{
+				IsMultiKey:         true,
+				MultiKeyStatusList: map[int]int{0: common.ChannelStatusAutoDisabled, 1: common.ChannelStatusManuallyDisabled, 2: common.ChannelStatusAutoDisabled, 3: common.ChannelStatusManuallyDisabled, 4: common.ChannelStatusAutoDisabled},
+			},
+		},
+		{
+			Id:     44,
+			Key:    strings.Join([]string{"44-0", "44-1", "44-2", "44-3", "44-4", "44-5", "44-6", "44-7", "44-8", "44-9", "44-10", "44-11", "44-12"}, "\n"),
+			Status: common.ChannelStatusEnabled,
+			ChannelInfo: model.ChannelInfo{
+				IsMultiKey:         true,
+				MultiKeyStatusList: map[int]int{1: common.ChannelStatusAutoDisabled, 5: common.ChannelStatusManuallyDisabled, 7: common.ChannelStatusAutoDisabled, 11: common.ChannelStatusAutoDisabled},
+			},
+		},
+		{
+			Id:     46,
+			Key:    "46-0\n46-1",
+			Status: common.ChannelStatusAutoDisabled,
+			ChannelInfo: model.ChannelInfo{
+				IsMultiKey:         true,
+				MultiKeyStatusList: map[int]int{0: common.ChannelStatusAutoDisabled, 1: common.ChannelStatusAutoDisabled},
+			},
+		},
+		{Id: 47, Status: common.ChannelStatusManuallyDisabled},
 	}
 
-	selected := selectChannelsForAutomaticTest(channels, operation_setting.ChannelTestModePassiveRecovery)
+	targets := buildChannelTestTargets(channels, operation_setting.ChannelTestModePassiveRecovery)
 
-	require.Len(t, selected, 1)
-	require.Equal(t, 2, selected[0].Id)
+	require.Len(t, targets, 8)
+	actual := make([][2]int, 0, len(targets))
+	for _, target := range targets {
+		require.NotNil(t, target.keyIndex)
+		actual = append(actual, [2]int{target.channel.Id, *target.keyIndex})
+	}
+	assert.Equal(t, [][2]int{{43, 0}, {43, 2}, {43, 4}, {44, 1}, {44, 7}, {44, 11}, {46, 0}, {46, 1}}, actual)
 }
 
-func TestSelectChannelsForAutomaticTestScheduledSkipsManualDisabled(t *testing.T) {
+func TestBuildChannelTestTargetsPassiveRecoveryIncludesSingleKeyChannel(t *testing.T) {
 	channels := []*model.Channel{
 		{Id: 1, Status: common.ChannelStatusEnabled},
 		{Id: 2, Status: common.ChannelStatusAutoDisabled},
 		{Id: 3, Status: common.ChannelStatusManuallyDisabled},
 	}
 
-	selected := selectChannelsForAutomaticTest(channels, operation_setting.ChannelTestModeScheduledAll)
+	targets := buildChannelTestTargets(channels, operation_setting.ChannelTestModePassiveRecovery)
 
-	require.Len(t, selected, 2)
-	require.Equal(t, 1, selected[0].Id)
-	require.Equal(t, 2, selected[1].Id)
+	require.Len(t, targets, 1)
+	assert.Equal(t, 2, targets[0].channel.Id)
+	assert.Nil(t, targets[0].keyIndex)
+}
+
+func TestBuildChannelTestTargetsScheduledSkipsManualDisabled(t *testing.T) {
+	channels := []*model.Channel{
+		{Id: 1, Status: common.ChannelStatusEnabled},
+		{Id: 2, Status: common.ChannelStatusAutoDisabled},
+		{Id: 3, Status: common.ChannelStatusManuallyDisabled},
+	}
+
+	targets := buildChannelTestTargets(channels, operation_setting.ChannelTestModeScheduledAll)
+
+	require.Len(t, targets, 2)
+	assert.Equal(t, 1, targets[0].channel.Id)
+	assert.Equal(t, 2, targets[1].channel.Id)
+	assert.Nil(t, targets[0].keyIndex)
+	assert.Nil(t, targets[1].keyIndex)
 }
 
 func TestTestAllChannelsRejectsExistingActiveTask(t *testing.T) {

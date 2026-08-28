@@ -1657,7 +1657,8 @@ func ManageMultiKeys(c *gin.Context) {
 			channel.ChannelInfo.MultiKeyDisabledReason = make(map[int]string)
 		}
 
-		channel.ChannelInfo.MultiKeyStatusList[keyIndex] = 2 // disabled
+		channel.ChannelInfo.MultiKeyStatusList[keyIndex] = common.ChannelStatusManuallyDisabled
+		channel.RecalculateMultiKeyStatus()
 
 		err = channel.Update()
 		if err != nil {
@@ -1700,6 +1701,7 @@ func ManageMultiKeys(c *gin.Context) {
 		if channel.ChannelInfo.MultiKeyDisabledReason != nil {
 			delete(channel.ChannelInfo.MultiKeyDisabledReason, keyIndex)
 		}
+		channel.RecalculateMultiKeyStatus()
 
 		err = channel.Update()
 		if err != nil {
@@ -1724,6 +1726,7 @@ func ManageMultiKeys(c *gin.Context) {
 		channel.ChannelInfo.MultiKeyStatusList = make(map[int]int)
 		channel.ChannelInfo.MultiKeyDisabledTime = make(map[int]int64)
 		channel.ChannelInfo.MultiKeyDisabledReason = make(map[int]string)
+		channel.RecalculateMultiKeyStatus()
 
 		err = channel.Update()
 		if err != nil {
@@ -1752,14 +1755,14 @@ func ManageMultiKeys(c *gin.Context) {
 
 		var disabledCount int
 		for i := 0; i < channel.ChannelInfo.MultiKeySize; i++ {
-			status := 1 // default enabled
+			status := common.ChannelStatusEnabled
 			if s, exists := channel.ChannelInfo.MultiKeyStatusList[i]; exists {
 				status = s
 			}
 
 			// 只禁用当前启用的密钥
-			if status == 1 {
-				channel.ChannelInfo.MultiKeyStatusList[i] = 2 // disabled
+			if status == common.ChannelStatusEnabled {
+				channel.ChannelInfo.MultiKeyStatusList[i] = common.ChannelStatusManuallyDisabled
 				disabledCount++
 			}
 		}
@@ -1771,6 +1774,7 @@ func ManageMultiKeys(c *gin.Context) {
 			})
 			return
 		}
+		channel.RecalculateMultiKeyStatus()
 
 		err = channel.Update()
 		if err != nil {

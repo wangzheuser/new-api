@@ -325,6 +325,62 @@ func (channel *Channel) SetOtherInfo(otherInfo map[string]interface{}) {
 	channel.OtherInfo = string(otherInfoBytes)
 }
 
+// RecalculateMultiKeyStatus derives the channel status from its key states.
+func (channel *Channel) RecalculateMultiKeyStatus() bool {
+	if !channel.ChannelInfo.IsMultiKey {
+		return false
+	}
+
+	keys := channel.GetKeys()
+	if len(keys) == 0 {
+		return false
+	}
+
+	hasEnabledKey := false
+	hasAutoDisabledKey := false
+	for keyIndex := range keys {
+		keyStatus, exists := channel.ChannelInfo.MultiKeyStatusList[keyIndex]
+		if !exists || keyStatus == common.ChannelStatusEnabled {
+			hasEnabledKey = true
+			break
+		}
+		if keyStatus == common.ChannelStatusAutoDisabled {
+			hasAutoDisabledKey = true
+		}
+	}
+
+	status := common.ChannelStatusManuallyDisabled
+	if hasEnabledKey {
+		status = common.ChannelStatusEnabled
+	} else if hasAutoDisabledKey {
+		status = common.ChannelStatusAutoDisabled
+	}
+
+	statusChanged := channel.Status != status
+	channel.Status = status
+	if status == common.ChannelStatusEnabled {
+		// An enabled channel must not retain an aggregate disabled reason.
+		info := channel.GetOtherInfo()
+		_, hasReason := info["status_reason"]
+		_, hasTime := info["status_time"]
+		if hasReason || hasTime {
+			delete(info, "status_reason")
+			delete(info, "status_time")
+			channel.SetOtherInfo(info)
+		}
+	} else if statusChanged {
+		info := channel.GetOtherInfo()
+		if status == common.ChannelStatusAutoDisabled {
+			info["status_reason"] = "All keys are disabled"
+		} else {
+			info["status_reason"] = "All keys are manually disabled"
+		}
+		info["status_time"] = common.GetTimestamp()
+		channel.SetOtherInfo(info)
+	}
+	return statusChanged
+}
+
 func (channel *Channel) GetTag() string {
 	if channel.Tag == nil {
 		return ""
@@ -639,69 +695,68 @@ func CleanupChannelPollingLocks() {
 	})
 }
 
-func handlerMultiKeyUpdate(channel *Channel, usingKey string, status int, reason string) {
+// handlerMultiKeyUpdate updates one key and keeps the aggregate channel status consistent.
+func handlerMultiKeyUpdate(channel *Channel, usingKey string, status int, reason string) bool {
 	keys := channel.GetKeys()
 	if len(keys) == 0 {
+		if channel.Status == status {
+			return false
+		}
 		channel.Status = status
-	} else {
-		keyIndex := -1
-		for i, key := range keys {
-			if key == usingKey {
-				keyIndex = i
-				break
-			}
-		}
-		if keyIndex < 0 {
-			if usingKey != "" {
-				common.SysLog(fmt.Sprintf("failed to update multi-key status: channel_id=%d, using key not found", channel.Id))
-				return
-			}
-			channel.Status = status
-			info := channel.GetOtherInfo()
-			info["status_reason"] = reason
-			info["status_time"] = common.GetTimestamp()
-			channel.SetOtherInfo(info)
-			return
-		}
-		if channel.ChannelInfo.MultiKeyStatusList == nil {
-			channel.ChannelInfo.MultiKeyStatusList = make(map[int]int)
-		}
-		if status == common.ChannelStatusEnabled {
-			delete(channel.ChannelInfo.MultiKeyStatusList, keyIndex)
-		} else {
-			channel.ChannelInfo.MultiKeyStatusList[keyIndex] = status
-			if channel.ChannelInfo.MultiKeyDisabledReason == nil {
-				channel.ChannelInfo.MultiKeyDisabledReason = make(map[int]string)
-			}
-			if channel.ChannelInfo.MultiKeyDisabledTime == nil {
-				channel.ChannelInfo.MultiKeyDisabledTime = make(map[int]int64)
-			}
-			channel.ChannelInfo.MultiKeyDisabledReason[keyIndex] = reason
-			channel.ChannelInfo.MultiKeyDisabledTime[keyIndex] = common.GetTimestamp()
-		}
-		if !hasEnabledMultiKey(keys, channel.ChannelInfo.MultiKeyStatusList) {
-			channel.Status = common.ChannelStatusAutoDisabled
-			info := channel.GetOtherInfo()
-			info["status_reason"] = "All keys are disabled"
-			info["status_time"] = common.GetTimestamp()
-			channel.SetOtherInfo(info)
-		} else if status == common.ChannelStatusEnabled {
-			channel.Status = common.ChannelStatusEnabled
-		}
+		return true
 	}
-}
 
-func hasEnabledMultiKey(keys []string, statusList map[int]int) bool {
-	for i := range keys {
-		if statusList == nil {
-			return true
-		}
-		status, ok := statusList[i]
-		if !ok || status == common.ChannelStatusEnabled {
-			return true
+	keyIndex := -1
+	for i, key := range keys {
+		if key == usingKey {
+			keyIndex = i
+			break
 		}
 	}
-	return false
+	if keyIndex < 0 {
+		if usingKey != "" {
+			common.SysLog(fmt.Sprintf("failed to update multi-key status: channel_id=%d, using key not found", channel.Id))
+			return false
+		}
+		if channel.Status == status {
+			return false
+		}
+		channel.Status = status
+		info := channel.GetOtherInfo()
+		info["status_reason"] = reason
+		info["status_time"] = common.GetTimestamp()
+		channel.SetOtherInfo(info)
+		return true
+	}
+
+	if channel.ChannelInfo.MultiKeyStatusList == nil {
+		channel.ChannelInfo.MultiKeyStatusList = make(map[int]int)
+	}
+	currentStatus, exists := channel.ChannelInfo.MultiKeyStatusList[keyIndex]
+	if !exists {
+		currentStatus = common.ChannelStatusEnabled
+	}
+	if currentStatus == status {
+		return false
+	}
+
+	if status == common.ChannelStatusEnabled {
+		delete(channel.ChannelInfo.MultiKeyStatusList, keyIndex)
+		delete(channel.ChannelInfo.MultiKeyDisabledReason, keyIndex)
+		delete(channel.ChannelInfo.MultiKeyDisabledTime, keyIndex)
+	} else {
+		channel.ChannelInfo.MultiKeyStatusList[keyIndex] = status
+		if channel.ChannelInfo.MultiKeyDisabledReason == nil {
+			channel.ChannelInfo.MultiKeyDisabledReason = make(map[int]string)
+		}
+		if channel.ChannelInfo.MultiKeyDisabledTime == nil {
+			channel.ChannelInfo.MultiKeyDisabledTime = make(map[int]int64)
+		}
+		channel.ChannelInfo.MultiKeyDisabledReason[keyIndex] = reason
+		channel.ChannelInfo.MultiKeyDisabledTime[keyIndex] = common.GetTimestamp()
+	}
+	channel.RecalculateMultiKeyStatus()
+	return true
 }
 
 func UpdateChannelStatus(channelId int, usingKey string, status int, reason string) bool {
@@ -736,19 +791,13 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 	}
 
 	shouldUpdateAbilities := false
-	defer func() {
-		if shouldUpdateAbilities {
-			err := UpdateAbilityStatus(channelId, status == common.ChannelStatusEnabled)
-			if err != nil {
-				common.SysLog(fmt.Sprintf("failed to update ability status: channel_id=%d, error=%v", channelId, err))
-			}
-		}
-	}()
+	abilityEnabled := false
+	shouldRefreshCache := false
 	channel, err := GetChannelById(channelId, true)
 	if err != nil {
 		return false
 	} else {
-		if channel.Status == status {
+		if !channel.ChannelInfo.IsMultiKey && channel.Status == status {
 			return false
 		}
 
@@ -757,10 +806,15 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 			// Protect map writes with the same per-channel lock used by readers
 			pollingLock := GetChannelPollingLock(channelId)
 			pollingLock.Lock()
-			handlerMultiKeyUpdate(channel, usingKey, status, reason)
+			keyStatusChanged := handlerMultiKeyUpdate(channel, usingKey, status, reason)
 			pollingLock.Unlock()
+			if !keyStatusChanged {
+				return false
+			}
 			if beforeStatus != channel.Status {
 				shouldUpdateAbilities = true
+				abilityEnabled = channel.Status == common.ChannelStatusEnabled
+				shouldRefreshCache = common.MemoryCacheEnabled && abilityEnabled
 			}
 		} else {
 			info := channel.GetOtherInfo()
@@ -769,12 +823,27 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 			channel.SetOtherInfo(info)
 			channel.Status = status
 			shouldUpdateAbilities = true
+			abilityEnabled = status == common.ChannelStatusEnabled
+			shouldRefreshCache = common.MemoryCacheEnabled && abilityEnabled
 		}
 		err = channel.SaveWithoutKey()
 		if err != nil {
 			common.SysLog(fmt.Sprintf("failed to update channel status: channel_id=%d, status=%d, error=%v", channel.Id, status, err))
+			if common.MemoryCacheEnabled {
+				// Restore the cache from the authoritative database after a failed write.
+				InitChannelCache()
+			}
 			return false
 		}
+	}
+	if shouldUpdateAbilities {
+		err = UpdateAbilityStatus(channelId, abilityEnabled)
+		if err != nil {
+			common.SysLog(fmt.Sprintf("failed to update ability status: channel_id=%d, error=%v", channelId, err))
+		}
+	}
+	if shouldRefreshCache {
+		InitChannelCache()
 	}
 	return true
 }
