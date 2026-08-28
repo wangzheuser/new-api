@@ -73,10 +73,17 @@ function GlobalInputModalityEditor(props: ScopedInputModalityEditorProps) {
   const { t } = useTranslation()
   const [draftModel, setDraftModel] = useState('')
   const [draftError, setDraftError] = useState('')
+  const [search, setSearch] = useState('')
   const [modelDrafts, setModelDrafts] = useState<Record<string, string>>({})
   const [modelErrors, setModelErrors] = useState<Record<string, string>>({})
 
   const configuredModels = Object.keys(props.value)
+  const normalizedSearch = search.trim().toLowerCase()
+  const visibleModels = normalizedSearch
+    ? configuredModels.filter((model) =>
+        model.toLowerCase().includes(normalizedSearch)
+      )
+    : configuredModels
   const modelOptions = useMemo(
     () =>
       buildGlobalInputModalityModelOptions(
@@ -172,147 +179,175 @@ function GlobalInputModalityEditor(props: ScopedInputModalityEditorProps) {
 
   return (
     <div className='space-y-4'>
-      <div className='grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]'>
-        <ComboboxInput
-          id='new-input-modality-model'
-          options={addModelOptions.map((model) => ({
-            value: model,
-            label: model,
-          }))}
-          value={draftModel}
-          onValueChange={(value) => {
-            setDraftModel(value)
-            setDraftError('')
-          }}
-          placeholder={t('Enter an exact client-requested model name')}
-          emptyText={t('No matching models. Enter a custom model name.')}
-          allowCustomValue
-          openOnFocus
-          disabled={props.disabled}
-          aria-invalid={Boolean(draftError)}
-          aria-describedby={
-            draftError ? 'new-input-modality-model-error' : undefined
-          }
-        />
-        <Button
-          type='button'
-          variant='outline'
-          className='sm:shrink-0'
-          disabled={
-            props.disabled ||
-            configuredModels.length >= MAX_MODEL_INPUT_MODALITY_ENTRIES
-          }
-          onClick={addModel}
-        >
-          <Plus className='mr-2 h-4 w-4' aria-hidden='true' />
-          {t('Add model')}
-        </Button>
-      </div>
-      {draftError && (
-        <p
-          id='new-input-modality-model-error'
-          className='text-destructive text-sm'
-        >
-          {draftError}
-        </p>
-      )}
+      <div className='flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between'>
+        <div className='w-full max-w-3xl min-w-0 space-y-2'>
+          <div className='grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]'>
+            <ComboboxInput
+              id='new-input-modality-model'
+              options={addModelOptions.map((model) => ({
+                value: model,
+                label: model,
+              }))}
+              value={draftModel}
+              onValueChange={(value) => {
+                setDraftModel(value)
+                setDraftError('')
+              }}
+              placeholder={t('Enter an exact client-requested model name')}
+              emptyText={t('No matching models. Enter a custom model name.')}
+              allowCustomValue
+              openOnFocus
+              disabled={props.disabled}
+              aria-invalid={Boolean(draftError)}
+              aria-describedby={
+                draftError ? 'new-input-modality-model-error' : undefined
+              }
+            />
+            <Button
+              type='button'
+              variant='outline'
+              className='sm:shrink-0'
+              disabled={
+                props.disabled ||
+                configuredModels.length >= MAX_MODEL_INPUT_MODALITY_ENTRIES
+              }
+              onClick={addModel}
+            >
+              <Plus className='mr-2 h-4 w-4' aria-hidden='true' />
+              {t('Add model')}
+            </Button>
+          </div>
+          {draftError && (
+            <p
+              id='new-input-modality-model-error'
+              className='text-destructive text-sm'
+            >
+              {draftError}
+            </p>
+          )}
+        </div>
 
-      {configuredModels.length === 0 ? (
+        {configuredModels.length > 0 && (
+          <div className='relative w-full lg:w-72 lg:shrink-0'>
+            <Search
+              className='text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2'
+              aria-hidden='true'
+            />
+            <Input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder={t('Search models...')}
+              aria-label={t('Search models')}
+              className='pl-8'
+              disabled={props.disabled}
+            />
+          </div>
+        )}
+      </div>
+
+      {configuredModels.length === 0 && (
         <div className='text-muted-foreground rounded-lg border border-dashed p-6 text-center text-sm'>
           {t(
             'No model input modalities are configured. Requests keep the existing compatibility behavior.'
           )}
         </div>
-      ) : (
-        <div className='space-y-2'>
-          {configuredModels.map((model, index) => {
-            const imageEnabled = props.value[model].includes('image')
-            const modelError = modelErrors[model]
-            const modelInputId = `input-modality-model-${index}`
-            const modelErrorId = `${modelInputId}-error`
-            const renameOptions = getAvailableInputModalityModelOptions(
-              modelOptions,
-              props.value,
-              model
-            )
+      )}
 
-            return (
-              <div
-                key={model}
-                className='border-border/60 grid gap-3 rounded-lg border p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start sm:gap-x-4'
-              >
-                <div className='min-w-0 space-y-2'>
-                  <label className='sr-only' htmlFor={modelInputId}>
-                    {t('Model name')}
-                  </label>
-                  <ComboboxInput
-                    id={modelInputId}
-                    options={renameOptions.map((option) => ({
-                      value: option,
-                      label: option,
-                    }))}
-                    value={modelDrafts[model] ?? model}
-                    onValueChange={(value) => {
-                      setModelDrafts((current) => ({
-                        ...current,
-                        [model]: value,
-                      }))
-                      setModelErrors((current) => {
-                        const next = { ...current }
-                        delete next[model]
-                        return next
-                      })
-                    }}
-                    onValueCommit={(value) => renameModel(model, value)}
-                    onBlur={() =>
-                      renameModel(model, modelDrafts[model] ?? model)
-                    }
-                    placeholder={t('Model name')}
-                    emptyText={t(
-                      'No matching models. Enter a custom model name.'
-                    )}
-                    allowCustomValue
-                    openOnFocus
-                    disabled={props.disabled}
-                    aria-invalid={Boolean(modelError)}
-                    aria-describedby={modelError ? modelErrorId : undefined}
-                  />
-                  {modelError && (
-                    <p id={modelErrorId} className='text-destructive text-sm'>
-                      {modelError}
-                    </p>
-                  )}
-                  <div className='flex flex-wrap gap-2'>
-                    <Badge variant='outline'>{t('Text')}</Badge>
-                    <Badge variant={imageEnabled ? 'default' : 'outline'}>
-                      {imageEnabled ? t('Image') : t('Image disabled')}
-                    </Badge>
-                  </div>
-                </div>
-                <div className='flex h-8 items-center justify-between gap-3 sm:justify-end'>
-                  <div className='flex items-center gap-2'>
-                    <span className='text-sm'>{t('Image input')}</span>
-                    <Switch
-                      checked={imageEnabled}
+      {configuredModels.length > 0 && visibleModels.length === 0 && (
+        <div className='text-muted-foreground rounded-lg border border-dashed p-6 text-center text-sm'>
+          {t('No models found.')}
+        </div>
+      )}
+
+      {visibleModels.length > 0 && (
+        <div className='max-h-[32rem] overflow-y-auto overscroll-contain pr-1'>
+          <div className='grid grid-cols-1 gap-2 xl:grid-cols-2'>
+            {visibleModels.map((model) => {
+              const imageEnabled = props.value[model].includes('image')
+              const modelError = modelErrors[model]
+              const modelInputId = `input-modality-model-${encodeURIComponent(model)}`
+              const modelErrorId = `${modelInputId}-error`
+              const renameOptions = getAvailableInputModalityModelOptions(
+                modelOptions,
+                props.value,
+                model
+              )
+
+              return (
+                <div
+                  key={model}
+                  className='border-border/60 grid min-w-0 gap-2 rounded-lg border px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start'
+                >
+                  <div className='min-w-0 space-y-1.5'>
+                    <label className='sr-only' htmlFor={modelInputId}>
+                      {t('Model name')}
+                    </label>
+                    <ComboboxInput
+                      id={modelInputId}
+                      options={renameOptions.map((option) => ({
+                        value: option,
+                        label: option,
+                      }))}
+                      value={modelDrafts[model] ?? model}
+                      onValueChange={(value) => {
+                        setModelDrafts((current) => ({
+                          ...current,
+                          [model]: value,
+                        }))
+                        setModelErrors((current) => {
+                          const next = { ...current }
+                          delete next[model]
+                          return next
+                        })
+                      }}
+                      onValueCommit={(value) => renameModel(model, value)}
+                      onBlur={() =>
+                        renameModel(model, modelDrafts[model] ?? model)
+                      }
+                      placeholder={t('Model name')}
+                      emptyText={t(
+                        'No matching models. Enter a custom model name.'
+                      )}
+                      allowCustomValue
+                      openOnFocus
                       disabled={props.disabled}
-                      aria-label={t('Image input for {{model}}', { model })}
-                      onCheckedChange={(checked) => updateModel(model, checked)}
+                      aria-invalid={Boolean(modelError)}
+                      aria-describedby={modelError ? modelErrorId : undefined}
                     />
+                    {modelError && (
+                      <p id={modelErrorId} className='text-destructive text-sm'>
+                        {modelError}
+                      </p>
+                    )}
                   </div>
-                  <Button
-                    type='button'
-                    variant='ghost'
-                    size='icon-sm'
-                    disabled={props.disabled}
-                    aria-label={t('Delete input modality configuration')}
-                    onClick={() => removeModel(model)}
-                  >
-                    <Trash2 className='h-4 w-4' aria-hidden='true' />
-                  </Button>
+                  <div className='flex min-h-8 shrink-0 items-center justify-between gap-2 sm:justify-end'>
+                    <Badge variant='outline'>{t('Text')}</Badge>
+                    <div className='flex items-center gap-2'>
+                      <span className='text-sm'>{t('Image input')}</span>
+                      <Switch
+                        checked={imageEnabled}
+                        disabled={props.disabled}
+                        aria-label={t('Image input for {{model}}', { model })}
+                        onCheckedChange={(checked) =>
+                          updateModel(model, checked)
+                        }
+                      />
+                    </div>
+                    <Button
+                      type='button'
+                      variant='ghost'
+                      size='icon-sm'
+                      disabled={props.disabled}
+                      aria-label={t('Delete input modality configuration')}
+                      onClick={() => removeModel(model)}
+                    >
+                      <Trash2 className='h-4 w-4' aria-hidden='true' />
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            )
-          })}
+              )
+            })}
+          </div>
         </div>
       )}
     </div>
