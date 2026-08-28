@@ -229,9 +229,9 @@ func (s ChannelSettings) ResolveSystemPromptForAttempt(requestedModel, attemptMo
 	return s.SystemPrompt, s.SystemPromptOverride, "channel_default", ""
 }
 
-// ResolveContextFallback 按初始路由模型精确查找渠道兜底规则。
-func (s ChannelSettings) ResolveContextFallback(model string) (ModelContextFallback, bool) {
-	rule, ok := s.ModelContextFallbacks[model]
+// ResolveContextFallback 按客户端原始请求模型精确查找渠道兜底规则。
+func (s ChannelSettings) ResolveContextFallback(requestedModel string) (ModelContextFallback, bool) {
+	rule, ok := s.ModelContextFallbacks[requestedModel]
 	return rule, ok
 }
 

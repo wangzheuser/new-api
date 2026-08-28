@@ -24,7 +24,7 @@ import (
 func prepareContextFallback(c *gin.Context, info *relaycommon.RelayInfo, request dto.Request, initialTokens int) (*types.TokenCountMeta, *types.NewAPIError) {
 	meta := request.GetTokenCountMeta()
 	settings, _ := common.GetContextKeyType[dto.ChannelSettings](c, constant.ContextKeyChannelSetting)
-	rule, hasRule := settings.ResolveContextFallback(info.GetRoutingModelName())
+	rule, hasRule := settings.ResolveContextFallback(info.GetRequestedModelName())
 	hasPromptSettings := strings.TrimSpace(settings.SystemPrompt) != "" || len(settings.ModelSystemPrompts) > 0
 	if !hasRule && !hasPromptSettings {
 		info.SetEstimatePromptTokens(initialTokens)

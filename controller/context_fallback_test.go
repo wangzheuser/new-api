@@ -71,15 +71,15 @@ func newContextFallbackRequest() *dto.GeneralOpenAIRequest {
 	}
 }
 
-// setupContextFallbackGinContext 使用源渠道初始化一次真实的渠道上下文。
-func setupContextFallbackGinContext(t *testing.T, source *model.Channel) *gin.Context {
+// setupContextFallbackGinContext 使用指定路由模型和源渠道初始化一次真实的渠道上下文。
+func setupContextFallbackGinContext(t *testing.T, source *model.Channel, routingModel string) *gin.Context {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	common.SetContextKey(c, constant.ContextKeyOriginalModel, "MODEL_A")
+	common.SetContextKey(c, constant.ContextKeyOriginalModel, routingModel)
 	common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
-	require.Nil(t, middleware.SetupContextForSelectedChannel(c, source, "MODEL_A"))
+	require.Nil(t, middleware.SetupContextForSelectedChannel(c, source, routingModel))
 	return c
 }
 
@@ -99,7 +99,7 @@ func TestPrepareContextFallbackSameChannelIncludesPromptTokens(t *testing.T) {
 	}
 	source := newContextFallbackChannel("source", "MODEL_A,MODEL_B", settings)
 	require.NoError(t, db.Create(source).Error)
-	c := setupContextFallbackGinContext(t, source)
+	c := setupContextFallbackGinContext(t, source, "MODEL_A")
 	request := newContextFallbackRequest()
 	info := &relaycommon.RelayInfo{
 		RequestedModelName: "MODEL_A",
@@ -123,6 +123,60 @@ func TestPrepareContextFallbackSameChannelIncludesPromptTokens(t *testing.T) {
 	assert.Equal(t, "MODEL_B", common.GetContextKeyString(c, constant.ContextKeyAttemptModel))
 }
 
+// TestPrepareContextFallbackResolvesRuleByRequestedModel 固化规则键使用客户端原始模型的语义。
+func TestPrepareContextFallbackResolvesRuleByRequestedModel(t *testing.T) {
+	tests := []struct {
+		name        string
+		ruleKey     string
+		wantApplied bool
+	}{
+		{name: "requested model rule", ruleKey: "MODEL_CLIENT", wantApplied: true},
+		{name: "routing model rule", ruleKey: "MODEL_ROUTING", wantApplied: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db := setupContextFallbackTestDB(t)
+			settings := dto.ChannelSettings{ModelContextFallbacks: map[string]dto.ModelContextFallback{
+				test.ruleKey: {
+					SourceContextWindowTokens:   1,
+					FallbackModel:               "MODEL_FALLBACK",
+					FallbackContextWindowTokens: 4096,
+					RouteMode:                   dto.ContextFallbackModeSame,
+				},
+			}}
+			source := newContextFallbackChannel("source", "MODEL_ROUTING,MODEL_FALLBACK", settings)
+			require.NoError(t, db.Create(source).Error)
+			c := setupContextFallbackGinContext(t, source, "MODEL_ROUTING")
+			request := newContextFallbackRequest()
+			request.Model = "MODEL_CLIENT"
+			info := &relaycommon.RelayInfo{
+				RequestedModelName: "MODEL_CLIENT",
+				RoutingModelName:   "MODEL_ROUTING",
+				AttemptModelName:   "MODEL_ROUTING",
+				OriginModelName:    "MODEL_ROUTING",
+				RelayMode:          relayconstant.RelayModeChatCompletions,
+				RelayFormat:        projecttypes.RelayFormatOpenAI,
+			}
+
+			_, apiErr := prepareContextFallback(c, info, request, 0)
+
+			require.Nil(t, apiErr)
+			assert.Equal(t, "MODEL_CLIENT", info.GetRequestedModelName())
+			assert.Equal(t, "MODEL_ROUTING", info.GetRoutingModelName())
+			assert.Equal(t, "MODEL_ROUTING", info.GetBillingModelName())
+			assert.Equal(t, test.wantApplied, info.IsContextFallbackActive())
+			if test.wantApplied {
+				require.NotNil(t, info.ContextFallback)
+				assert.Equal(t, "MODEL_FALLBACK", info.GetAttemptModelName())
+				assert.Equal(t, "MODEL_ROUTING", info.ContextFallback.SourceModel)
+				return
+			}
+			assert.Nil(t, info.ContextFallback)
+			assert.Equal(t, "MODEL_ROUTING", info.GetAttemptModelName())
+		})
+	}
+}
+
 func TestGetChannelContextFallbackSameChannelStaysOnSource(t *testing.T) {
 	db := setupContextFallbackTestDB(t)
 	settings := dto.ChannelSettings{ModelContextFallbacks: map[string]dto.ModelContextFallback{
@@ -137,7 +191,7 @@ func TestGetChannelContextFallbackSameChannelStaysOnSource(t *testing.T) {
 	other := newContextFallbackChannel("other", "MODEL_B", dto.ChannelSettings{})
 	require.NoError(t, db.Create(source).Error)
 	require.NoError(t, db.Create(other).Error)
-	c := setupContextFallbackGinContext(t, source)
+	c := setupContextFallbackGinContext(t, source, "MODEL_A")
 	request := newContextFallbackRequest()
 	info := &relaycommon.RelayInfo{
 		RequestedModelName: "MODEL_A",
@@ -194,7 +248,7 @@ func TestPrepareContextFallbackCrossChannelUsesTargetPrompt(t *testing.T) {
 	source.SetSetting(sourceSettings)
 	require.NoError(t, db.Model(source).Update("setting", source.Setting).Error)
 
-	c := setupContextFallbackGinContext(t, source)
+	c := setupContextFallbackGinContext(t, source, "MODEL_A")
 	request := newContextFallbackRequest()
 	info := &relaycommon.RelayInfo{
 		RequestedModelName: "MODEL_A",
@@ -232,7 +286,7 @@ func TestPrepareContextFallbackBelowThresholdKeepsSourceModel(t *testing.T) {
 	}}
 	source := newContextFallbackChannel("source", "MODEL_A,MODEL_B", settings)
 	require.NoError(t, db.Create(source).Error)
-	c := setupContextFallbackGinContext(t, source)
+	c := setupContextFallbackGinContext(t, source, "MODEL_A")
 	info := &relaycommon.RelayInfo{
 		RequestedModelName: "MODEL_A",
 		RoutingModelName:   "MODEL_A",
@@ -265,7 +319,7 @@ func TestPrepareContextFallbackPassThroughRecordsBypass(t *testing.T) {
 	}
 	source := newContextFallbackChannel("source", "MODEL_A,MODEL_B", settings)
 	require.NoError(t, db.Create(source).Error)
-	c := setupContextFallbackGinContext(t, source)
+	c := setupContextFallbackGinContext(t, source, "MODEL_A")
 	info := &relaycommon.RelayInfo{
 		RequestedModelName: "MODEL_A",
 		RoutingModelName:   "MODEL_A",
@@ -298,7 +352,7 @@ func TestPrepareContextFallbackRejectsOversizedTarget(t *testing.T) {
 	}
 	source := newContextFallbackChannel("source", "MODEL_A,MODEL_B", settings)
 	require.NoError(t, db.Create(source).Error)
-	c := setupContextFallbackGinContext(t, source)
+	c := setupContextFallbackGinContext(t, source, "MODEL_A")
 	info := &relaycommon.RelayInfo{
 		RequestedModelName: "MODEL_A",
 		RoutingModelName:   "MODEL_A",
