@@ -18,6 +18,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -37,21 +38,28 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 
-import { probeChannelNativeProtocol } from '../api'
+import { probeChannelProtocol } from '../api'
 import {
-  applyNativeProtocolProbeResults,
-  createNativeProtocolProbeBatch,
-  isNativeProtocolProbeBatchComplete,
-  nativeProtocolProbeKey,
+  applyProtocolProbeResults,
+  createProtocolProbeBatch,
+  isProtocolProbeBatchComplete,
   parseModelOverridesDraft,
   promoteCommonModelProtocolCapabilities,
+  protocolCapabilityState,
+  protocolProbeKey,
+  PROTOCOL_PROBE_CASES,
   summarizeModelProtocolOverrides,
+  supportsNormalizedProtocol,
   TEXT_PROTOCOLS,
-  type NativeProtocolProbeBatch,
-  type NativeProtocolProbeResultMap,
+  updateProtocolCapabilityState,
+  type ProtocolCapabilityState,
+  type ProtocolProbeBatch,
+  type ProtocolProbeCase,
+  type ProtocolProbeResultMap,
+  type ProtocolRequestMode,
 } from '../lib/protocol-policy'
 import type {
-  ChannelNativeProbeResponse,
+  ChannelProtocolProbeResponse,
   ChannelProtocolPolicy,
   ProtocolCapability,
   TextEndpointType,
@@ -101,7 +109,7 @@ function capabilityFor(
 }
 
 function classificationTone(
-  classification: ChannelNativeProbeResponse['classification']
+  classification: ChannelProtocolProbeResponse['classification']
 ) {
   switch (classification) {
     case 'confirmed':
@@ -110,6 +118,17 @@ function classificationTone(
       return 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300'
     default:
       return 'border-destructive/40 bg-destructive/10 text-destructive'
+  }
+}
+
+function capabilityStateTone(state: ProtocolCapabilityState) {
+  switch (state) {
+    case 'native':
+      return 'border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300'
+    case 'normalized':
+      return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+    default:
+      return 'border-border bg-muted/40 text-muted-foreground'
   }
 }
 
@@ -128,19 +147,25 @@ export function ProtocolPolicyEditor({
     anthropic: t('Claude Messages'),
     gemini: t('Gemini Generate Content'),
   }
+  const probeCaseLabels: Record<ProtocolProbeCase, string> = {
+    basic: t('Basic'),
+    assistant_history: t('Assistant history'),
+    tool_cycle: t('Tool cycle'),
+    reasoning_history: t('Reasoning history'),
+    invalid_tool_id: t('Invalid tool ID'),
+    tool_id_collision: t('Tool ID collision'),
+  }
   const policy = useMemo(() => parsePolicy(value), [value])
   const policyEditable = channelType === 1
   const probeSupported = channelType === 1 || channelType === 58
   const [selectedModels, setSelectedModels] = useState<string[]>([])
-  const [probeResults, setProbeResults] =
-    useState<NativeProtocolProbeResultMap>({})
-  const [probeBatch, setProbeBatch] = useState<NativeProtocolProbeBatch | null>(
-    null
-  )
+  const [probeResults, setProbeResults] = useState<ProtocolProbeResultMap>({})
+  const [probeBatch, setProbeBatch] = useState<ProtocolProbeBatch | null>(null)
   const [probeProgress, setProbeProgress] = useState({ completed: 0, total: 0 })
   const [isProbing, setIsProbing] = useState(false)
   const [overridesDraft, setOverridesDraft] = useState('{}')
   const [defaultProtocolsOpen, setDefaultProtocolsOpen] = useState(false)
+  const [fullProbeConfirmOpen, setFullProbeConfirmOpen] = useState(false)
   const stopRequestedRef = useRef(false)
 
   useEffect(() => {
@@ -153,13 +178,18 @@ export function ProtocolPolicyEditor({
 
   const updateCapability = (
     endpointType: TextEndpointType,
-    mode: keyof ProtocolCapability,
-    checked: boolean
+    requestMode: ProtocolRequestMode,
+    state: ProtocolCapabilityState
   ) => {
     const nextPolicy = structuredClone(policy ?? createDefaultPolicy())
     const capability = capabilityFor(nextPolicy, endpointType)
-    const nextCapability = { ...capability, [mode]: checked }
-    if (!nextCapability.non_stream && !nextCapability.stream) {
+    const nextCapability = updateProtocolCapabilityState(
+      capability,
+      endpointType,
+      requestMode,
+      state
+    )
+    if (!nextCapability) {
       delete nextPolicy.native[endpointType]
     } else {
       nextPolicy.native[endpointType] = nextCapability
@@ -198,14 +228,20 @@ export function ProtocolPolicyEditor({
     })
   }
 
-  const runNativeProbe = async () => {
+  const runProtocolProbe = async (capabilityLevel: 'endpoint' | 'semantic') => {
     if (!channelId || selectedModels.length === 0) return
-    const batch = createNativeProtocolProbeBatch(selectedModels)
+    const batch = createProtocolProbeBatch(selectedModels, capabilityLevel)
     const tasks = batch.models.flatMap((model) =>
-      TEXT_PROTOCOLS.flatMap((endpointType) => [
-        { model, endpointType, stream: false },
-        { model, endpointType, stream: true },
-      ])
+      TEXT_PROTOCOLS.flatMap((endpointType) =>
+        [false, true].flatMap((stream) =>
+          batch.probeCases.map((probeCase) => ({
+            model,
+            endpointType,
+            stream,
+            probeCase,
+          }))
+        )
+      )
     )
     stopRequestedRef.current = false
     setProbeResults({})
@@ -221,18 +257,20 @@ export function ProtocolPolicyEditor({
         const task = tasks[index]
         if (!task) return
         try {
-          const result = await probeChannelNativeProtocol(channelId, {
+          const result = await probeChannelProtocol(channelId, {
             model: task.model,
             endpoint_type: task.endpointType,
             stream: task.stream,
             probe_mode: 'native',
+            probe_case: task.probeCase,
           })
           setProbeResults((current) => ({
             ...current,
-            [nativeProtocolProbeKey(
+            [protocolProbeKey(
               task.model,
               task.endpointType,
-              task.stream
+              task.stream,
+              task.probeCase
             )]: result,
           }))
         } catch (error) {
@@ -240,10 +278,11 @@ export function ProtocolPolicyEditor({
             error instanceof Error ? error.message : t('Probe failed')
           setProbeResults((current) => ({
             ...current,
-            [nativeProtocolProbeKey(
+            [protocolProbeKey(
               task.model,
               task.endpointType,
-              task.stream
+              task.stream,
+              task.probeCase
             )]: {
               success: false,
               message,
@@ -252,6 +291,11 @@ export function ProtocolPolicyEditor({
               stream: task.stream,
               http_status: 0,
               classification: 'transport_error',
+              probe_case: task.probeCase,
+              capability_level:
+                task.probeCase === 'basic' ? 'endpoint' : 'semantic',
+              effective_route_mode: 'native',
+              recommended_mode: 'unsupported',
             },
           }))
         } finally {
@@ -290,7 +334,7 @@ export function ProtocolPolicyEditor({
       return
     }
 
-    const overrides = applyNativeProtocolProbeResults(
+    const overrides = applyProtocolProbeResults(
       parsedDraft.value,
       probeBatch,
       probeResults
@@ -304,7 +348,7 @@ export function ProtocolPolicyEditor({
   }
 
   const completedResults = Object.keys(probeResults).length
-  const probeBatchComplete = isNativeProtocolProbeBatchComplete(
+  const probeBatchComplete = isProtocolProbeBatchComplete(
     probeBatch,
     probeResults
   )
@@ -330,10 +374,12 @@ export function ProtocolPolicyEditor({
       const promotedCapability =
         commonCapabilitiesPromotion.native[endpointType]
       return (
-        Boolean(currentCapability?.non_stream) !==
-          Boolean(promotedCapability?.non_stream) ||
-        Boolean(currentCapability?.stream) !==
-          Boolean(promotedCapability?.stream)
+        protocolCapabilityState(currentCapability, 'non_stream') !==
+          protocolCapabilityState(promotedCapability, 'non_stream') ||
+        protocolCapabilityState(currentCapability, 'stream') !==
+          protocolCapabilityState(promotedCapability, 'stream') ||
+        currentCapability?.reasoning_history !==
+          promotedCapability?.reasoning_history
       )
     }) ||
       Object.keys(commonCapabilitiesPromotion.modelOverrides).length !==
@@ -342,7 +388,14 @@ export function ProtocolPolicyEditor({
   const defaultProtocolLabels = TEXT_PROTOCOLS.filter((endpointType) => {
     const capability = policy?.native[endpointType]
     return capability?.non_stream || capability?.stream
-  }).map((endpointType) => protocolLabels[endpointType])
+  }).map((endpointType) => {
+    const capability = policy?.native[endpointType]
+    const mode =
+      capability?.mode === 'normalized'
+        ? t('Compatible normalization')
+        : t('Native passthrough')
+    return `${protocolLabels[endpointType]} · ${mode}`
+  })
 
   const promoteCommonCapabilities = () => {
     if (!policy || !commonCapabilitiesPromotion) return
@@ -395,10 +448,15 @@ export function ProtocolPolicyEditor({
                         'This summary shows model overrides and does not change channel defaults'
                       )}
                     </p>
+                    <p className='text-muted-foreground mt-1 text-xs'>
+                      {t(
+                        'Coverage means an explicit configuration exists; it does not prove semantic compatibility'
+                      )}
+                    </p>
                   </div>
                   <div className='overflow-hidden rounded-md border'>
                     <div className='bg-muted/40 grid grid-cols-[minmax(140px,1fr)_110px_110px] gap-2 px-3 py-2 text-xs font-medium'>
-                      <span>{t('Native protocol')}</span>
+                      <span>{t('Protocol capability')}</span>
                       <span>{t('Normal')}</span>
                       <span>{t('Streaming')}</span>
                     </div>
@@ -413,23 +471,23 @@ export function ProtocolPolicyEditor({
                           <span className='text-sm font-medium'>
                             {protocolLabels[protocol]}
                           </span>
-                          <div className='flex items-center gap-2'>
-                            <Checkbox
-                              checked={counts.nonStream === total}
-                              disabled
-                            />
-                            <span className='text-muted-foreground text-xs'>
-                              {counts.nonStream}/{total}
-                            </span>
+                          <div className='flex flex-wrap items-center gap-1'>
+                            <Badge variant='outline' className='text-[10px]'>
+                              {t('Native')} {counts.nonStream.native}/{total}
+                            </Badge>
+                            <Badge variant='outline' className='text-[10px]'>
+                              {t('Normalized')} {counts.nonStream.normalized}/
+                              {total}
+                            </Badge>
                           </div>
-                          <div className='flex items-center gap-2'>
-                            <Checkbox
-                              checked={counts.stream === total}
-                              disabled
-                            />
-                            <span className='text-muted-foreground text-xs'>
-                              {counts.stream}/{total}
-                            </span>
+                          <div className='flex flex-wrap items-center gap-1'>
+                            <Badge variant='outline' className='text-[10px]'>
+                              {t('Native')} {counts.stream.native}/{total}
+                            </Badge>
+                            <Badge variant='outline' className='text-[10px]'>
+                              {t('Normalized')} {counts.stream.normalized}/
+                              {total}
+                            </Badge>
                           </div>
                         </div>
                       )
@@ -484,8 +542,8 @@ export function ProtocolPolicyEditor({
                   </div>
                 </CollapsibleTrigger>
                 <CollapsibleContent className='border-t'>
-                  <div className='bg-muted/40 grid grid-cols-[minmax(140px,1fr)_100px_100px] gap-2 px-3 py-2 text-xs font-medium'>
-                    <span>{t('Native protocol')}</span>
+                  <div className='bg-muted/40 grid grid-cols-[minmax(140px,1fr)_150px_150px] gap-2 px-3 py-2 text-xs font-medium'>
+                    <span>{t('Protocol capability')}</span>
                     <span>{t('Normal')}</span>
                     <span>{t('Streaming')}</span>
                   </div>
@@ -494,42 +552,93 @@ export function ProtocolPolicyEditor({
                     return (
                       <div
                         key={protocol}
-                        className='grid grid-cols-[minmax(140px,1fr)_100px_100px] items-center gap-2 border-t px-3 py-2'
+                        className='grid grid-cols-[minmax(140px,1fr)_150px_150px] items-center gap-2 border-t px-3 py-2'
                       >
                         <span className='text-sm font-medium'>
                           {protocolLabels[protocol]}
                         </span>
-                        <Checkbox
-                          checked={capability.non_stream}
+                        <Select
+                          value={protocolCapabilityState(
+                            capability,
+                            'non_stream'
+                          )}
                           disabled={disabled}
-                          onCheckedChange={(checked) =>
+                          onValueChange={(state) =>
                             updateCapability(
                               protocol,
                               'non_stream',
-                              checked === true
+                              state as ProtocolCapabilityState
                             )
                           }
-                        />
-                        <Checkbox
-                          checked={capability.stream}
+                        >
+                          <SelectTrigger className='h-8'>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value='unavailable'>
+                              {t('Unavailable')}
+                            </SelectItem>
+                            <SelectItem value='native'>
+                              {t('Native passthrough')}
+                            </SelectItem>
+                            <SelectItem
+                              value='normalized'
+                              disabled={!supportsNormalizedProtocol(protocol)}
+                            >
+                              {t('Compatible normalization')}
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <Select
+                          value={protocolCapabilityState(capability, 'stream')}
                           disabled={disabled}
-                          onCheckedChange={(checked) =>
+                          onValueChange={(state) =>
                             updateCapability(
                               protocol,
                               'stream',
-                              checked === true
+                              state as ProtocolCapabilityState
                             )
                           }
-                        />
+                        >
+                          <SelectTrigger className='h-8'>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value='unavailable'>
+                              {t('Unavailable')}
+                            </SelectItem>
+                            <SelectItem value='native'>
+                              {t('Native passthrough')}
+                            </SelectItem>
+                            <SelectItem
+                              value='normalized'
+                              disabled={!supportsNormalizedProtocol(protocol)}
+                            >
+                              {t('Compatible normalization')}
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
                       </div>
                     )
                   })}
+                  <div className='text-muted-foreground border-t px-3 py-2 text-xs'>
+                    {t(
+                      'Normal and streaming availability are independent; one protocol shares the selected handling mode'
+                    )}
+                  </div>
                 </CollapsibleContent>
               </Collapsible>
 
               <div className='grid gap-4 md:grid-cols-2'>
-                <div className='flex items-center justify-between rounded-md border px-3 py-2'>
-                  <Label>{t('Automatic protocol conversion')}</Label>
+                <div className='flex items-start justify-between gap-3 rounded-md border px-3 py-2'>
+                  <div>
+                    <Label>{t('Automatic protocol conversion')}</Label>
+                    <p className='text-muted-foreground mt-1 text-xs'>
+                      {t(
+                        'Used only when the requested client protocol is unavailable'
+                      )}
+                    </p>
+                  </div>
                   <Switch
                     checked={policy.auto_convert}
                     disabled={disabled}
@@ -557,6 +666,11 @@ export function ProtocolPolicyEditor({
                       <SelectItem value='fair'>{t('Good and fair')}</SelectItem>
                     </SelectContent>
                   </Select>
+                  <p className='text-muted-foreground text-xs'>
+                    {t(
+                      'This limit applies to cross-protocol conversion, not compatible normalization'
+                    )}
+                  </p>
                 </div>
               </div>
 
@@ -590,14 +704,19 @@ export function ProtocolPolicyEditor({
         <div className='space-y-4 border-t pt-4'>
           <div className='flex flex-wrap items-start justify-between gap-3'>
             <div>
-              <Label>{t('Batch native protocol probe')}</Label>
+              <Label>{t('Protocol compatibility probe')}</Label>
+              <p className='text-muted-foreground mt-1 text-xs'>
+                {t(
+                  'Endpoint reachability is separate from full semantic compatibility'
+                )}
+              </p>
               <p className='text-muted-foreground mt-1 text-xs'>
                 {t(
                   'Tests four text protocols in normal and streaming mode with concurrency 2'
                 )}
               </p>
             </div>
-            <div className='flex gap-2'>
+            <div className='flex flex-wrap gap-2'>
               {isProbing ? (
                 <Button
                   type='button'
@@ -611,24 +730,43 @@ export function ProtocolPolicyEditor({
                   {t('Stop')}
                 </Button>
               ) : (
-                <Button
-                  type='button'
-                  size='sm'
-                  disabled={
-                    disabled || !channelId || selectedModels.length === 0
-                  }
-                  onClick={() => void runNativeProbe()}
-                >
-                  <Play className='mr-2 h-3.5 w-3.5' />
-                  {t('Run probe')}
-                </Button>
+                <>
+                  <Button
+                    type='button'
+                    size='sm'
+                    variant='outline'
+                    disabled={
+                      disabled || !channelId || selectedModels.length === 0
+                    }
+                    onClick={() => void runProtocolProbe('endpoint')}
+                  >
+                    <Play className='mr-2 h-3.5 w-3.5' />
+                    {t('Check endpoint reachability')}
+                  </Button>
+                  <Button
+                    type='button'
+                    size='sm'
+                    disabled={
+                      disabled || !channelId || selectedModels.length === 0
+                    }
+                    onClick={() => setFullProbeConfirmOpen(true)}
+                  >
+                    <Play className='mr-2 h-3.5 w-3.5' />
+                    {t('Run full compatibility probe')}
+                  </Button>
+                </>
               )}
               {policyEditable && (
                 <Button
                   type='button'
                   size='sm'
                   variant='outline'
-                  disabled={disabled || isProbing || !probeBatchComplete}
+                  disabled={
+                    disabled ||
+                    isProbing ||
+                    !probeBatchComplete ||
+                    probeBatch?.capabilityLevel !== 'semantic'
+                  }
                   onClick={applyProbeResults}
                 >
                   <Wand2 className='mr-2 h-3.5 w-3.5' />
@@ -640,9 +778,34 @@ export function ProtocolPolicyEditor({
 
           {!channelId && (
             <div className='text-muted-foreground rounded-md border border-dashed px-3 py-2 text-xs'>
-              {t('Save the channel before running a native protocol probe')}
+              {t('Save the channel before running a protocol probe')}
             </div>
           )}
+
+          <div className='grid gap-2 text-xs md:grid-cols-3'>
+            <div className='bg-muted/30 rounded-md border px-3 py-2'>
+              <div className='font-medium'>{t('Endpoint reachable')}</div>
+              <p className='text-muted-foreground mt-1'>
+                {t('A basic request reached the selected upstream endpoint')}
+              </p>
+            </div>
+            <div className='bg-muted/30 rounded-md border px-3 py-2'>
+              <div className='font-medium'>{t('Native passthrough')}</div>
+              <p className='text-muted-foreground mt-1'>
+                {t(
+                  'The request keeps its original protocol and message semantics'
+                )}
+              </p>
+            </div>
+            <div className='bg-muted/30 rounded-md border px-3 py-2'>
+              <div className='font-medium'>{t('Compatible normalization')}</div>
+              <p className='text-muted-foreground mt-1'>
+                {t(
+                  'The request keeps its protocol and path while known structural issues are corrected'
+                )}
+              </p>
+            </div>
+          </div>
 
           <div className='max-h-40 space-y-1 overflow-y-auto rounded-md border p-2'>
             {models.length === 0 ? (
@@ -682,14 +845,6 @@ export function ProtocolPolicyEditor({
                   <div className='truncate text-sm font-medium'>{model}</div>
                   <div className='grid gap-2 sm:grid-cols-2'>
                     {TEXT_PROTOCOLS.map((protocol) => {
-                      const normal =
-                        probeResults[
-                          nativeProtocolProbeKey(model, protocol, false)
-                        ]
-                      const stream =
-                        probeResults[
-                          nativeProtocolProbeKey(model, protocol, true)
-                        ]
                       return (
                         <div
                           key={protocol}
@@ -698,34 +853,109 @@ export function ProtocolPolicyEditor({
                           <div className='mb-1.5 font-medium'>
                             {protocolLabels[protocol]}
                           </div>
-                          <div className='flex flex-wrap gap-1.5'>
-                            {(
-                              [
-                                ['N', normal],
-                                ['S', stream],
-                              ] as const
-                            ).map(([mode, typedResult]) => {
-                              if (!typedResult) {
-                                return (
-                                  <Badge key={String(mode)} variant='outline'>
-                                    {mode}: —
-                                  </Badge>
-                                )
-                              }
-                              return (
-                                <Badge
-                                  key={String(mode)}
-                                  variant='outline'
-                                  title={typedResult.message}
-                                  className={classificationTone(
-                                    typedResult.classification
-                                  )}
-                                >
-                                  {mode}: {typedResult.classification}
-                                </Badge>
+                          {([false, true] as const).map((stream) => {
+                            const modeLabel = stream
+                              ? t('Streaming')
+                              : t('Normal')
+                            const caseResults = (
+                              probeBatch?.probeCases ?? PROTOCOL_PROBE_CASES
+                            ).map((probeCase) => ({
+                              probeCase,
+                              result:
+                                probeResults[
+                                  protocolProbeKey(
+                                    model,
+                                    protocol,
+                                    stream,
+                                    probeCase
+                                  )
+                                ],
+                            }))
+                            const semanticResults = caseResults
+                              .filter(({ probeCase }) => probeCase !== 'basic')
+                              .map(({ result }) => result)
+                            const recommendations = new Set(
+                              semanticResults.map(
+                                (result) => result?.recommended_mode
                               )
-                            })}
-                          </div>
+                            )
+                            let recommendation:
+                              | 'native'
+                              | 'normalized'
+                              | undefined
+                            if (
+                              semanticResults.length > 0 &&
+                              semanticResults.every(
+                                (result) =>
+                                  result?.classification === 'confirmed' &&
+                                  result.capability_level === 'semantic' &&
+                                  result.recommended_mode !== 'unsupported'
+                              ) &&
+                              recommendations.size === 1
+                            ) {
+                              const onlyRecommendation =
+                                semanticResults[0]?.recommended_mode
+                              if (
+                                onlyRecommendation === 'native' ||
+                                onlyRecommendation === 'normalized'
+                              ) {
+                                recommendation = onlyRecommendation
+                              }
+                            }
+                            const state: ProtocolCapabilityState =
+                              recommendation === 'native' ||
+                              recommendation === 'normalized'
+                                ? recommendation
+                                : 'unavailable'
+                            let stateLabel = t('Unsupported')
+                            if (state === 'normalized') {
+                              stateLabel = t('Normalized')
+                            } else if (state === 'native') {
+                              stateLabel = t('Native')
+                            }
+                            return (
+                              <div
+                                key={String(stream)}
+                                className='mt-2 border-t pt-2 first:mt-0 first:border-t-0 first:pt-0'
+                              >
+                                <div className='mb-1 flex items-center justify-between gap-2'>
+                                  <span className='text-muted-foreground'>
+                                    {modeLabel}
+                                  </span>
+                                  {probeBatch?.capabilityLevel ===
+                                    'semantic' && (
+                                    <Badge
+                                      variant='outline'
+                                      className={capabilityStateTone(state)}
+                                    >
+                                      {stateLabel}
+                                    </Badge>
+                                  )}
+                                </div>
+                                <div className='flex flex-wrap gap-1'>
+                                  {caseResults.map(
+                                    ({ probeCase, result: typedResult }) => (
+                                      <Badge
+                                        key={probeCase}
+                                        variant='outline'
+                                        title={typedResult?.message}
+                                        className={
+                                          typedResult
+                                            ? classificationTone(
+                                                typedResult.classification
+                                              )
+                                            : undefined
+                                        }
+                                      >
+                                        {probeCaseLabels[probeCase]}:{' '}
+                                        {typedResult?.classification ?? '—'}
+                                      </Badge>
+                                    )
+                                  )}
+                                </div>
+                              </div>
+                            )
+                          })}
                         </div>
                       )
                     })}
@@ -736,6 +966,20 @@ export function ProtocolPolicyEditor({
           )}
         </div>
       )}
+
+      <ConfirmDialog
+        open={fullProbeConfirmOpen}
+        onOpenChange={setFullProbeConfirmOpen}
+        title={t('Run full compatibility probe?')}
+        desc={t(
+          'This administrator-only probe sends real upstream requests for every selected model, protocol, mode, and semantic scenario. It may incur a small usage charge.'
+        )}
+        confirmText={t('Run full probe')}
+        handleConfirm={() => {
+          setFullProbeConfirmOpen(false)
+          void runProtocolProbe('semantic')
+        }}
+      />
 
       {!policyEditable && !probeSupported && (
         <div className='text-muted-foreground flex items-center gap-2 text-sm'>

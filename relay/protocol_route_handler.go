@@ -155,18 +155,36 @@ func executeNativeTextRoute(c *gin.Context, info *relaycommon.RelayInfo, adaptor
 
 // prepareTextRouteRequest applies shared channel body controls and creates a replay-safe JSON body.
 func prepareTextRouteRequest(c *gin.Context, info *relaycommon.RelayInfo, request any) (io.Reader, io.Closer, *types.NewAPIError) {
-	jsonData, err := common.Marshal(request)
-	if err != nil {
-		return nil, nil, types.NewError(err, types.ErrorCodeJsonMarshalFailed, types.ErrOptionWithSkipRetry())
+	jsonData, apiError := PrepareTextRouteRequestBody(c, info, request)
+	if apiError != nil {
+		return nil, nil, apiError
 	}
-	jsonData, err = relaycommon.RemoveDisabledFields(jsonData, info.ChannelOtherSettings, false)
+	body, size, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 	if err != nil {
 		return nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+	}
+	info.UpstreamRequestBodySize = size
+	return body, closer, nil
+}
+
+// PrepareTextRouteRequestBody applies the final-wire controls shared by live relays and semantic channel probes.
+func PrepareTextRouteRequestBody(c *gin.Context, info *relaycommon.RelayInfo, request any) ([]byte, *types.NewAPIError) {
+	if info == nil {
+		return nil, types.NewError(fmt.Errorf("relay info is required"), types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+	}
+	jsonData, err := common.Marshal(request)
+	if err != nil {
+		return nil, types.NewError(err, types.ErrorCodeJsonMarshalFailed, types.ErrOptionWithSkipRetry())
+	}
+	channelOtherSettings := info.ChannelOtherSettings
+	jsonData, err = relaycommon.RemoveDisabledFields(jsonData, channelOtherSettings, false)
+	if err != nil {
+		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
 	if len(info.ParamOverride) > 0 {
 		jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
 		if err != nil {
-			return nil, nil, newAPIErrorFromParamOverride(err)
+			return nil, newAPIErrorFromParamOverride(err)
 		}
 	}
 	if info.ChannelRoutePlan != nil && info.ChannelRoutePlan.RequestNormalizer != "" {
@@ -200,24 +218,19 @@ func prepareTextRouteRequest(c *gin.Context, info *relaycommon.RelayInfo, reques
 			)
 		}
 		if normalizeErr != nil {
-			return nil, nil, types.NewError(normalizeErr, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			return nil, types.NewError(normalizeErr, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 		if validateErr := relaynormalize.ValidateRequestByIDWithOptions(
 			info.ChannelRoutePlan.RequestNormalizer,
 			normalized,
 			info.ChannelRoutePlan.NormalizationOptions,
 		); validateErr != nil {
-			return nil, nil, types.NewError(validateErr, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			return nil, types.NewError(validateErr, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 		jsonData = normalized
 	}
 	logger.LogDebug(c, "planned text request body: %s", jsonData)
-	body, size, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
-	if err != nil {
-		return nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-	}
-	info.UpstreamRequestBodySize = size
-	return body, closer, nil
+	return jsonData, nil
 }
 
 func handleConvertedTextResponse(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {

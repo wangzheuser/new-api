@@ -17,8 +17,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type {
-  ChannelNativeProbeResponse,
+  ChannelProtocolProbeResponse,
   ModelProtocolProfile,
+  ProtocolCapability,
   TextEndpointType,
 } from '../types'
 
@@ -29,14 +30,29 @@ export const TEXT_PROTOCOLS: readonly TextEndpointType[] = [
   'gemini',
 ]
 
-export type NativeProtocolProbeResultMap = Record<
+export const PROTOCOL_PROBE_CASES = [
+  'basic',
+  'assistant_history',
+  'tool_cycle',
+  'reasoning_history',
+  'invalid_tool_id',
+  'tool_id_collision',
+] as const
+
+export type ProtocolProbeCase = (typeof PROTOCOL_PROBE_CASES)[number]
+export type ProtocolCapabilityState = 'unavailable' | 'native' | 'normalized'
+export type ProtocolRequestMode = 'non_stream' | 'stream'
+
+export type ProtocolProbeResultMap = Record<
   string,
-  ChannelNativeProbeResponse
+  ChannelProtocolProbeResponse
 >
 
-export type NativeProtocolProbeBatch = {
+export type ProtocolProbeBatch = {
   models: readonly string[]
+  probeCases: readonly ProtocolProbeCase[]
   expectedResultKeys: readonly string[]
+  capabilityLevel: 'endpoint' | 'semantic'
   stopped: boolean
 }
 
@@ -50,14 +66,19 @@ export type ModelOverridesDraftParseResult =
       error: 'invalid_json' | 'not_object'
     }
 
+type ProtocolModeCount = {
+  native: number
+  normalized: number
+}
+
 export type ModelProtocolCoverageSummary = {
   totalModels: number
   coveredModels: number
   capabilities: Record<
     TextEndpointType,
     {
-      nonStream: number
-      stream: number
+      nonStream: ProtocolModeCount
+      stream: ProtocolModeCount
     }
   >
 }
@@ -68,8 +89,8 @@ export type ModelProtocolPromotion = {
 }
 
 /**
- * Read a model's native capability object without trusting an editable JSON
- * draft to already match the TypeScript type.
+ * Read a model's capability object without trusting an editable JSON draft to
+ * already match the TypeScript type.
  */
 function modelNativeFor(
   overrides: Record<string, ModelProtocolProfile>,
@@ -87,44 +108,115 @@ function modelNativeFor(
 }
 
 /**
- * Build the stable key used to associate one probe response with its model,
- * protocol and request mode.
+ * Return the backward-compatible handling mode of one enabled capability.
  */
-export function nativeProtocolProbeKey(
-  model: string,
-  endpointType: TextEndpointType,
-  stream: boolean
-): string {
-  return `${model}\u0000${endpointType}\u0000${stream ? 'stream' : 'normal'}`
+export function effectiveProtocolCapabilityMode(
+  capability?: ProtocolCapability
+): 'native' | 'normalized' {
+  return capability?.mode === 'normalized' ? 'normalized' : 'native'
 }
 
 /**
- * Capture the immutable model and task scope for one native protocol probe.
+ * Return the three-state value displayed for one normal or streaming cell.
  */
-export function createNativeProtocolProbeBatch(
-  models: readonly string[]
-): NativeProtocolProbeBatch {
+export function protocolCapabilityState(
+  capability: ProtocolCapability | undefined,
+  requestMode: ProtocolRequestMode
+): ProtocolCapabilityState {
+  if (!capability?.[requestMode]) return 'unavailable'
+  return effectiveProtocolCapabilityMode(capability)
+}
+
+/**
+ * Report whether the backend has a final-wire normalizer for this endpoint.
+ */
+export function supportsNormalizedProtocol(
+  endpointType: TextEndpointType
+): boolean {
+  return endpointType === 'anthropic' || endpointType === 'openai-response'
+}
+
+/**
+ * Update one three-state cell while preserving the backend's shared mode field.
+ */
+export function updateProtocolCapabilityState(
+  capability: ProtocolCapability | undefined,
+  endpointType: TextEndpointType,
+  requestMode: ProtocolRequestMode,
+  state: ProtocolCapabilityState
+): ProtocolCapability | null {
+  const nextCapability: ProtocolCapability = {
+    non_stream: capability?.non_stream === true,
+    stream: capability?.stream === true,
+  }
+  nextCapability[requestMode] = state !== 'unavailable'
+
+  if (!nextCapability.non_stream && !nextCapability.stream) {
+    return null
+  }
+
+  const requestedMode =
+    state === 'unavailable'
+      ? effectiveProtocolCapabilityMode(capability)
+      : state
+  if (requestedMode === 'normalized') {
+    nextCapability.mode = 'normalized'
+    if (endpointType === 'anthropic') {
+      nextCapability.reasoning_history =
+        capability?.reasoning_history === 'preserve' ? 'preserve' : 'strip'
+    }
+  }
+  return nextCapability
+}
+
+/**
+ * Build the stable key associating a result with its model, protocol, request
+ * mode, and scenario.
+ */
+export function protocolProbeKey(
+  model: string,
+  endpointType: TextEndpointType,
+  stream: boolean,
+  probeCase: ProtocolProbeCase
+): string {
+  return `${model}\u0000${endpointType}\u0000${stream ? 'stream' : 'normal'}\u0000${probeCase}`
+}
+
+/**
+ * Capture the immutable scope for one endpoint-only or full semantic batch.
+ */
+export function createProtocolProbeBatch(
+  models: readonly string[],
+  capabilityLevel: 'endpoint' | 'semantic'
+): ProtocolProbeBatch {
   const batchModels = [...models]
+  const probeCases: readonly ProtocolProbeCase[] =
+    capabilityLevel === 'semantic' ? PROTOCOL_PROBE_CASES : ['basic']
   const expectedResultKeys = batchModels.flatMap((model) =>
-    TEXT_PROTOCOLS.flatMap((endpointType) => [
-      nativeProtocolProbeKey(model, endpointType, false),
-      nativeProtocolProbeKey(model, endpointType, true),
-    ])
+    TEXT_PROTOCOLS.flatMap((endpointType) =>
+      [false, true].flatMap((stream) =>
+        probeCases.map((probeCase) =>
+          protocolProbeKey(model, endpointType, stream, probeCase)
+        )
+      )
+    )
   )
 
   return {
     models: batchModels,
+    probeCases,
     expectedResultKeys,
+    capabilityLevel,
     stopped: false,
   }
 }
 
 /**
- * Determine whether every task in a non-stopped probe batch has a response.
+ * Determine whether every task in a non-stopped batch has a response.
  */
-export function isNativeProtocolProbeBatchComplete(
-  batch: NativeProtocolProbeBatch | null,
-  results: NativeProtocolProbeResultMap
+export function isProtocolProbeBatchComplete(
+  batch: ProtocolProbeBatch | null,
+  results: ProtocolProbeResultMap
 ): boolean {
   if (!batch || batch.stopped || batch.expectedResultKeys.length === 0) {
     return false
@@ -161,7 +253,8 @@ export function parseModelOverridesDraft(
 }
 
 /**
- * Summarize protocol support declared by model overrides for channel models.
+ * Count native and normalized declarations without treating coverage as a
+ * semantic compatibility claim.
  */
 export function summarizeModelProtocolOverrides(
   models: readonly string[],
@@ -172,20 +265,26 @@ export function summarizeModelProtocolOverrides(
     (model) => modelNativeFor(overrides, model) !== null
   )
   const capabilities = Object.fromEntries(
-    TEXT_PROTOCOLS.map((endpointType) => [
-      endpointType,
-      {
-        nonStream: coveredModels.filter(
-          (model) =>
-            modelNativeFor(overrides, model)?.[endpointType]?.non_stream ===
-            true
-        ).length,
-        stream: coveredModels.filter(
-          (model) =>
-            modelNativeFor(overrides, model)?.[endpointType]?.stream === true
-        ).length,
-      },
-    ])
+    TEXT_PROTOCOLS.map((endpointType) => {
+      const countMode = (requestMode: ProtocolRequestMode) => {
+        const counts: ProtocolModeCount = { native: 0, normalized: 0 }
+        for (const model of coveredModels) {
+          const capability = modelNativeFor(overrides, model)?.[endpointType]
+          const state = protocolCapabilityState(capability, requestMode)
+          if (state === 'native' || state === 'normalized') {
+            counts[state] += 1
+          }
+        }
+        return counts
+      }
+      return [
+        endpointType,
+        {
+          nonStream: countMode('non_stream'),
+          stream: countMode('stream'),
+        },
+      ]
+    })
   ) as ModelProtocolCoverageSummary['capabilities']
 
   return {
@@ -196,8 +295,46 @@ export function summarizeModelProtocolOverrides(
 }
 
 /**
- * Promote the common capabilities of fully covered channel models to the
- * channel default and remove overrides that become identical to that default.
+ * Clone a capability in its canonical backward-compatible JSON form.
+ */
+function cloneProtocolCapability(
+  capability: ProtocolCapability,
+  nonStream: boolean,
+  stream: boolean
+): ProtocolCapability {
+  const cloned: ProtocolCapability = {
+    non_stream: nonStream,
+    stream,
+  }
+  if (effectiveProtocolCapabilityMode(capability) === 'normalized') {
+    cloned.mode = 'normalized'
+    if (capability.reasoning_history) {
+      cloned.reasoning_history = capability.reasoning_history
+    }
+  }
+  return cloned
+}
+
+/**
+ * Compare all persisted fields that affect one capability's runtime behavior.
+ */
+function protocolCapabilitiesEqual(
+  left: ProtocolCapability | undefined,
+  right: ProtocolCapability | undefined
+): boolean {
+  if (!left || !right) return !left && !right
+  return (
+    left.non_stream === right.non_stream &&
+    left.stream === right.stream &&
+    effectiveProtocolCapabilityMode(left) ===
+      effectiveProtocolCapabilityMode(right) &&
+    (left.reasoning_history ?? '') === (right.reasoning_history ?? '')
+  )
+}
+
+/**
+ * Promote common capabilities only when their handling modes are identical,
+ * then remove model overrides that become exactly redundant.
  */
 export function promoteCommonModelProtocolCapabilities(
   models: readonly string[],
@@ -213,16 +350,35 @@ export function promoteCommonModelProtocolCapabilities(
 
   const native: ModelProtocolProfile['native'] = {}
   for (const endpointType of TEXT_PROTOCOLS) {
-    const nonStream = channelModels.every(
-      (model) =>
-        modelNativeFor(overrides, model)?.[endpointType]?.non_stream === true
+    const capabilities = channelModels.map(
+      (model) => modelNativeFor(overrides, model)?.[endpointType]
     )
-    const stream = channelModels.every(
-      (model) =>
-        modelNativeFor(overrides, model)?.[endpointType]?.stream === true
+    const firstCapability = capabilities[0]
+    if (!firstCapability || capabilities.some((item) => !item)) continue
+    if (
+      capabilities.some(
+        (item) =>
+          effectiveProtocolCapabilityMode(item) !==
+            effectiveProtocolCapabilityMode(firstCapability) ||
+          (item?.reasoning_history ?? '') !==
+            (firstCapability.reasoning_history ?? '')
+      )
+    ) {
+      continue
+    }
+
+    const nonStream = capabilities.every(
+      (capability) => capability?.non_stream === true
+    )
+    const stream = capabilities.every(
+      (capability) => capability?.stream === true
     )
     if (nonStream || stream) {
-      native[endpointType] = { non_stream: nonStream, stream }
+      native[endpointType] = cloneProtocolCapability(
+        firstCapability,
+        nonStream,
+        stream
+      )
     }
   }
   if (Object.keys(native).length === 0) return null
@@ -237,16 +393,12 @@ export function promoteCommonModelProtocolCapabilities(
     )
     const matchesDefault =
       hasOnlyKnownProtocols &&
-      TEXT_PROTOCOLS.every((endpointType) => {
-        const modelCapability = modelNative[endpointType]
-        const defaultCapability = native[endpointType]
-        return (
-          Boolean(modelCapability?.non_stream) ===
-            Boolean(defaultCapability?.non_stream) &&
-          Boolean(modelCapability?.stream) ===
-            Boolean(defaultCapability?.stream)
+      TEXT_PROTOCOLS.every((endpointType) =>
+        protocolCapabilitiesEqual(
+          modelNative[endpointType],
+          native[endpointType]
         )
-      })
+      )
     if (matchesDefault) {
       delete modelOverrides[model]
     }
@@ -256,34 +408,98 @@ export function promoteCommonModelProtocolCapabilities(
 }
 
 /**
- * Replace overrides for every model in a complete probe batch while keeping
- * overrides for models outside that batch unchanged.
+ * Resolve one full semantic suite into a persisted handling mode. Basic
+ * endpoint reachability participates as a prerequisite but never grants
+ * native compatibility by itself.
  */
-export function applyNativeProtocolProbeResults(
+function probeSuiteRecommendedMode(
+  batch: ProtocolProbeBatch,
+  results: ProtocolProbeResultMap,
+  model: string,
+  endpointType: TextEndpointType,
+  stream: boolean
+): 'native' | 'normalized' | null {
+  const basic = results[protocolProbeKey(model, endpointType, stream, 'basic')]
+  if (basic?.classification !== 'confirmed') return null
+
+  const semanticCases = batch.probeCases.filter(
+    (probeCase) => probeCase !== 'basic'
+  )
+  if (semanticCases.length === 0) return null
+  const semanticResults = semanticCases.map(
+    (probeCase) =>
+      results[protocolProbeKey(model, endpointType, stream, probeCase)]
+  )
+  if (
+    semanticResults.some(
+      (result) =>
+        result?.classification !== 'confirmed' ||
+        result.capability_level !== 'semantic' ||
+        result.recommended_mode === 'unsupported'
+    )
+  ) {
+    return null
+  }
+  const modes = new Set(
+    semanticResults.map((result) => result.recommended_mode)
+  )
+  if (modes.size !== 1) return null
+  const mode = semanticResults[0]?.recommended_mode
+  return mode === 'native' || mode === 'normalized' ? mode : null
+}
+
+/**
+ * Apply only a complete full semantic batch, preserving models outside the
+ * batch and never converting endpoint-only results into native declarations.
+ */
+export function applyProtocolProbeResults(
   baseOverrides: Record<string, ModelProtocolProfile>,
-  batch: NativeProtocolProbeBatch,
-  results: NativeProtocolProbeResultMap
+  batch: ProtocolProbeBatch,
+  results: ProtocolProbeResultMap
 ): Record<string, ModelProtocolProfile> | null {
-  if (!isNativeProtocolProbeBatchComplete(batch, results)) {
+  if (
+    batch.capabilityLevel !== 'semantic' ||
+    !isProtocolProbeBatchComplete(batch, results)
+  ) {
     return null
   }
 
   const nextOverrides = structuredClone(baseOverrides)
   for (const model of batch.models) {
-    // A completed batch is authoritative for its models, including no-match results.
     delete nextOverrides[model]
     const native: ModelProtocolProfile['native'] = {}
 
     for (const endpointType of TEXT_PROTOCOLS) {
-      const nonStream =
-        results[nativeProtocolProbeKey(model, endpointType, false)]
-          ?.classification === 'confirmed'
-      const stream =
-        results[nativeProtocolProbeKey(model, endpointType, true)]
-          ?.classification === 'confirmed'
-      if (nonStream || stream) {
-        native[endpointType] = { non_stream: nonStream, stream }
+      const nonStreamMode = probeSuiteRecommendedMode(
+        batch,
+        results,
+        model,
+        endpointType,
+        false
+      )
+      const streamMode = probeSuiteRecommendedMode(
+        batch,
+        results,
+        model,
+        endpointType,
+        true
+      )
+      const sharedMode = nonStreamMode ?? streamMode
+      if (!sharedMode) continue
+
+      const nonStream = nonStreamMode === sharedMode
+      const stream = streamMode === sharedMode
+      const capability: ProtocolCapability = {
+        non_stream: nonStream,
+        stream,
       }
+      if (sharedMode === 'normalized') {
+        capability.mode = 'normalized'
+        if (endpointType === 'anthropic') {
+          capability.reasoning_history = 'strip'
+        }
+      }
+      native[endpointType] = capability
     }
 
     if (Object.keys(native).length > 0) {

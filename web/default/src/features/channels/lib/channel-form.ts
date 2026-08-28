@@ -126,6 +126,28 @@ function getNativeCapabilitiesError(value: unknown): string | null {
     if (!nonStream && !stream) {
       return 'Each native protocol must enable normal or streaming requests'
     }
+    const mode = capability.mode ?? 'native'
+    if (mode !== 'native' && mode !== 'normalized') {
+      return 'Protocol handling mode must be native or normalized'
+    }
+    if (
+      mode === 'normalized' &&
+      endpointType !== 'anthropic' &&
+      endpointType !== 'openai-response'
+    ) {
+      return 'Compatible normalization is unavailable for this protocol'
+    }
+    if (capability.reasoning_history !== undefined) {
+      if (mode !== 'normalized' || endpointType !== 'anthropic') {
+        return 'Reasoning history policy requires normalized Claude Messages'
+      }
+      if (
+        capability.reasoning_history !== 'preserve' &&
+        capability.reasoning_history !== 'strip'
+      ) {
+        return 'Reasoning history policy must be preserve or strip'
+      }
+    }
   }
   return null
 }
@@ -360,6 +382,29 @@ export const channelFormSchema = z
             ctx,
             'protocol_policy',
             'Auto conversion conflicts with request body pass-through'
+          )
+        }
+        const allProfiles = [
+          policy.native,
+          ...Object.values(policy.model_overrides || {}).map(
+            (profile: unknown) =>
+              isJsonObjectValue(profile) ? profile.native : undefined
+          ),
+        ]
+        const hasNormalizedCapability = allProfiles.some(
+          (profile) =>
+            isJsonObjectValue(profile) &&
+            Object.values(profile).some(
+              (capability) =>
+                isJsonObjectValue(capability) &&
+                capability.mode === 'normalized'
+            )
+        )
+        if (hasNormalizedCapability) {
+          addRequiredIssue(
+            ctx,
+            'protocol_policy',
+            'Compatible normalization conflicts with request body pass-through'
           )
         }
       } catch {

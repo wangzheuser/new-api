@@ -103,6 +103,8 @@ export type TextEndpointType =
 export interface ProtocolCapability {
   non_stream: boolean
   stream: boolean
+  mode?: 'native' | 'normalized'
+  reasoning_history?: 'preserve' | 'strip'
 }
 
 export interface ModelProtocolProfile {
@@ -251,7 +253,7 @@ export interface ChannelConnectionTestRequest {
   stream?: boolean
 }
 
-export interface ChannelNativeProbeResponse extends ChannelTestResponse {
+export interface ChannelProtocolProbeResponse extends ChannelTestResponse {
   model: string
   endpoint_type: TextEndpointType
   stream: boolean
@@ -263,6 +265,16 @@ export interface ChannelNativeProbeResponse extends ChannelTestResponse {
     | 'rate_limited'
     | 'upstream_error'
     | 'transport_error'
+  probe_case:
+    | 'basic'
+    | 'assistant_history'
+    | 'tool_cycle'
+    | 'reasoning_history'
+    | 'invalid_tool_id'
+    | 'tool_id_collision'
+  capability_level: 'endpoint' | 'semantic'
+  effective_route_mode: 'native' | 'normalized' | 'converted'
+  recommended_mode: 'native' | 'normalized' | 'unsupported'
 }
 
 export interface ChannelPromptTestRequest {

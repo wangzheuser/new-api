@@ -29,7 +29,7 @@ import type {
   ChannelOpsResponse,
   ChannelPromptTestRequest,
   ChannelPromptTestResponse,
-  ChannelNativeProbeResponse,
+  ChannelProtocolProbeResponse,
   ChannelTestResponse,
   CopyChannelParams,
   CopyChannelResponse,
@@ -262,17 +262,24 @@ export async function testChannelConnectionPrompt(
 }
 
 /**
- * Probe one upstream text protocol without applying the channel protocol policy.
+ * Probe endpoint reachability or one semantic compatibility scenario without persisting settings.
  */
-export async function probeChannelNativeProtocol(
+export async function probeChannelProtocol(
   id: number,
   params: {
     model: string
     endpoint_type: string
     stream: boolean
     probe_mode: 'native'
+    probe_case:
+      | 'basic'
+      | 'assistant_history'
+      | 'tool_cycle'
+      | 'reasoning_history'
+      | 'invalid_tool_id'
+      | 'tool_id_collision'
   }
-): Promise<ChannelNativeProbeResponse> {
+): Promise<ChannelProtocolProbeResponse> {
   const res = await api.get(
     `/api/channel/test/${id}`,
     channelActionConfig({ params })

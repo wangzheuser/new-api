@@ -66,6 +66,8 @@ type channelTestOptions struct {
 	applySystemPrompt          bool
 	requireSystemPromptSupport bool
 	nativeProbe                bool
+	protocolProbeCase          protocolProbeCase
+	protocolProbeExecution     protocolProbeExecution
 	keyIndex                   *int
 }
 
@@ -359,7 +361,14 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, op
 	}
 	request := buildTestRequest(testModel, requestEndpointType, channel, options)
 	if directNativeProbe {
-		request = buildNativeTextProbeRequest(testModel, constant.EndpointType(endpointType), options)
+		request, err = buildProtocolProbeRequest(testModel, constant.EndpointType(endpointType), options)
+		if err != nil {
+			return testResult{
+				context:     c,
+				localErr:    err,
+				newAPIError: types.NewError(err, types.ErrorCodeInvalidRequest),
+			}
+		}
 	}
 	if options.requireSystemPromptSupport {
 		switch request.(type) {
@@ -400,6 +409,15 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, op
 			effectiveEndpointType: effectiveEndpointType,
 			isStream:              info.IsStream,
 		}
+	}
+	if directNativeProbe {
+		info.ChannelRoutePlan = protocolProbeRoutePlan(
+			constant.EndpointType(endpointType),
+			relayFormat,
+			requestPath,
+			info.RelayMode,
+			options,
+		)
 	}
 
 	info.IsChannelTest = true
@@ -442,6 +460,10 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, op
 			}
 			info.RequestURLPath = nativePath
 			info.RelayMode = relayconstant.Path2RelayMode(c.Request.URL.Path)
+			if info.ChannelRoutePlan != nil {
+				info.ChannelRoutePlan.UpstreamPath = nativePath
+				info.ChannelRoutePlan.UpstreamRelayMode = info.RelayMode
+			}
 		}
 		info.FinalRequestRelayFormat = relayFormat
 	}
@@ -580,38 +602,38 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, op
 			newAPIError: types.NewError(err, types.ErrorCodeConvertRequestFailed),
 		}
 	}
-	jsonData, err := common.Marshal(convertedRequest)
-	if err != nil {
-		return testResult{
-			context:     c,
-			localErr:    err,
-			newAPIError: types.NewError(err, types.ErrorCodeJsonMarshalFailed),
+	var jsonData []byte
+	if directNativeProbe && options.protocolProbeCase.IsSemantic() {
+		var apiErr *types.NewAPIError
+		jsonData, apiErr = relay.PrepareTextRouteRequestBody(c, info, convertedRequest)
+		if apiErr != nil {
+			return testResult{context: c, localErr: apiErr, newAPIError: apiErr}
 		}
-	}
-
-	//jsonData, err = relaycommon.RemoveDisabledFields(jsonData, info.ChannelOtherSettings)
-	//if err != nil {
-	//	return testResult{
-	//		context:     c,
-	//		localErr:    err,
-	//		newAPIError: types.NewError(err, types.ErrorCodeConvertRequestFailed),
-	//	}
-	//}
-
-	if len(info.ParamOverride) > 0 {
-		jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
+	} else {
+		jsonData, err = common.Marshal(convertedRequest)
 		if err != nil {
-			if fixedErr, ok := relaycommon.AsParamOverrideReturnError(err); ok {
-				return testResult{
-					context:     c,
-					localErr:    fixedErr,
-					newAPIError: relaycommon.NewAPIErrorFromParamOverride(fixedErr),
-				}
-			}
 			return testResult{
 				context:     c,
 				localErr:    err,
-				newAPIError: types.NewError(err, types.ErrorCodeChannelParamOverrideInvalid),
+				newAPIError: types.NewError(err, types.ErrorCodeJsonMarshalFailed),
+			}
+		}
+
+		if len(info.ParamOverride) > 0 {
+			jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
+			if err != nil {
+				if fixedErr, ok := relaycommon.AsParamOverrideReturnError(err); ok {
+					return testResult{
+						context:     c,
+						localErr:    fixedErr,
+						newAPIError: relaycommon.NewAPIErrorFromParamOverride(fixedErr),
+					}
+				}
+				return testResult{
+					context:     c,
+					localErr:    err,
+					newAPIError: types.NewError(err, types.ErrorCodeChannelParamOverrideInvalid),
+				}
 			}
 		}
 	}
@@ -939,53 +961,6 @@ func detectErrorMessageFromJSONBytes(jsonBytes []byte) string {
 	return message
 }
 
-// buildNativeTextProbeRequest builds the wire request for one native text protocol.
-func buildNativeTextProbeRequest(modelName string, endpointType constant.EndpointType, options channelTestOptions) dto.Request {
-	userPrompt := strings.TrimSpace(options.userPrompt)
-	if userPrompt == "" {
-		userPrompt = "hi"
-	}
-	maxTokens := options.maxOutputTokens
-	if maxTokens == 0 {
-		maxTokens = 16
-	}
-	switch endpointType {
-	case constant.EndpointTypeOpenAIResponse:
-		input := json.RawMessage(common.GetJsonString([]map[string]string{{
-			"role": "user", "content": userPrompt,
-		}}))
-		return &dto.OpenAIResponsesRequest{
-			Model:           modelName,
-			Input:           input,
-			Stream:          lo.ToPtr(options.isStream),
-			MaxOutputTokens: lo.ToPtr(maxTokens),
-		}
-	case constant.EndpointTypeAnthropic:
-		return &dto.ClaudeRequest{
-			Model:     modelName,
-			Messages:  []dto.ClaudeMessage{{Role: "user", Content: userPrompt}},
-			MaxTokens: lo.ToPtr(maxTokens),
-			Stream:    lo.ToPtr(options.isStream),
-		}
-	case constant.EndpointTypeGemini:
-		return &dto.GeminiChatRequest{
-			Contents: []dto.GeminiChatContent{{
-				Role:  "user",
-				Parts: []dto.GeminiPart{{Text: userPrompt}},
-			}},
-			GenerationConfig: dto.GeminiChatGenerationConfig{MaxOutputTokens: lo.ToPtr(maxTokens)},
-		}
-	default:
-		return &dto.GeneralOpenAIRequest{
-			Model:         modelName,
-			Messages:      []dto.Message{{Role: "user", Content: userPrompt}},
-			MaxTokens:     lo.ToPtr(maxTokens),
-			Stream:        lo.ToPtr(options.isStream),
-			StreamOptions: lo.Ternary(options.isStream, &dto.StreamOptions{IncludeUsage: true}, nil),
-		}
-	}
-}
-
 func buildTestRequest(model string, endpointType string, channel *model.Channel, options channelTestOptions) dto.Request {
 	userPrompt := options.userPrompt
 	if userPrompt == "" {
@@ -1166,7 +1141,12 @@ func TestChannel(c *gin.Context) {
 	testModel := c.Query("model")
 	endpointType := c.Query("endpoint_type")
 	isStream, _ := strconv.ParseBool(c.Query("stream"))
-	nativeProbe := c.Query("probe_mode") == "native"
+	nativeProbe := c.Query("probe_mode") == "native" || c.Query("probe_case") != ""
+	probeCase, err := parseProtocolProbeCase(c.Query("probe_case"), nativeProbe)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	var keyIndex *int
 	if rawKeyIndex, exists := c.GetQuery("key_index"); exists {
 		parsedKeyIndex, parseErr := strconv.Atoi(rawKeyIndex)
@@ -1184,6 +1164,13 @@ func TestChannel(c *gin.Context) {
 		common.ApiError(c, errors.New("native probe requires a supported text endpoint_type"))
 		return
 	}
+	probeExecution := resolveProtocolProbeExecution(
+		channel,
+		testModel,
+		constant.EndpointType(endpointType),
+		isStream,
+		probeCase,
+	)
 	testUserID, err := resolveChannelTestUserID(c)
 	if err != nil {
 		common.ApiError(c, err)
@@ -1195,7 +1182,8 @@ func TestChannel(c *gin.Context) {
 		requestCtx = c.Request.Context()
 	}
 	result := testChannel(requestCtx, channel, testUserID, channelTestOptions{
-		model: testModel, endpointType: endpointType, isStream: isStream, nativeProbe: nativeProbe, keyIndex: keyIndex,
+		model: testModel, endpointType: endpointType, isStream: isStream, nativeProbe: nativeProbe,
+		protocolProbeCase: probeCase, protocolProbeExecution: probeExecution, keyIndex: keyIndex,
 	})
 	if nativeProbe {
 		consumedTime := float64(time.Since(tik).Milliseconds()) / 1000.0
@@ -1207,14 +1195,26 @@ func TestChannel(c *gin.Context) {
 			message = compactProbeError(result.newAPIError.Error())
 		}
 		c.JSON(http.StatusOK, gin.H{
-			"success":        classification == "confirmed",
-			"message":        message,
-			"model":          testModel,
-			"endpoint_type":  endpointType,
-			"stream":         isStream,
-			"http_status":    result.upstreamStatus,
-			"time":           consumedTime,
-			"classification": classification,
+			"success":              classification == "confirmed",
+			"message":              message,
+			"model":                testModel,
+			"endpoint_type":        endpointType,
+			"stream":               isStream,
+			"http_status":          result.upstreamStatus,
+			"time":                 consumedTime,
+			"classification":       classification,
+			"probe_case":           probeCase,
+			"capability_level":     probeCase.CapabilityLevel(),
+			"effective_route_mode": probeExecution.RouteMode,
+			"recommended_mode": recommendedProtocolProbeMode(
+				channel,
+				testModel,
+				constant.EndpointType(endpointType),
+				isStream,
+				probeCase,
+				probeExecution,
+				classification,
+			),
 		})
 		return
 	}
