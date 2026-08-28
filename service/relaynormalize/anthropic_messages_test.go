@@ -168,24 +168,62 @@ func TestNormalizeAnthropicMessagesCompatiblePreservesVisibleAssistantVariants(t
 	assert.Len(t, messages, 4)
 }
 
+func TestNormalizeAnthropicMessagesCompatibleStripsReasoningHistoryForOpenAIBridge(t *testing.T) {
+	body := []byte(`{
+	  "messages":[
+	    {"role":"assistant","content":[{"type":"thinking","thinking":"hidden"},{"type":"redacted_thinking","data":"opaque"}]},
+	    {"role":"assistant","content":[{"type":"thinking","thinking":"hidden"},{"type":"text","text":"visible"},{"type":"tool_use","id":"call:1","name":"lookup","input":{}}]},
+	    {"role":"assistant","content":[{"type":"redacted_thinking","data":"opaque"},{"type":"custom_visible","value":1}]},
+	    {"role":"user","content":"question"}
+	  ]
+	}`)
+	options := types.RequestNormalizationOptions{ReasoningHistoryPolicy: types.ReasoningHistoryPolicyStrip}
+
+	normalized, audit, err := NormalizeRequestByIDWithOptions(RequestNormalizerAnthropicMessagesCompatible, body, options)
+	require.NoError(t, err)
+	require.NoError(t, ValidateRequestByIDWithOptions(RequestNormalizerAnthropicMessagesCompatible, normalized, options))
+	assert.Equal(t, 4, audit.ReasoningBlocksDropped)
+	assert.Equal(t, 1, audit.ReasoningOnlyAssistantDropped)
+	assert.Zero(t, audit.ReasoningAssistantMessagesPreserved)
+	assert.Equal(t, 1, audit.ToolIDsNormalized)
+	assert.NotContains(t, string(normalized), `"type":"thinking"`)
+	assert.NotContains(t, string(normalized), `"type":"redacted_thinking"`)
+	assert.Contains(t, string(normalized), `"text":"visible"`)
+	assert.Contains(t, string(normalized), `"id":"call_1"`)
+	assert.Contains(t, string(normalized), `"type":"custom_visible"`)
+
+	var root map[string]json.RawMessage
+	require.NoError(t, common.Unmarshal(normalized, &root))
+	var messages []json.RawMessage
+	require.NoError(t, common.Unmarshal(root["messages"], &messages))
+	assert.Len(t, messages, 3)
+}
+
+func TestNormalizeAnthropicMessagesCompatibleRejectsInvalidReasoningPolicy(t *testing.T) {
+	options := types.RequestNormalizationOptions{ReasoningHistoryPolicy: "unknown"}
+	_, _, err := NormalizeRequestByIDWithOptions(RequestNormalizerAnthropicMessagesCompatible, []byte(`{"messages":[]}`), options)
+	require.ErrorContains(t, err, "invalid reasoning history policy")
+	require.ErrorContains(t, ValidateRequestByIDWithOptions(RequestNormalizerAnthropicMessagesCompatible, []byte(`{"messages":[]}`), options), "invalid reasoning history policy")
+}
+
 func TestNormalizeAnthropicMessagesCompatibleRejectsUnknownNormalizerAndInvalidIDs(t *testing.T) {
 	_, audit, err := NormalizeRequestByID("missing", []byte(`{}`))
 	require.ErrorContains(t, err, "not registered")
 	assert.Equal(t, "missing", audit.Normalizer)
 	require.ErrorContains(t, ValidateRequestByID("missing", []byte(`{}`)), "not registered")
 	require.ErrorContains(t, validateAnthropicMessagesCompatible([]byte(`{
-      "messages":[{"role":"assistant","content":[{"type":"tool_use","id":"bad:id"}]}]
-    }`)), "does not match")
+	      "messages":[{"role":"assistant","content":[{"type":"tool_use","id":"bad:id"}]}]
+	    }`), types.RequestNormalizationOptions{}), "does not match")
 	require.ErrorContains(t, validateAnthropicMessagesCompatible([]byte(`{
-      "messages":[{"role":"assistant","content":[]}]
-    }`)), "empty assistant message")
+	      "messages":[{"role":"assistant","content":[]}]
+	    }`), types.RequestNormalizationOptions{}), "empty assistant message")
 	require.ErrorContains(t, validateAnthropicMessagesCompatible([]byte(`{
-      "messages":[{"role":"assistant","content":"  "}]
-    }`)), "empty assistant message")
+	      "messages":[{"role":"assistant","content":"  "}]
+	    }`), types.RequestNormalizationOptions{}), "empty assistant message")
 	require.ErrorContains(t, validateAnthropicMessagesCompatible([]byte(`{
-      "messages":[{"role":"assistant","content":[{"type":"text","text":""}]}]
-    }`)), "empty assistant message")
+	      "messages":[{"role":"assistant","content":[{"type":"text","text":""}]}]
+	    }`), types.RequestNormalizationOptions{}), "empty assistant message")
 	require.ErrorContains(t, validateAnthropicMessagesCompatible([]byte(`{
-      "messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"hidden"},{"type":"text","text":" "}]}]
-    }`)), "reasoning-only assistant message")
+	      "messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"hidden"},{"type":"text","text":" "}]}]
+	    }`), types.RequestNormalizationOptions{}), "reasoning-only assistant message")
 }

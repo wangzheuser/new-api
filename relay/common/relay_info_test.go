@@ -1,6 +1,7 @@
 package common
 
 import (
+	"errors"
 	"net/http/httptest"
 	"testing"
 
@@ -54,6 +55,7 @@ func TestRelayInfoAddReasoningHistoryAuditAggregatesCountsAndRouteReasons(t *tes
 		ReasoningHistoryReasonPreserved,
 		1, 0, 0, 0,
 	)
+	info.AddDroppedReasoningBlocks(types.RelayFormatClaude, types.RelayFormatOpenAI, 4)
 	info.AddDroppedReasoningOnlyMessages(types.RelayFormatClaude, types.RelayFormatOpenAI, 3)
 	info.AddReasoningHistoryAudit(
 		types.RelayFormatClaude,
@@ -71,14 +73,82 @@ func TestRelayInfoAddReasoningHistoryAuditAggregatesCountsAndRouteReasons(t *tes
 	require.True(t, info.HasReasoningHistoryAudit())
 	require.NotNil(t, info.ReasoningHistory)
 	assert.Equal(t, 2, info.ReasoningHistory.PreservedMessages)
+	assert.Equal(t, 4, info.ReasoningHistory.DroppedReasoningBlocks)
 	assert.Equal(t, 3, info.ReasoningHistory.DroppedReasoningOnlyMessages)
 	assert.Equal(t, 2, info.ReasoningHistory.OpaqueBlocksSkipped)
 	require.Len(t, info.ReasoningHistory.Routes, 2)
 	assert.Equal(t, []string{
 		ReasoningHistoryReasonPreserved,
+		ReasoningHistoryReasonBlocksDropped,
 		ReasoningHistoryReasonReasoningOnlyDropped,
 		ReasoningHistoryReasonOpaqueBlockSkipped,
 	}, info.ReasoningHistory.Routes[0].ReasonCodes)
+}
+
+func TestRelayInfoResolveStreamRetryCommitPolicyUsesPayloadForPlannedTextRoutes(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		info     *RelayInfo
+		expected StreamRetryCommitPolicy
+	}{
+		{
+			name: "normalized responses stream",
+			info: &RelayInfo{IsStream: true, ChannelRoutePlan: &types.ChannelRoutePlan{
+				RouteMode: types.ChannelRouteModeNormalized,
+			}},
+			expected: StreamRetryCommitPolicyPayload,
+		},
+		{
+			name: "converted stream",
+			info: &RelayInfo{IsStream: true, ChannelRoutePlan: &types.ChannelRoutePlan{
+				RouteMode: types.ChannelRouteModeConverted,
+			}},
+			expected: StreamRetryCommitPolicyPayload,
+		},
+		{
+			name:     "legacy stream",
+			info:     &RelayInfo{IsStream: true, ChannelRoutePlan: &types.ChannelRoutePlan{RouteMode: types.ChannelRouteModeLegacy}},
+			expected: StreamRetryCommitPolicyHTTP,
+		},
+		{
+			name:     "non stream",
+			info:     &RelayInfo{ChannelRoutePlan: &types.ChannelRoutePlan{RouteMode: types.ChannelRouteModeNormalized}},
+			expected: StreamRetryCommitPolicyHTTP,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, tt.info.ResolveStreamRetryCommitPolicy())
+		})
+	}
+}
+
+func TestRelayInfoResetAttemptStateCreatesFreshStreamTerminalForRetry(t *testing.T) {
+	t.Parallel()
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	previous := NewStreamStatus()
+	previous.MarkAppHTTPCommitted()
+	previous.SetRetryCommitPolicy(StreamRetryCommitPolicyPayload)
+	previous.SetEndReason(StreamEndReasonUnexpectedEOF, errors.New("upstream closed"))
+	info := &RelayInfo{
+		IsStream:     true,
+		RetryIndex:   1,
+		StreamStatus: previous,
+	}
+
+	info.resetAttemptState(ctx)
+
+	require.Same(t, previous, info.StreamStatus)
+	assert.True(t, info.StreamStatus.AppHTTPIsCommitted())
+	assert.Equal(t, StreamEndReasonNone, info.StreamStatus.EndReason)
+	assert.False(t, info.StreamStatus.ClientPayloadIsCommitted())
+	assert.Equal(t, StreamRetryCommitPolicyHTTP, info.StreamStatus.RetryCommitPolicy())
+	info.StreamStatus.SetEndReason(StreamEndReasonDone, nil)
+	reason, endErr := info.StreamStatus.End()
+	assert.Equal(t, StreamEndReasonDone, reason)
+	assert.NoError(t, endErr)
 }
 
 func TestRelayInfoAcceptStreamPolicyVersionOnlyForNativeChatAndClaude(t *testing.T) {

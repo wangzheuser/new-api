@@ -192,5 +192,72 @@ func TestShouldRetryRejectsCommittedStreamEvenForChannelError(t *testing.T) {
 
 	relayErr := types.NewErrorWithStatusCode(errors.New("channel failed"), types.ErrorCode("channel:test"), http.StatusBadGateway)
 
-	assert.False(t, shouldRetry(ctx, relayErr, 2))
+	assert.False(t, shouldRetry(ctx, nil, relayErr, 2))
+}
+
+func TestShouldRetryAllowsPlannedStreamAfterHeaderOnlyCommit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	helper.SetEventStreamHeaders(ctx)
+	require.NoError(t, helper.FlushWriter(ctx))
+
+	streamStatus := relaycommon.NewStreamStatus()
+	streamStatus.MarkAppHTTPCommitted()
+	streamStatus.SetRetryCommitPolicy(relaycommon.StreamRetryCommitPolicyPayload)
+	info := &relaycommon.RelayInfo{
+		IsStream:     true,
+		StreamStatus: streamStatus,
+	}
+	relayErr := types.NewErrorWithStatusCode(errors.New("upstream unavailable"), types.ErrorCodeBadResponse, http.StatusServiceUnavailable)
+
+	assert.True(t, shouldRetry(ctx, info, relayErr, 2))
+}
+
+func TestShouldRetryAllowsPlannedStreamAfterPingOnly(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	helper.SetEventStreamHeaders(ctx)
+	require.NoError(t, helper.PingData(ctx))
+
+	streamStatus := relaycommon.NewStreamStatus()
+	streamStatus.MarkAppHTTPCommitted()
+	streamStatus.SetRetryCommitPolicy(relaycommon.StreamRetryCommitPolicyPayload)
+	info := &relaycommon.RelayInfo{IsStream: true, StreamStatus: streamStatus}
+	relayErr := types.NewErrorWithStatusCode(errors.New("upstream unavailable"), types.ErrorCodeBadResponse, http.StatusServiceUnavailable)
+
+	assert.True(t, shouldRetry(ctx, info, relayErr, 2))
+}
+
+func TestShouldRetryRejectsPlannedStreamAfterBusinessPayloadOrErrorFrame(t *testing.T) {
+	tests := []struct {
+		name   string
+		commit func(*relaycommon.StreamStatus)
+	}{
+		{name: "business payload", commit: func(status *relaycommon.StreamStatus) { status.MarkClientPayloadCommitted() }},
+		{name: "error frame", commit: func(status *relaycommon.StreamStatus) { status.TryMarkErrorFrameWritten() }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			helper.SetEventStreamHeaders(ctx)
+			require.NoError(t, helper.FlushWriter(ctx))
+
+			streamStatus := relaycommon.NewStreamStatus()
+			streamStatus.MarkAppHTTPCommitted()
+			streamStatus.SetRetryCommitPolicy(relaycommon.StreamRetryCommitPolicyPayload)
+			tt.commit(streamStatus)
+			info := &relaycommon.RelayInfo{IsStream: true, StreamStatus: streamStatus}
+			relayErr := types.NewErrorWithStatusCode(errors.New("upstream unavailable"), types.ErrorCodeBadResponse, http.StatusServiceUnavailable)
+
+			assert.False(t, shouldRetry(ctx, info, relayErr, 2))
+		})
+	}
 }

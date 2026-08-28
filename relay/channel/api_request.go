@@ -416,6 +416,7 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		if info.StreamStatus == nil {
 			info.StreamStatus = common.NewStreamStatus()
 		}
+		info.StreamStatus.SetRetryCommitPolicy(info.ResolveStreamRetryCommitPolicy())
 		helper.SetEventStreamHeaders(c)
 		// 先提交 SSE 响应头，避免上游首包等待触发调用方的响应头超时。
 		if err := helper.FlushWriter(c); err != nil {

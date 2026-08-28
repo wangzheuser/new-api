@@ -13,8 +13,12 @@ import (
 
 var claudeToolIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
-func normalizeAnthropicMessagesCompatible(body []byte) ([]byte, types.ProtocolNormalizationAudit, error) {
+func normalizeAnthropicMessagesCompatible(body []byte, options types.RequestNormalizationOptions) ([]byte, types.ProtocolNormalizationAudit, error) {
 	audit := types.ProtocolNormalizationAudit{Normalizer: RequestNormalizerAnthropicMessagesCompatible}
+	reasoningPolicy, err := effectiveReasoningHistoryPolicy(options)
+	if err != nil {
+		return nil, audit, err
+	}
 	root, messages, err := parseAnthropicMessagesBody(body)
 	if err != nil {
 		return nil, audit, err
@@ -54,17 +58,24 @@ func normalizeAnthropicMessagesCompatible(body []byte) ([]byte, types.ProtocolNo
 			audit.EmptyAssistantMessagesDropped++
 			continue
 		}
-		if reasoningOnly {
-			audit.ReasoningOnlyAssistantDropped++
-			continue
-		}
-		if hasReasoning {
-			audit.ReasoningAssistantMessagesPreserved++
-		}
 
 		message, messageErr := decodeJSONObject(messageRaw, "claude message")
 		if messageErr != nil {
 			return nil, audit, messageErr
+		}
+		if hasReasoning && reasoningPolicy == types.ReasoningHistoryPolicyStrip {
+			removed, stripErr := stripClaudeAssistantReasoningBlocks(message)
+			if stripErr != nil {
+				return nil, audit, stripErr
+			}
+			audit.ReasoningBlocksDropped += removed
+		}
+		if reasoningOnly {
+			audit.ReasoningOnlyAssistantDropped++
+			continue
+		}
+		if hasReasoning && reasoningPolicy == types.ReasoningHistoryPolicyPreserve {
+			audit.ReasoningAssistantMessagesPreserved++
 		}
 		contentRaw, exists := message["content"]
 		if !exists || firstJSONByte(contentRaw) != '[' {
@@ -135,7 +146,11 @@ func normalizeAnthropicMessagesCompatible(body []byte) ([]byte, types.ProtocolNo
 	return normalizedBody, audit, nil
 }
 
-func validateAnthropicMessagesCompatible(body []byte) error {
+func validateAnthropicMessagesCompatible(body []byte, options types.RequestNormalizationOptions) error {
+	reasoningPolicy, err := effectiveReasoningHistoryPolicy(options)
+	if err != nil {
+		return err
+	}
 	_, messages, err := parseAnthropicMessagesBody(body)
 	if err != nil {
 		return err
@@ -160,6 +175,10 @@ func validateAnthropicMessagesCompatible(body []byte) error {
 			if blockErr != nil {
 				return blockErr
 			}
+			if reasoningPolicy == types.ReasoningHistoryPolicyStrip &&
+				(blockType == "thinking" || blockType == "redacted_thinking") {
+				return fmt.Errorf("claude reasoning block remains after strip normalization")
+			}
 			field := ""
 			switch blockType {
 			case "tool_use":
@@ -180,6 +199,52 @@ func validateAnthropicMessagesCompatible(body []byte) error {
 		}
 	}
 	return nil
+}
+
+// effectiveReasoningHistoryPolicy resolves the backward-compatible Claude history policy.
+func effectiveReasoningHistoryPolicy(options types.RequestNormalizationOptions) (types.ReasoningHistoryPolicy, error) {
+	policy := options.ReasoningHistoryPolicy
+	if policy == "" {
+		return types.ReasoningHistoryPolicyPreserve, nil
+	}
+	if policy != types.ReasoningHistoryPolicyPreserve && policy != types.ReasoningHistoryPolicyStrip {
+		return "", fmt.Errorf("invalid reasoning history policy: %s", policy)
+	}
+	return policy, nil
+}
+
+// stripClaudeAssistantReasoningBlocks removes hidden reasoning while preserving visible text and tool payloads.
+func stripClaudeAssistantReasoningBlocks(message map[string]json.RawMessage) (int, error) {
+	contentRaw, exists := message["content"]
+	if !exists || firstJSONByte(contentRaw) != '[' {
+		return 0, nil
+	}
+	var blocks []json.RawMessage
+	if err := common.Unmarshal(contentRaw, &blocks); err != nil {
+		return 0, fmt.Errorf("invalid claude message content: %w", err)
+	}
+	filtered := make([]json.RawMessage, 0, len(blocks))
+	removed := 0
+	for _, blockRaw := range blocks {
+		_, blockType, err := parseClaudeContentBlock(blockRaw)
+		if err != nil {
+			return 0, err
+		}
+		if blockType == "thinking" || blockType == "redacted_thinking" {
+			removed++
+			continue
+		}
+		filtered = append(filtered, blockRaw)
+	}
+	if removed == 0 {
+		return 0, nil
+	}
+	encoded, err := common.Marshal(filtered)
+	if err != nil {
+		return 0, fmt.Errorf("marshal claude message content after reasoning strip: %w", err)
+	}
+	message["content"] = encoded
+	return removed, nil
 }
 
 func parseAnthropicMessagesBody(body []byte) (map[string]json.RawMessage, []json.RawMessage, error) {

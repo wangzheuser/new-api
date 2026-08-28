@@ -106,6 +106,7 @@ func TestAppendStreamStatusIncludesProtocolTerminalAndTransportEnd(t *testing.T)
 	streamStatus.SetEndReason(relaycommon.StreamEndReasonHandlerStop, errors.New("mid stream aborted"))
 	streamStatus.RecordError("malformed event")
 	streamStatus.ObserveToolPayloadBytes(8, 21)
+	streamStatus.SetRetryCommitPolicy(relaycommon.StreamRetryCommitPolicyPayload)
 	info := &relaycommon.RelayInfo{
 		IsStream:              true,
 		ReceivedResponseCount: 7,
@@ -127,6 +128,7 @@ func TestAppendStreamStatusIncludesProtocolTerminalAndTransportEnd(t *testing.T)
 	assert.Equal(t, "failed", streamInfo["terminal_status"])
 	assert.Equal(t, 1, streamInfo["error_count"])
 	assert.Equal(t, []string{"malformed event"}, streamInfo["errors"])
+	assert.Equal(t, relaycommon.StreamRetryCommitPolicyPayload, streamInfo["retry_commit_policy"])
 	assert.Equal(t, int64(8), streamInfo["partial_tool_name_bytes"])
 	assert.Equal(t, int64(21), streamInfo["partial_tool_argument_bytes"])
 }
@@ -189,7 +191,10 @@ func TestAppendRelayProtocolInfoIncludesRouteNormalizationAndFinalFormat(t *test
 			UpstreamRelayFormat: types.RelayFormatClaude,
 			UpstreamPath:        "/v1/messages",
 			RequestNormalizer:   "anthropic_messages_compatible",
-			CapabilitySource:    "model_override",
+			NormalizationOptions: types.RequestNormalizationOptions{
+				ReasoningHistoryPolicy: types.ReasoningHistoryPolicyStrip,
+			},
+			CapabilitySource: "model_override",
 		},
 		ProtocolNormalization: &types.ProtocolNormalizationAudit{
 			Normalizer:                    "anthropic_messages_compatible",
@@ -205,6 +210,7 @@ func TestAppendRelayProtocolInfoIncludesRouteNormalizationAndFinalFormat(t *test
 	require.True(t, ok)
 	assert.Equal(t, types.ChannelRouteModeNormalized, protocolRoute["mode"])
 	assert.Equal(t, "anthropic_messages_compatible", protocolRoute["request_normalizer"])
+	assert.Equal(t, types.RequestNormalizationOptions{ReasoningHistoryPolicy: types.ReasoningHistoryPolicyStrip}, protocolRoute["normalization_options"])
 	assert.Equal(t, "model_override", protocolRoute["capability_source"])
 	assert.Same(t, info.ProtocolNormalization, adminInfo["protocol_normalization"])
 	assert.Equal(t, []string{"Claude Messages"}, other["request_conversion"])

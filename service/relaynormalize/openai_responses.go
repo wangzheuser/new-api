@@ -11,7 +11,7 @@ import (
 )
 
 // normalizeOpenAIResponsesCompatible keeps Responses call references valid for Claude-compatible upstreams.
-func normalizeOpenAIResponsesCompatible(body []byte) ([]byte, types.ProtocolNormalizationAudit, error) {
+func normalizeOpenAIResponsesCompatible(body []byte, _ types.RequestNormalizationOptions) ([]byte, types.ProtocolNormalizationAudit, error) {
 	audit := types.ProtocolNormalizationAudit{Normalizer: RequestNormalizerOpenAIResponsesCompatible}
 	root, input, err := parseOpenAIResponsesBody(body)
 	if err != nil {
@@ -97,7 +97,7 @@ func normalizeOpenAIResponsesCompatible(body []byte) ([]byte, types.ProtocolNorm
 }
 
 // validateOpenAIResponsesCompatible verifies every tool call reference in the final wire body.
-func validateOpenAIResponsesCompatible(body []byte) error {
+func validateOpenAIResponsesCompatible(body []byte, _ types.RequestNormalizationOptions) error {
 	_, input, err := parseOpenAIResponsesBody(body)
 	if err != nil || input == nil {
 		return err

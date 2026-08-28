@@ -170,6 +170,9 @@ func appendChannelRoutePlan(relayInfo *relaycommon.RelayInfo, adminInfo map[stri
 			"stream":                    plan.Stream,
 			"capability_source":         plan.CapabilitySource,
 		}
+		if plan.RequestNormalizer != "" {
+			protocolRoute["normalization_options"] = plan.NormalizationOptions
+		}
 	}
 	if relayInfo.HasReasoningHistoryAudit() {
 		protocolRoute["reasoning_history"] = relayInfo.ReasoningHistory
@@ -260,6 +263,7 @@ func AppendStreamStatus(relayInfo *relaycommon.RelayInfo, other map[string]inter
 		"client_payload_committed":   ss.ClientPayloadIsCommitted(),
 		"error_frame_written":        ss.ErrorFrameIsWritten(),
 		"stream_policy_version":      ss.StreamPolicyVersion(),
+		"retry_commit_policy":        ss.RetryCommitPolicy(),
 		"billing_finalization":       ss.GetBillingFinalization(),
 		"first_meaningful_byte_ms":   ss.FirstMeaningfulByteDuration(relayInfo.StartTime).Milliseconds(),
 		"request_upload_duration_ms": relayInfo.RequestUploadDuration.Milliseconds(),

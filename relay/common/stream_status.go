@@ -11,6 +11,7 @@ import (
 
 type StreamEndReason string
 type BillingFinalization string
+type StreamRetryCommitPolicy string
 
 const (
 	StreamEndReasonNone          StreamEndReason = ""
@@ -31,6 +32,13 @@ const (
 	BillingRefunded       BillingFinalization = "refunded"
 )
 
+const (
+	// StreamRetryCommitPolicyHTTP preserves the legacy rule that any committed HTTP response blocks retries.
+	StreamRetryCommitPolicyHTTP StreamRetryCommitPolicy = "http"
+	// StreamRetryCommitPolicyPayload allows retries until a meaningful payload or error frame reaches the client.
+	StreamRetryCommitPolicyPayload StreamRetryCommitPolicy = "payload"
+)
+
 const maxStreamErrorEntries = 20
 
 type StreamErrorEntry struct {
@@ -41,7 +49,7 @@ type StreamErrorEntry struct {
 type StreamStatus struct {
 	EndReason StreamEndReason
 	EndError  error
-	endOnce   sync.Once
+	endSet    bool
 	endMu     sync.RWMutex
 
 	mu                       sync.Mutex
@@ -53,6 +61,7 @@ type StreamStatus struct {
 	clientPayloadCommitted   bool
 	errorFrameWritten        bool
 	streamPolicyVersion      string
+	retryCommitPolicy        StreamRetryCommitPolicy
 	billingFinalization      BillingFinalization
 	billingApplied           bool
 	partialUsage             dto.Usage
@@ -170,6 +179,50 @@ func (s *StreamStatus) StreamPolicyVersion() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.streamPolicyVersion
+}
+
+// SetRetryCommitPolicy selects the downstream commit boundary used by transparent retries.
+func (s *StreamStatus) SetRetryCommitPolicy(policy StreamRetryCommitPolicy) {
+	if s == nil {
+		return
+	}
+	if policy != StreamRetryCommitPolicyPayload {
+		policy = StreamRetryCommitPolicyHTTP
+	}
+	s.mu.Lock()
+	s.retryCommitPolicy = policy
+	s.mu.Unlock()
+}
+
+// RetryCommitPolicy returns the downstream commit boundary used by transparent retries.
+func (s *StreamStatus) RetryCommitPolicy() StreamRetryCommitPolicy {
+	if s == nil {
+		return StreamRetryCommitPolicyHTTP
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.retryCommitPolicy == StreamRetryCommitPolicyPayload {
+		return StreamRetryCommitPolicyPayload
+	}
+	return StreamRetryCommitPolicyHTTP
+}
+
+// RetryBlocked reports whether a retry could duplicate an already committed downstream response.
+func (s *StreamStatus) RetryBlocked(httpCommitted bool) bool {
+	if s == nil {
+		return httpCommitted
+	}
+	reason, _ := s.End()
+	if reason == StreamEndReasonClientGone || reason == StreamEndReasonPingFail {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	payloadAware := s.retryCommitPolicy == StreamRetryCommitPolicyPayload || s.streamPolicyVersion == "progressive-v1"
+	if payloadAware {
+		return s.clientPayloadCommitted || s.errorFrameWritten
+	}
+	return httpCommitted
 }
 
 // SetBillingFinalization selects the unique settle/refund outcome.
@@ -305,12 +358,37 @@ func (s *StreamStatus) SetEndReason(reason StreamEndReason, err error) {
 	if s == nil {
 		return
 	}
-	s.endOnce.Do(func() {
-		s.endMu.Lock()
-		defer s.endMu.Unlock()
-		s.EndReason = reason
-		s.EndError = err
-	})
+	s.endMu.Lock()
+	defer s.endMu.Unlock()
+	if s.endSet {
+		return
+	}
+	s.endSet = true
+	s.EndReason = reason
+	s.EndError = err
+}
+
+// PrepareRetryAttempt clears attempt-local terminal state without replacing the request-level status object.
+func (s *StreamStatus) PrepareRetryAttempt() {
+	if s == nil {
+		return
+	}
+	s.endMu.Lock()
+	if s.EndReason == StreamEndReasonClientGone || s.EndReason == StreamEndReasonPingFail {
+		s.endMu.Unlock()
+		return
+	}
+	s.endSet = false
+	s.EndReason = StreamEndReasonNone
+	s.EndError = nil
+	s.endMu.Unlock()
+
+	s.mu.Lock()
+	s.terminalEvent = ""
+	s.terminalStatus = ""
+	s.streamPolicyVersion = ""
+	s.retryCommitPolicy = StreamRetryCommitPolicyHTTP
+	s.mu.Unlock()
 }
 
 // SetTerminal records the protocol-level event that ended the stream.

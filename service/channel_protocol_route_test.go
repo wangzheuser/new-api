@@ -28,9 +28,10 @@ func TestPlanChannelProtocolRouteUsesNormalizedModelOverrideForClaude(t *testing
 		ModelOverrides: map[string]dto.ModelProtocolProfile{
 			"MODEL_X": {Native: map[constant.EndpointType]dto.ProtocolCapability{
 				constant.EndpointTypeAnthropic: {
-					NonStream: true,
-					Stream:    true,
-					Mode:      dto.ProtocolHandlingModeNormalized,
+					NonStream:        true,
+					Stream:           true,
+					Mode:             dto.ProtocolHandlingModeNormalized,
+					ReasoningHistory: types.ReasoningHistoryPolicyStrip,
 				},
 			}},
 		},
@@ -44,6 +45,7 @@ func TestPlanChannelProtocolRouteUsesNormalizedModelOverrideForClaude(t *testing
 		require.NotNil(t, plan)
 		assert.Equal(t, types.ChannelRouteModeNormalized, plan.RouteMode)
 		assert.Equal(t, relaynormalize.RequestNormalizerAnthropicMessagesCompatible, plan.RequestNormalizer)
+		assert.Equal(t, types.ReasoningHistoryPolicyStrip, plan.NormalizationOptions.ReasoningHistoryPolicy)
 		assert.Equal(t, types.RelayFormat(types.RelayFormatClaude), plan.ClientRelayFormat)
 		assert.Equal(t, types.RelayFormat(types.RelayFormatClaude), plan.UpstreamRelayFormat)
 		assert.Equal(t, "/v1/messages", plan.UpstreamPath)
@@ -133,6 +135,9 @@ func TestPlanChannelProtocolRouteNormalizesConvertedTargetProtocol(t *testing.T)
 			assert.Equal(t, types.ChannelRouteModeConverted, plan.RouteMode)
 			assert.Equal(t, tt.target, plan.UpstreamEndpointType)
 			assert.Equal(t, tt.expectedNormalizer, plan.RequestNormalizer)
+			if tt.target == constant.EndpointTypeAnthropic {
+				assert.Equal(t, types.ReasoningHistoryPolicyPreserve, plan.NormalizationOptions.ReasoningHistoryPolicy)
+			}
 		})
 	}
 }

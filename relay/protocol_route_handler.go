@@ -170,7 +170,11 @@ func prepareTextRouteRequest(c *gin.Context, info *relaycommon.RelayInfo, reques
 		}
 	}
 	if info.ChannelRoutePlan != nil && info.ChannelRoutePlan.RequestNormalizer != "" {
-		normalized, audit, normalizeErr := relaynormalize.NormalizeRequestByID(info.ChannelRoutePlan.RequestNormalizer, jsonData)
+		normalized, audit, normalizeErr := relaynormalize.NormalizeRequestByIDWithOptions(
+			info.ChannelRoutePlan.RequestNormalizer,
+			jsonData,
+			info.ChannelRoutePlan.NormalizationOptions,
+		)
 		info.ProtocolNormalization = &audit
 		if audit.ReasoningAssistantMessagesPreserved > 0 {
 			info.AddReasoningHistoryAudit(
@@ -188,10 +192,21 @@ func prepareTextRouteRequest(c *gin.Context, info *relaycommon.RelayInfo, reques
 				audit.ReasoningOnlyAssistantDropped,
 			)
 		}
+		if audit.ReasoningBlocksDropped > 0 {
+			info.AddDroppedReasoningBlocks(
+				info.ChannelRoutePlan.UpstreamRelayFormat,
+				info.ChannelRoutePlan.UpstreamRelayFormat,
+				audit.ReasoningBlocksDropped,
+			)
+		}
 		if normalizeErr != nil {
 			return nil, nil, types.NewError(normalizeErr, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
-		if validateErr := relaynormalize.ValidateRequestByID(info.ChannelRoutePlan.RequestNormalizer, normalized); validateErr != nil {
+		if validateErr := relaynormalize.ValidateRequestByIDWithOptions(
+			info.ChannelRoutePlan.RequestNormalizer,
+			normalized,
+			info.ChannelRoutePlan.NormalizationOptions,
+		); validateErr != nil {
 			return nil, nil, types.NewError(validateErr, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 		jsonData = normalized

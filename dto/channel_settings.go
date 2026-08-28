@@ -35,9 +35,10 @@ const (
 )
 
 type ProtocolCapability struct {
-	NonStream bool                 `json:"non_stream"`
-	Stream    bool                 `json:"stream"`
-	Mode      ProtocolHandlingMode `json:"mode,omitempty"`
+	NonStream        bool                         `json:"non_stream"`
+	Stream           bool                         `json:"stream"`
+	Mode             ProtocolHandlingMode         `json:"mode,omitempty"`
+	ReasoningHistory types.ReasoningHistoryPolicy `json:"reasoning_history,omitempty"`
 }
 
 type ModelProtocolProfile struct {
@@ -129,6 +130,14 @@ func (c ProtocolCapability) EffectiveMode() ProtocolHandlingMode {
 	return c.Mode
 }
 
+// EffectiveReasoningHistoryPolicy keeps normalized Claude capabilities backward compatible.
+func (c ProtocolCapability) EffectiveReasoningHistoryPolicy() types.ReasoningHistoryPolicy {
+	if c.ReasoningHistory == "" {
+		return types.ReasoningHistoryPolicyPreserve
+	}
+	return c.ReasoningHistory
+}
+
 // Validate validates protocol capability declarations stored on a channel.
 func (p ChannelProtocolPolicy) Validate() error {
 	if err := validateNativeProtocolCapabilities(p.Native, "channel"); err != nil {
@@ -172,6 +181,15 @@ func validateNativeProtocolCapabilities(capabilities map[constant.EndpointType]P
 			endpointType != constant.EndpointTypeAnthropic &&
 			endpointType != constant.EndpointTypeOpenAIResponse {
 			return fmt.Errorf("normalized protocol handling is unsupported for %s in %s", endpointType, scope)
+		}
+		if capability.ReasoningHistory != "" {
+			if mode != ProtocolHandlingModeNormalized || endpointType != constant.EndpointTypeAnthropic {
+				return fmt.Errorf("reasoning history policy is only supported for normalized anthropic capabilities in %s", scope)
+			}
+			policy := capability.EffectiveReasoningHistoryPolicy()
+			if policy != types.ReasoningHistoryPolicyPreserve && policy != types.ReasoningHistoryPolicyStrip {
+				return fmt.Errorf("invalid reasoning history policy %s for %s in %s", capability.ReasoningHistory, endpointType, scope)
+			}
 		}
 	}
 	return nil

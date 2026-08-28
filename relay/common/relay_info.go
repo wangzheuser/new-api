@@ -114,6 +114,7 @@ type ContextFallbackDecision struct {
 
 const (
 	ReasoningHistoryReasonPreserved                  = "readable_reasoning_preserved"
+	ReasoningHistoryReasonBlocksDropped              = "reasoning_history_blocks_dropped"
 	ReasoningHistoryReasonReasoningOnlyDropped       = "reasoning_only_assistant_dropped"
 	ReasoningHistoryReasonSyntheticClientSignature   = "synthetic_client_signature"
 	ReasoningHistoryReasonOpaqueBlockSkipped         = "opaque_block_skipped"
@@ -130,6 +131,7 @@ type ReasoningHistoryRouteAudit struct {
 // ReasoningHistoryAudit summarizes reasoning-history preservation without storing payload contents.
 type ReasoningHistoryAudit struct {
 	PreservedMessages            int                          `json:"preserved_messages,omitempty"`
+	DroppedReasoningBlocks       int                          `json:"dropped_reasoning_blocks,omitempty"`
 	DroppedReasoningOnlyMessages int                          `json:"dropped_reasoning_only_messages,omitempty"`
 	SyntheticClientSignatures    int                          `json:"synthetic_client_signatures,omitempty"`
 	OpaqueBlocksSkipped          int                          `json:"opaque_blocks_skipped,omitempty"`
@@ -286,6 +288,20 @@ func (info *RelayInfo) AddDroppedReasoningOnlyMessages(sourceFormat, targetForma
 	info.ReasoningHistory.DroppedReasoningOnlyMessages += count
 }
 
+// AddDroppedReasoningBlocks records hidden reasoning blocks removed by a channel compatibility policy.
+func (info *RelayInfo) AddDroppedReasoningBlocks(sourceFormat, targetFormat types.RelayFormat, count int) {
+	if info == nil || count <= 0 {
+		return
+	}
+	info.AddReasoningHistoryAudit(
+		sourceFormat,
+		targetFormat,
+		ReasoningHistoryReasonBlocksDropped,
+		0, 0, 0, 0,
+	)
+	info.ReasoningHistory.DroppedReasoningBlocks += count
+}
+
 // AddReasoningHistoryAudit adds a payload-free reasoning conversion event to the request audit.
 func (info *RelayInfo) AddReasoningHistoryAudit(sourceFormat, targetFormat types.RelayFormat, reasonCode string,
 	preservedMessages, syntheticClientSignatures, opaqueBlocksSkipped, unsignedLatestTurnWithheld int,
@@ -328,7 +344,7 @@ func (info *RelayInfo) HasReasoningHistoryAudit() bool {
 		return false
 	}
 	audit := info.ReasoningHistory
-	return audit.PreservedMessages > 0 || audit.DroppedReasoningOnlyMessages > 0 || audit.SyntheticClientSignatures > 0 ||
+	return audit.PreservedMessages > 0 || audit.DroppedReasoningBlocks > 0 || audit.DroppedReasoningOnlyMessages > 0 || audit.SyntheticClientSignatures > 0 ||
 		audit.OpaqueBlocksSkipped > 0 || audit.UnsignedLatestTurnWithheld > 0
 }
 
@@ -505,6 +521,10 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 
 // resetAttemptState clears response and billing facts produced by the previous relay attempt.
 func (info *RelayInfo) resetAttemptState(c *gin.Context) {
+	if info.IsStream && info.RetryIndex > 0 && info.StreamStatus != nil {
+		// Clear attempt-local terminal state; the request-level pinger, status object, and writer lock remain stable.
+		info.StreamStatus.PrepareRetryAttempt()
+	}
 	common.SetContextKey(c, constant.ContextKeyLocalCountTokens, false)
 	common.SetContextKey(c, constant.ContextKeyAdminRejectReason, "")
 	c.Set("claude_web_search_requests", 0)
@@ -936,6 +956,20 @@ func (info *RelayInfo) AcceptStreamPolicyVersion(version string) string {
 		return ""
 	}
 	return version
+}
+
+// ResolveStreamRetryCommitPolicy returns the local retry boundary for the selected protocol route.
+func (info *RelayInfo) ResolveStreamRetryCommitPolicy() StreamRetryCommitPolicy {
+	if info == nil || !info.IsStream || info.ChannelRoutePlan == nil {
+		return StreamRetryCommitPolicyHTTP
+	}
+	// Planned text routes write every downstream business event through StreamStatus-aware helpers.
+	switch info.ChannelRoutePlan.RouteMode {
+	case types.ChannelRouteModeNative, types.ChannelRouteModeNormalized, types.ChannelRouteModeConverted:
+		return StreamRetryCommitPolicyPayload
+	default:
+		return StreamRetryCommitPolicyHTTP
+	}
 }
 
 func GenRelayInfoResponsesCompaction(c *gin.Context, request *dto.OpenAIResponsesCompactionRequest) *RelayInfo {

@@ -291,7 +291,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
 		relayInfo.LastError = newAPIError
 
-		willRetry := shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry())
+		willRetry := shouldRetry(c, relayInfo, newAPIError, common.RetryTimes-retryParam.GetRetry())
 		if relayInfo.IsContextFallbackActive() && relayInfo.ContextFallback.RouteMode == dto.ContextFallbackModeSame {
 			willRetry = false
 		}
@@ -307,17 +307,6 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				!(relayInfo.IsContextFallbackActive() && relayInfo.ContextFallback.RouteMode == dto.ContextFallbackModeSame)
 		} else {
 			processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
-		}
-		if relayInfo.IsStream {
-			clientCommitted := c.Writer.Written()
-			if relayInfo.StreamStatus != nil &&
-				relayInfo.StreamStatus.StreamPolicyVersion() == "progressive-v1" {
-				// 渐进策略仅在业务 payload 提交后停止透明重试；HTTP 头和 APP Ping 不消耗重试资格。
-				clientCommitted = relayInfo.StreamStatus.ClientPayloadIsCommitted()
-			}
-			if clientCommitted {
-				willRetry = false
-			}
 		}
 		if willRetry {
 			recordRelayErrorLog(c, relayInfo, newAPIError, "", nil, true)
@@ -670,11 +659,11 @@ func relayRetryGroup(info *relaycommon.RelayInfo) string {
 	return info.TokenGroup
 }
 
-func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {
+func shouldRetry(c *gin.Context, relayInfo *relaycommon.RelayInfo, openaiErr *types.NewAPIError, retryTimes int) bool {
 	if openaiErr == nil {
 		return false
 	}
-	if c != nil && c.Writer != nil && c.Writer.Written() {
+	if retryBlockedByClientCommit(c, relayInfo) {
 		return false
 	}
 	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
@@ -703,6 +692,15 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 		return false
 	}
 	return operation_setting.ShouldRetryByStatusCode(code)
+}
+
+// retryBlockedByClientCommit reports whether retrying could duplicate a downstream business payload.
+func retryBlockedByClientCommit(c *gin.Context, relayInfo *relaycommon.RelayInfo) bool {
+	if relayInfo != nil && relayInfo.IsStream && relayInfo.StreamStatus != nil {
+		httpCommitted := c != nil && c.Writer != nil && c.Writer.Written()
+		return relayInfo.StreamStatus.RetryBlocked(httpCommitted)
+	}
+	return c != nil && c.Writer != nil && c.Writer.Written()
 }
 
 // resolveConfiguredFinalRelayError applies channel and system final_error rules after retries finish.

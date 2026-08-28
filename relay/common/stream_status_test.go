@@ -91,6 +91,22 @@ func TestStreamStatus_CommitErrorAndBillingFinalizationAreIdempotent(t *testing.
 	assert.Equal(t, BillingSettledPartial, status.GetBillingFinalization())
 }
 
+func TestStreamStatus_RetryCommitPolicyDefaultsToHTTPAndAcceptsPayload(t *testing.T) {
+	t.Parallel()
+	status := NewStreamStatus()
+
+	assert.Equal(t, StreamRetryCommitPolicyHTTP, status.RetryCommitPolicy())
+	assert.False(t, status.RetryBlocked(false))
+	assert.True(t, status.RetryBlocked(true))
+	status.SetRetryCommitPolicy(StreamRetryCommitPolicyPayload)
+	assert.Equal(t, StreamRetryCommitPolicyPayload, status.RetryCommitPolicy())
+	assert.False(t, status.RetryBlocked(true), "SSE headers alone must not block payload-aware retry")
+	status.MarkClientPayloadCommitted()
+	assert.True(t, status.RetryBlocked(true))
+	status.SetRetryCommitPolicy("unknown")
+	assert.Equal(t, StreamRetryCommitPolicyHTTP, status.RetryCommitPolicy())
+}
+
 func TestStreamStatus_SetEndReason_WithError(t *testing.T) {
 	t.Parallel()
 	s := NewStreamStatus()

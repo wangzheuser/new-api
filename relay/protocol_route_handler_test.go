@@ -597,9 +597,8 @@ func TestExecuteNormalizedTextRouteAppliesParamOverrideThenClaudeNormalization(t
 		require.Len(t, request.Messages, 3)
 		assistantContent, err := request.Messages[1].ParseContent()
 		require.NoError(t, err)
-		require.Len(t, assistantContent, 2)
-		assert.Equal(t, "thinking", assistantContent[0].Type)
-		assert.Equal(t, "a_b", assistantContent[1].Id)
+		require.Len(t, assistantContent, 1)
+		assert.Equal(t, "a_b", assistantContent[0].Id)
 		resultContent, err := request.Messages[2].ParseContent()
 		require.NoError(t, err)
 		require.Len(t, resultContent, 1)
@@ -629,6 +628,7 @@ func TestExecuteNormalizedTextRouteAppliesParamOverrideThenClaudeNormalization(t
 			ClientPath:           "/v1/messages",
 			UpstreamPath:         "/v1/messages",
 			RequestNormalizer:    relaynormalize.RequestNormalizerAnthropicMessagesCompatible,
+			NormalizationOptions: types.RequestNormalizationOptions{ReasoningHistoryPolicy: types.ReasoningHistoryPolicyStrip},
 			CapabilitySource:     "model_override",
 		},
 		ChannelMeta: &relaycommon.ChannelMeta{
@@ -668,12 +668,14 @@ func TestExecuteNormalizedTextRouteAppliesParamOverrideThenClaudeNormalization(t
 	require.Nil(t, apiError)
 	require.NotNil(t, usage)
 	require.NotNil(t, info.ProtocolNormalization)
-	assert.Equal(t, 1, info.ProtocolNormalization.ReasoningAssistantMessagesPreserved)
+	assert.Zero(t, info.ProtocolNormalization.ReasoningAssistantMessagesPreserved)
+	assert.Equal(t, 2, info.ProtocolNormalization.ReasoningBlocksDropped)
 	assert.Equal(t, 1, info.ProtocolNormalization.ReasoningOnlyAssistantDropped)
 	assert.Equal(t, 2, info.ProtocolNormalization.ToolIDsNormalized)
 	assert.Zero(t, info.ProtocolNormalization.ToolIDCollisions)
 	require.NotNil(t, info.ReasoningHistory)
-	assert.Equal(t, 1, info.ReasoningHistory.PreservedMessages)
+	assert.Zero(t, info.ReasoningHistory.PreservedMessages)
+	assert.Equal(t, 2, info.ReasoningHistory.DroppedReasoningBlocks)
 	assert.Equal(t, 1, info.ReasoningHistory.DroppedReasoningOnlyMessages)
 	assert.Equal(t, types.RelayFormat(types.RelayFormatClaude), info.GetFinalRequestRelayFormat())
 }

@@ -119,6 +119,9 @@ func PlanChannelProtocolRoute(channel *model.Channel, modelName string, clientPa
 		}
 		plan := newUnconvertedRoutePlan(clientEndpoint, clientFormat, clientMode, clientPath, stream, routeMode, source)
 		plan.RequestNormalizer = requestNormalizer
+		if requestNormalizer != "" {
+			plan.NormalizationOptions = normalizationOptionsForCapability(clientEndpoint, clientCapability)
+		}
 		return plan, nil
 	}
 	if !policy.AutoConvert || settings.PassThroughBodyEnabled {
@@ -167,7 +170,7 @@ func PlanChannelProtocolRoute(channel *model.Channel, modelName string, clientPa
 	default:
 		return nil, fmt.Errorf("invalid protocol handling mode: %s", selectedCapability.Mode)
 	}
-	return &types.ChannelRoutePlan{
+	plan := &types.ChannelRoutePlan{
 		ClientEndpointType:   clientEndpoint,
 		UpstreamEndpointType: selected.descriptor.EndpointType,
 		ClientRelayFormat:    clientFormat,
@@ -185,7 +188,20 @@ func PlanChannelProtocolRoute(channel *model.Channel, modelName string, clientPa
 		ResponseSteps:        len(selected.route.ResponseSteps),
 		Stream:               stream,
 		CapabilitySource:     source,
-	}, nil
+	}
+	if requestNormalizer != "" {
+		plan.NormalizationOptions = normalizationOptionsForCapability(selected.descriptor.EndpointType, selectedCapability)
+	}
+	return plan, nil
+}
+
+// normalizationOptionsForCapability resolves final-wire behavior owned by one normalized endpoint.
+func normalizationOptionsForCapability(endpoint constant.EndpointType, capability dto.ProtocolCapability) types.RequestNormalizationOptions {
+	options := types.RequestNormalizationOptions{}
+	if endpoint == constant.EndpointTypeAnthropic {
+		options.ReasoningHistoryPolicy = capability.EffectiveReasoningHistoryPolicy()
+	}
+	return options
 }
 
 // requestNormalizerForEndpoint resolves the final-wire normalizer registered for one protocol endpoint.

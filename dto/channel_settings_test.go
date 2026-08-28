@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -155,9 +156,10 @@ func TestChannelProtocolPolicyValidateAndResolveModelOverride(t *testing.T) {
 func TestChannelProtocolPolicyValidateNormalizedSupportedEndpoints(t *testing.T) {
 	valid := ChannelProtocolPolicy{Native: map[constant.EndpointType]ProtocolCapability{
 		constant.EndpointTypeAnthropic: {
-			NonStream: true,
-			Stream:    true,
-			Mode:      ProtocolHandlingModeNormalized,
+			NonStream:        true,
+			Stream:           true,
+			Mode:             ProtocolHandlingModeNormalized,
+			ReasoningHistory: types.ReasoningHistoryPolicyStrip,
 		},
 		constant.EndpointTypeOpenAIResponse: {
 			NonStream: true,
@@ -167,6 +169,7 @@ func TestChannelProtocolPolicyValidateNormalizedSupportedEndpoints(t *testing.T)
 	}}
 	require.NoError(t, valid.Validate())
 	assert.True(t, valid.HasNormalizedCapability())
+	assert.Equal(t, types.ReasoningHistoryPolicyStrip, valid.Native[constant.EndpointTypeAnthropic].EffectiveReasoningHistoryPolicy())
 
 	invalidEndpoint := ChannelProtocolPolicy{Native: map[constant.EndpointType]ProtocolCapability{
 		constant.EndpointTypeOpenAI: {NonStream: true, Mode: ProtocolHandlingModeNormalized},
@@ -177,6 +180,21 @@ func TestChannelProtocolPolicyValidateNormalizedSupportedEndpoints(t *testing.T)
 		constant.EndpointTypeAnthropic: {NonStream: true, Mode: "rewritten"},
 	}}
 	require.ErrorContains(t, invalidMode.Validate(), "invalid protocol handling mode")
+
+	invalidReasoningPolicy := ChannelProtocolPolicy{Native: map[constant.EndpointType]ProtocolCapability{
+		constant.EndpointTypeAnthropic: {NonStream: true, Mode: ProtocolHandlingModeNormalized, ReasoningHistory: "archive"},
+	}}
+	require.ErrorContains(t, invalidReasoningPolicy.Validate(), "invalid reasoning history policy")
+
+	reasoningOnNative := ChannelProtocolPolicy{Native: map[constant.EndpointType]ProtocolCapability{
+		constant.EndpointTypeAnthropic: {NonStream: true, ReasoningHistory: types.ReasoningHistoryPolicyStrip},
+	}}
+	require.ErrorContains(t, reasoningOnNative.Validate(), "only supported for normalized anthropic")
+
+	reasoningOnResponses := ChannelProtocolPolicy{Native: map[constant.EndpointType]ProtocolCapability{
+		constant.EndpointTypeOpenAIResponse: {NonStream: true, Mode: ProtocolHandlingModeNormalized, ReasoningHistory: types.ReasoningHistoryPolicyStrip},
+	}}
+	require.ErrorContains(t, reasoningOnResponses.Validate(), "only supported for normalized anthropic")
 }
 
 func TestChannelProtocolPolicyValidateRejectsInvalidConfigurations(t *testing.T) {

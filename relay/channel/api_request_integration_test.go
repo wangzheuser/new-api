@@ -133,6 +133,40 @@ func TestDoApiRequest_StreamCommitsHeadersBeforeUpstreamResponse(t *testing.T) {
 	}
 }
 
+func TestDoApiRequest_PlannedStreamUsesPayloadRetryCommitPolicy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service.InitHttpClient()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(w, `{"error":{"message":"busy","type":"server_error"}}`)
+	}))
+	defer upstream.Close()
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"test","stream":true}`))
+	info := openAIRelayInfo(upstream.URL, true)
+	info.RelayFormat = types.RelayFormatOpenAIResponses
+	info.RequestURLPath = "/v1/responses"
+	info.ChannelRoutePlan = &types.ChannelRoutePlan{
+		RouteMode:         types.ChannelRouteModeNormalized,
+		ClientRelayFormat: types.RelayFormatOpenAIResponses,
+		Stream:            true,
+	}
+
+	resp, err := channel.DoApiRequest(&openai.Adaptor{}, ctx, info, strings.NewReader(`{"model":"test","stream":true}`))
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+	require.NotNil(t, info.StreamStatus)
+	assert.True(t, info.StreamStatus.AppHTTPIsCommitted())
+	assert.False(t, info.StreamStatus.ClientPayloadIsCommitted())
+	assert.Equal(t, relaycommon.StreamRetryCommitPolicyPayload, info.StreamStatus.RetryCommitPolicy())
+}
+
 func TestDoApiRequest_ClientCancellationCancelsUpstreamRequest(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	service.InitHttpClient()
