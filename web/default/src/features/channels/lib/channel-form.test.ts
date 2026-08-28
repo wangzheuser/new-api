@@ -25,13 +25,17 @@ import {
   channelFormSchema,
   transformChannelToFormDefaults,
   transformFormDataToCreatePayload,
+  transformFormDataToNativeProbeDraft,
   transformFormDataToUpdatePayload,
 } from './channel-form'
 
 /**
  * Build the minimum complete channel fixture required by the form transformer.
  */
-function createChannel(setting: Record<string, unknown>): Channel {
+function createChannel(
+  setting: Record<string, unknown>,
+  models = 'gpt-4o-mini'
+): Channel {
   return {
     id: 1,
     type: 1,
@@ -48,7 +52,7 @@ function createChannel(setting: Record<string, unknown>): Channel {
     other: '',
     balance: 0,
     balance_updated_time: 0,
-    models: 'gpt-4o-mini',
+    models,
     group: 'default',
     used_quota: 0,
     model_mapping: null,
@@ -248,22 +252,25 @@ describe('channel protocol policy persistence', () => {
 describe('channel model input modality persistence', () => {
   test('reloads channel overrides and preserves adjacent channel settings', () => {
     const defaults = transformChannelToFormDefaults(
-      createChannel({
-        force_format: true,
-        system_prompt: 'keep me',
-        model_context_fallbacks: {
-          MODEL_A: {
-            source_context_window_tokens: 128000,
-            fallback_model: 'MODEL_B',
-            fallback_context_window_tokens: 256000,
-            route_mode: 'same_channel',
+      createChannel(
+        {
+          force_format: true,
+          system_prompt: 'keep me',
+          model_context_fallbacks: {
+            MODEL_A: {
+              source_context_window_tokens: 128000,
+              fallback_model: 'MODEL_B',
+              fallback_context_window_tokens: 256000,
+              route_mode: 'same_channel',
+            },
+          },
+          model_input_modalities: {
+            VISION_MODEL: ['image', 'text'],
+            TEXT_MODEL: ['text'],
           },
         },
-        model_input_modalities: {
-          VISION_MODEL: ['image', 'text'],
-          TEXT_MODEL: ['text'],
-        },
-      })
+        'VISION_MODEL,TEXT_MODEL'
+      )
     )
 
     assert.deepEqual(defaults.model_input_modalities, {
@@ -296,5 +303,53 @@ describe('channel model input modality persistence', () => {
     const setting = JSON.parse(String(payload.channel.setting))
 
     assert.equal(Object.hasOwn(setting, 'model_input_modalities'), false)
+  })
+
+  test('prunes declarations for models removed from the channel list', () => {
+    const payload = transformFormDataToUpdatePayload(
+      {
+        ...CHANNEL_FORM_DEFAULT_VALUES,
+        name: 'test channel',
+        models: 'MODEL_A,model-a',
+        model_mapping: '{"MODEL_A":"UPSTREAM_MODEL"}',
+        model_input_modalities: {
+          MODEL_A: ['image', 'text'],
+          'model-a': ['text'],
+          UPSTREAM_MODEL: ['text'],
+          MODEL_B: ['text'],
+        },
+      },
+      1
+    )
+    const setting = JSON.parse(String(payload.setting))
+
+    assert.deepEqual(setting.model_input_modalities, {
+      MODEL_A: ['text', 'image'],
+      'model-a': ['text'],
+    })
+  })
+
+  test('builds new and existing channel probe drafts from current form values', () => {
+    const formData = {
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      name: 'draft channel',
+      type: 1,
+      key: 'draft-key',
+      base_url: 'https://draft.example.com/',
+      models: 'MODEL_A',
+    }
+
+    const createDraft = transformFormDataToNativeProbeDraft(formData)
+    assert.equal(createDraft.channel_id, undefined)
+    assert.equal(createDraft.channel.key, 'draft-key')
+    assert.equal(createDraft.channel.base_url, 'https://draft.example.com')
+
+    const updateDraft = transformFormDataToNativeProbeDraft(
+      { ...formData, key: '' },
+      42
+    )
+    assert.equal(updateDraft.channel_id, 42)
+    assert.equal(Object.hasOwn(updateDraft.channel, 'key'), false)
+    assert.equal(updateDraft.channel.base_url, 'https://draft.example.com')
   })
 })

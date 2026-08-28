@@ -23,6 +23,7 @@ import {
   buildGlobalInputModalityModelOptions,
   enableChannelInputModalityOverride,
   filterChannelInputModalityModels,
+  filterModelInputModalitiesForModels,
   getAvailableInputModalityModelOptions,
   getModelInputModalityNameError,
   groupChannelInputModalityModels,
@@ -51,6 +52,23 @@ describe('model input modality persistence helpers', () => {
     assert.equal(
       stringifyModelInputModalities(value),
       '{"TEXT_MODEL":["text"],"VISION_MODEL":["text","image"]}'
+    )
+  })
+
+  test('keeps only exact channel models when persisting declarations', () => {
+    assert.deepEqual(
+      filterModelInputModalitiesForModels(
+        {
+          MODEL_A: ['image', 'text'],
+          'model-a': ['text'],
+          MODEL_B: ['text'],
+        },
+        [' MODEL_A ', 'model-a', 'MODEL_A']
+      ),
+      {
+        MODEL_A: ['text', 'image'],
+        'model-a': ['text'],
+      }
     )
   })
 

@@ -19,8 +19,8 @@ For commercial licensing, please contact support@quantumnous.com
 import { z } from 'zod'
 
 import {
+  filterModelInputModalitiesForModels,
   modelInputModalitiesSchema,
-  normalizeModelInputModalities,
   parseModelInputModalities,
   type ModelInputModalities,
 } from '@/lib/model-input-modalities'
@@ -30,7 +30,7 @@ import {
   ERROR_MESSAGES,
   MODEL_FETCHABLE_TYPES,
 } from '../constants'
-import type { Channel } from '../types'
+import type { Channel, ChannelNativeProbeDraft } from '../types'
 import {
   CHANNEL_TYPE_ADVANCED_CUSTOM,
   advancedCustomConfigUsesRelativeUpstreamPath,
@@ -778,10 +778,12 @@ function buildSettingJSON(formData: ChannelFormValues): string {
   if (Object.keys(formData.model_system_prompts || {}).length > 0) {
     settingObj.model_system_prompts = formData.model_system_prompts
   }
-  if (Object.keys(formData.model_input_modalities || {}).length > 0) {
-    settingObj.model_input_modalities = normalizeModelInputModalities(
-      formData.model_input_modalities || {}
-    )
+  const modelInputModalities = filterModelInputModalitiesForModels(
+    formData.model_input_modalities || {},
+    parseModels(formData.models)
+  )
+  if (Object.keys(modelInputModalities).length > 0) {
+    settingObj.model_input_modalities = modelInputModalities
   }
   if (formData.model_context_fallbacks?.trim()) {
     try {
@@ -1053,6 +1055,22 @@ export function transformFormDataToUpdatePayload(
   payload.header_override = formData.header_override || ''
 
   return payload
+}
+
+/** Build the complete channel snapshot used by one unsaved protocol probe batch. */
+export function transformFormDataToNativeProbeDraft(
+  formData: ChannelFormValues,
+  channelId?: number
+): ChannelNativeProbeDraft {
+  if (channelId) {
+    return {
+      channel_id: channelId,
+      channel: transformFormDataToUpdatePayload(formData, channelId),
+    }
+  }
+  return {
+    channel: transformFormDataToCreatePayload(formData).channel,
+  }
 }
 
 // ============================================================================

@@ -78,6 +78,21 @@ export function normalizeModelInputModalities(
   return normalized
 }
 
+/** Keep declarations for exact model names that remain in the channel model list. */
+export function filterModelInputModalitiesForModels(
+  value: ModelInputModalities,
+  models: string[]
+): ModelInputModalities {
+  const allowedModels = new Set(
+    models.map((model) => model.trim()).filter(Boolean)
+  )
+  return normalizeModelInputModalities(
+    Object.fromEntries(
+      Object.entries(value).filter(([model]) => allowedModels.has(model))
+    )
+  )
+}
+
 /** Build a stable global picker list from catalog and persisted model names. */
 export function buildGlobalInputModalityModelOptions(
   modelOptions: string[],

@@ -38,11 +38,12 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 
-import { probeChannelProtocol } from '../api'
+import { probeChannelProtocolDraft } from '../api'
 import {
   applyProtocolProbeResults,
   createProtocolProbeBatch,
   isProtocolProbeBatchComplete,
+  isProtocolProbeReady,
   parseModelOverridesDraft,
   promoteCommonModelProtocolCapabilities,
   protocolCapabilityState,
@@ -60,6 +61,7 @@ import {
 } from '../lib/protocol-policy'
 import type {
   ChannelProtocolProbeResponse,
+  ChannelNativeProbeDraft,
   ChannelProtocolPolicy,
   ProtocolCapability,
   TextEndpointType,
@@ -70,6 +72,8 @@ const MAX_PROBE_MODELS = 10
 
 type ProtocolPolicyEditorProps = {
   channelId?: number
+  draftKey?: string
+  getProbeDraft: () => ChannelNativeProbeDraft
   channelType: number
   models: string[]
   value?: string
@@ -134,6 +138,8 @@ function capabilityStateTone(state: ProtocolCapabilityState) {
 
 export function ProtocolPolicyEditor({
   channelId,
+  draftKey,
+  getProbeDraft,
   channelType,
   models,
   value,
@@ -229,7 +235,11 @@ export function ProtocolPolicyEditor({
   }
 
   const runProtocolProbe = async (capabilityLevel: 'endpoint' | 'semantic') => {
-    if (!channelId || selectedModels.length === 0) return
+    if (!isProtocolProbeReady(channelId, draftKey, selectedModels.length)) {
+      return
+    }
+    // Freeze one form snapshot for every task in this batch.
+    const probeDraft = structuredClone(getProbeDraft())
     const batch = createProtocolProbeBatch(selectedModels, capabilityLevel)
     const tasks = batch.models.flatMap((model) =>
       TEXT_PROTOCOLS.flatMap((endpointType) =>
@@ -257,13 +267,16 @@ export function ProtocolPolicyEditor({
         const task = tasks[index]
         if (!task) return
         try {
-          const result = await probeChannelProtocol(channelId, {
+          const result = await probeChannelProtocolDraft({
+            ...probeDraft,
             model: task.model,
             endpoint_type: task.endpointType,
             stream: task.stream,
-            probe_mode: 'native',
             probe_case: task.probeCase,
           })
+          if (!result.classification) {
+            throw new Error(result.message || t('Probe failed'))
+          }
           setProbeResults((current) => ({
             ...current,
             [protocolProbeKey(
@@ -736,7 +749,12 @@ export function ProtocolPolicyEditor({
                     size='sm'
                     variant='outline'
                     disabled={
-                      disabled || !channelId || selectedModels.length === 0
+                      disabled ||
+                      !isProtocolProbeReady(
+                        channelId,
+                        draftKey,
+                        selectedModels.length
+                      )
                     }
                     onClick={() => void runProtocolProbe('endpoint')}
                   >
@@ -747,7 +765,12 @@ export function ProtocolPolicyEditor({
                     type='button'
                     size='sm'
                     disabled={
-                      disabled || !channelId || selectedModels.length === 0
+                      disabled ||
+                      !isProtocolProbeReady(
+                        channelId,
+                        draftKey,
+                        selectedModels.length
+                      )
                     }
                     onClick={() => setFullProbeConfirmOpen(true)}
                   >
@@ -776,9 +799,9 @@ export function ProtocolPolicyEditor({
             </div>
           </div>
 
-          {!channelId && (
+          {!channelId && !draftKey?.trim() && (
             <div className='text-muted-foreground rounded-md border border-dashed px-3 py-2 text-xs'>
-              {t('Save the channel before running a protocol probe')}
+              {t('Please enter API key first')}
             </div>
           )}
 

@@ -69,6 +69,7 @@ type channelTestOptions struct {
 	protocolProbeCase          protocolProbeCase
 	protocolProbeExecution     protocolProbeExecution
 	keyIndex                   *int
+	transientProbe             bool
 }
 
 type channelTestResponseOptions struct {
@@ -88,6 +89,15 @@ type channelConnectionTestRequest struct {
 	UserPrompt   string `json:"user_prompt"`
 	EndpointType string `json:"endpoint_type"`
 	Stream       bool   `json:"stream"`
+}
+
+type channelNativeProbeRequest struct {
+	ChannelID    *int           `json:"channel_id,omitempty"`
+	Channel      *model.Channel `json:"channel"`
+	Model        string         `json:"model"`
+	EndpointType string         `json:"endpoint_type"`
+	Stream       bool           `json:"stream"`
+	ProbeCase    string         `json:"probe_case"`
 }
 
 const maxChannelPromptTestUserPromptBytes = 16 * 1024
@@ -736,19 +746,21 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, op
 	milliseconds := tok.Sub(tik).Milliseconds()
 	consumedTime := float64(milliseconds) / 1000.0
 	other := buildTestLogOther(c, info, priceData, usage, tieredResult)
-	model.RecordConsumeLog(c, testUserID, model.RecordConsumeLogParams{
-		ChannelId:        channel.Id,
-		PromptTokens:     usage.PromptTokens,
-		CompletionTokens: usage.CompletionTokens,
-		ModelName:        info.OriginModelName,
-		TokenName:        "模型测试",
-		Quota:            quota,
-		Content:          "模型测试",
-		UseTimeSeconds:   int(consumedTime),
-		IsStream:         info.IsStream,
-		Group:            info.UsingGroup,
-		Other:            other,
-	})
+	if !options.transientProbe {
+		model.RecordConsumeLog(c, testUserID, model.RecordConsumeLogParams{
+			ChannelId:        channel.Id,
+			PromptTokens:     usage.PromptTokens,
+			CompletionTokens: usage.CompletionTokens,
+			ModelName:        info.OriginModelName,
+			TokenName:        "模型测试",
+			Quota:            quota,
+			Content:          "模型测试",
+			UseTimeSeconds:   int(consumedTime),
+			IsStream:         info.IsStream,
+			Group:            info.UsingGroup,
+			Other:            other,
+		})
+	}
 	common.SysLog(fmt.Sprintf("testing channel #%d completed, response_bytes=%d", channel.Id, len(respBody)))
 	if clientResponseError != nil {
 		return testResult{
@@ -1160,17 +1172,10 @@ func TestChannel(c *gin.Context) {
 		common.ApiError(c, errors.New("key_index cannot be combined with probe_mode"))
 		return
 	}
-	if nativeProbe && !dto.IsTextProtocolEndpointType(constant.EndpointType(endpointType)) {
-		common.ApiError(c, errors.New("native probe requires a supported text endpoint_type"))
+	if nativeProbe {
+		runNativeProtocolProbe(c, channel, testModel, endpointType, isStream, probeCase, false)
 		return
 	}
-	probeExecution := resolveProtocolProbeExecution(
-		channel,
-		testModel,
-		constant.EndpointType(endpointType),
-		isStream,
-		probeCase,
-	)
 	testUserID, err := resolveChannelTestUserID(c)
 	if err != nil {
 		common.ApiError(c, err)
@@ -1182,45 +1187,199 @@ func TestChannel(c *gin.Context) {
 		requestCtx = c.Request.Context()
 	}
 	result := testChannel(requestCtx, channel, testUserID, channelTestOptions{
-		model: testModel, endpointType: endpointType, isStream: isStream, nativeProbe: nativeProbe,
-		protocolProbeCase: probeCase, protocolProbeExecution: probeExecution, keyIndex: keyIndex,
+		model: testModel, endpointType: endpointType, isStream: isStream, keyIndex: keyIndex,
 	})
-	if nativeProbe {
-		consumedTime := float64(time.Since(tik).Milliseconds()) / 1000.0
-		classification := classifyNativeProbeResult(result)
-		message := ""
-		if result.localErr != nil {
-			message = compactProbeError(result.localErr.Error())
-		} else if result.newAPIError != nil {
-			message = compactProbeError(result.newAPIError.Error())
-		}
-		c.JSON(http.StatusOK, gin.H{
-			"success":              classification == "confirmed",
-			"message":              message,
-			"model":                testModel,
-			"endpoint_type":        endpointType,
-			"stream":               isStream,
-			"http_status":          result.upstreamStatus,
-			"time":                 consumedTime,
-			"classification":       classification,
-			"probe_case":           probeCase,
-			"capability_level":     probeCase.CapabilityLevel(),
-			"effective_route_mode": probeExecution.RouteMode,
-			"recommended_mode": recommendedProtocolProbeMode(
-				channel,
-				testModel,
-				constant.EndpointType(endpointType),
-				isStream,
-				probeCase,
-				probeExecution,
-				classification,
-			),
-		})
-		return
-	}
 	respondChannelConnectionTest(c, channel, tik, result, channelTestResponseOptions{
 		keyIndex:           keyIndex,
 		updateResponseTime: keyIndex == nil,
+	})
+}
+
+// TestChannelNativeProbeDraft probes one protocol using the current unsaved channel form draft.
+func TestChannelNativeProbeDraft(c *gin.Context) {
+	request := channelNativeProbeRequest{}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if request.Channel == nil {
+		common.ApiError(c, errors.New("channel is required"))
+		return
+	}
+
+	request.Model = strings.TrimSpace(request.Model)
+	request.EndpointType = strings.TrimSpace(request.EndpointType)
+	if request.Model == "" || len(request.Model) > 255 {
+		common.ApiError(c, errors.New("model is required and must not exceed 255 bytes"))
+		return
+	}
+	if !dto.IsTextProtocolEndpointType(constant.EndpointType(request.EndpointType)) {
+		common.ApiError(c, errors.New("native probe requires a supported text endpoint_type"))
+		return
+	}
+	probeCase, err := parseProtocolProbeCase(request.ProbeCase, true)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	var savedChannel *model.Channel
+	if request.ChannelID != nil {
+		if *request.ChannelID <= 0 {
+			common.ApiError(c, errors.New("channel_id must be a positive integer"))
+			return
+		}
+		savedChannel, err = model.GetChannelById(*request.ChannelID, true)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
+	probeChannel, err := buildDraftNativeProbeChannel(savedChannel, request.Channel)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if probeChannel.Type != constant.ChannelTypeOpenAI && probeChannel.Type != constant.ChannelTypeAdvancedCustom {
+		common.ApiError(c, errors.New("protocol probe only supports standard compatible and advanced custom channels"))
+		return
+	}
+	if err := validateChannel(probeChannel, true); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	runNativeProtocolProbe(c, probeChannel, request.Model, request.EndpointType, request.Stream, probeCase, true)
+}
+
+// buildDraftNativeProbeChannel overlays editable draft fields without mutating persisted channel state.
+func buildDraftNativeProbeChannel(savedChannel *model.Channel, draft *model.Channel) (*model.Channel, error) {
+	if draft == nil {
+		return nil, errors.New("channel is required")
+	}
+	probeChannel := model.Channel{Status: common.ChannelStatusEnabled}
+	if savedChannel != nil {
+		probeChannel = *savedChannel
+		probeChannel.ChannelInfo = cloneChannelInfo(savedChannel.ChannelInfo)
+	}
+
+	// Only form-editable routing fields participate in the transient probe.
+	probeChannel.Type = draft.Type
+	probeChannel.Name = draft.Name
+	probeChannel.OpenAIOrganization = draft.OpenAIOrganization
+	probeChannel.TestModel = draft.TestModel
+	probeChannel.BaseURL = draft.BaseURL
+	probeChannel.Other = draft.Other
+	probeChannel.Models = draft.Models
+	probeChannel.Group = draft.Group
+	probeChannel.ModelMapping = draft.ModelMapping
+	probeChannel.StatusCodeMapping = draft.StatusCodeMapping
+	probeChannel.AutoBan = draft.AutoBan
+	probeChannel.Setting = draft.Setting
+	probeChannel.ParamOverride = draft.ParamOverride
+	probeChannel.HeaderOverride = draft.HeaderOverride
+	probeChannel.Remark = draft.Remark
+	probeChannel.OtherSettings = draft.OtherSettings
+	probeChannel.Keys = nil
+
+	draftKey := firstNonEmptyChannelKey(draft.Key)
+	if draftKey != "" {
+		probeChannel.Key = draftKey
+		probeChannel.ChannelInfo = model.ChannelInfo{}
+	} else if savedChannel == nil || strings.TrimSpace(savedChannel.Key) == "" {
+		return nil, errors.New("API key is required before running a protocol probe")
+	} else {
+		probeChannel.Key = savedChannel.Key
+		if probeChannel.ChannelInfo.IsMultiKey {
+			// Random selection honors enabled-key status without advancing or persisting the polling cursor.
+			probeChannel.ChannelInfo.MultiKeyMode = constant.MultiKeyModeRandom
+		}
+	}
+	return &probeChannel, nil
+}
+
+// cloneChannelInfo copies mutable status maps so a transient probe cannot alter cached channel metadata.
+func cloneChannelInfo(info model.ChannelInfo) model.ChannelInfo {
+	cloned := info
+	cloned.MultiKeyStatusList = make(map[int]int, len(info.MultiKeyStatusList))
+	for index, status := range info.MultiKeyStatusList {
+		cloned.MultiKeyStatusList[index] = status
+	}
+	cloned.MultiKeyDisabledReason = make(map[int]string, len(info.MultiKeyDisabledReason))
+	for index, reason := range info.MultiKeyDisabledReason {
+		cloned.MultiKeyDisabledReason[index] = reason
+	}
+	cloned.MultiKeyDisabledTime = make(map[int]int64, len(info.MultiKeyDisabledTime))
+	for index, disabledTime := range info.MultiKeyDisabledTime {
+		cloned.MultiKeyDisabledTime[index] = disabledTime
+	}
+	return cloned
+}
+
+// firstNonEmptyChannelKey selects one exact credential from a multiline form draft.
+func firstNonEmptyChannelKey(raw string) string {
+	for _, key := range strings.Split(raw, "\n") {
+		if key = strings.TrimSpace(key); key != "" {
+			return key
+		}
+	}
+	return ""
+}
+
+// runNativeProtocolProbe executes the shared native probe path for saved and draft channels.
+func runNativeProtocolProbe(c *gin.Context, channel *model.Channel, testModel string, endpointType string, isStream bool, probeCase protocolProbeCase, transient bool) {
+	if !dto.IsTextProtocolEndpointType(constant.EndpointType(endpointType)) {
+		common.ApiError(c, errors.New("native probe requires a supported text endpoint_type"))
+		return
+	}
+	probeExecution := resolveProtocolProbeExecution(channel, testModel, constant.EndpointType(endpointType), isStream, probeCase)
+	testUserID, err := resolveChannelTestUserID(c)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	tik := time.Now()
+	requestCtx := context.Background()
+	if c.Request != nil {
+		requestCtx = c.Request.Context()
+	}
+	result := testChannel(requestCtx, channel, testUserID, channelTestOptions{
+		model: testModel, endpointType: endpointType, isStream: isStream, nativeProbe: true,
+		protocolProbeCase: probeCase, protocolProbeExecution: probeExecution, transientProbe: transient,
+	})
+	respondNativeProtocolProbe(c, channel, tik, result, testModel, endpointType, isStream, probeCase, probeExecution)
+}
+
+// respondNativeProtocolProbe writes the stable probe response while redacting every channel credential.
+func respondNativeProtocolProbe(c *gin.Context, channel *model.Channel, tik time.Time, result testResult, testModel string, endpointType string, isStream bool, probeCase protocolProbeCase, probeExecution protocolProbeExecution) {
+	classification := classifyNativeProbeResult(result)
+	message := ""
+	if result.localErr != nil {
+		message = compactProbeError(result.localErr.Error(), channel.GetKeys()...)
+	} else if result.newAPIError != nil {
+		message = compactProbeError(result.newAPIError.Error(), channel.GetKeys()...)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success":              classification == "confirmed",
+		"message":              message,
+		"model":                testModel,
+		"endpoint_type":        endpointType,
+		"stream":               isStream,
+		"http_status":          result.upstreamStatus,
+		"time":                 float64(time.Since(tik).Milliseconds()) / 1000.0,
+		"classification":       classification,
+		"probe_case":           probeCase,
+		"capability_level":     probeCase.CapabilityLevel(),
+		"effective_route_mode": probeExecution.RouteMode,
+		"recommended_mode": recommendedProtocolProbeMode(
+			channel,
+			testModel,
+			constant.EndpointType(endpointType),
+			isStream,
+			probeCase,
+			probeExecution,
+			classification,
+		),
 	})
 }
 
@@ -1499,8 +1658,13 @@ func classifyNativeProbeResult(result testResult) string {
 	return "upstream_error"
 }
 
-func compactProbeError(message string) string {
+func compactProbeError(message string, sensitiveValues ...string) string {
 	message = strings.TrimSpace(message)
+	for _, sensitiveValue := range sensitiveValues {
+		if sensitiveValue = strings.TrimSpace(sensitiveValue); sensitiveValue != "" {
+			message = strings.ReplaceAll(message, sensitiveValue, "***")
+		}
+	}
 	const maxProbeErrorRunes = 512
 	runes := []rune(message)
 	if len(runes) <= maxProbeErrorRunes {

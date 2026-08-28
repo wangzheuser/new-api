@@ -944,6 +944,29 @@ type ChannelStatusBatchRequest struct {
 	Status int   `json:"status"`
 }
 
+// normalizeChannelUpdatePayload validates the effective saved-plus-patch channel and copies normalized mutable fields back to the patch.
+func normalizeChannelUpdatePayload(channel *PatchChannel, originChannel *model.Channel, rawBody []byte, requestData map[string]any) error {
+	effectiveChannel := PatchChannel{Channel: *originChannel}
+	if err := common.Unmarshal(rawBody, &effectiveChannel); err != nil {
+		return err
+	}
+	// Server-managed multi-key metadata always comes from the persisted channel.
+	effectiveChannel.ChannelInfo = originChannel.ChannelInfo
+	if err := validateChannel(&effectiveChannel.Channel, false); err != nil {
+		return err
+	}
+
+	_, modelsChanged := requestData["models"]
+	_, settingChanged := requestData["setting"]
+	if modelsChanged || settingChanged {
+		channel.Setting = effectiveChannel.Setting
+	}
+	if _, changed := requestData["param_override"]; changed {
+		channel.ParamOverride = effectiveChannel.ParamOverride
+	}
+	return nil
+}
+
 func UpdateChannel(c *gin.Context) {
 	channel := PatchChannel{}
 	rawBody, err := c.GetRawData()
@@ -966,17 +989,17 @@ func UpdateChannel(c *gin.Context) {
 	}
 	clearChannelReadOnlyFields(&channel, requestData)
 
-	// 使用统一的校验函数
-	if err := validateChannel(&channel.Channel, false); err != nil {
+	// Preserve existing ChannelInfo to ensure multi-key channels keep correct state even if the client does not send ChannelInfo in the request.
+	originChannel, err := model.GetChannelById(channel.Id, true)
+	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": err.Error(),
 		})
 		return
 	}
-	// Preserve existing ChannelInfo to ensure multi-key channels keep correct state even if the client does not send ChannelInfo in the request.
-	originChannel, err := model.GetChannelById(channel.Id, true)
-	if err != nil {
+	// Validate against the effective channel so models-only patches can normalize the persisted setting.
+	if err := normalizeChannelUpdatePayload(&channel, originChannel, rawBody, requestData); err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": err.Error(),

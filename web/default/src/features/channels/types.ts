@@ -277,6 +277,18 @@ export interface ChannelProtocolProbeResponse extends ChannelTestResponse {
   recommended_mode: 'native' | 'normalized' | 'unsupported'
 }
 
+export interface ChannelNativeProbeDraft {
+  channel_id?: number
+  channel: Partial<Channel>
+}
+
+export interface ChannelNativeProbeRequest extends ChannelNativeProbeDraft {
+  model: string
+  endpoint_type: TextEndpointType
+  stream: boolean
+  probe_case: ChannelProtocolProbeResponse['probe_case']
+}
+
 export interface ChannelPromptTestRequest {
   model: string
   system_prompt: string

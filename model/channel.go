@@ -870,6 +870,7 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 	updateData := Channel{}
 	shouldReCreateAbilities := false
 	updatedTag := tag
+	var normalizedSettings map[int]*string
 	// 如果 newTag 不为空且不等于 tag，则更新 tag
 	if newTag != nil && *newTag != tag {
 		updateData.Tag = newTag
@@ -881,6 +882,18 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 	if models != nil && *models != "" {
 		shouldReCreateAbilities = true
 		updateData.Models = *models
+		channels, err := GetChannelsByTag(tag, false, false)
+		if err != nil {
+			return err
+		}
+		normalizedSettings = make(map[int]*string, len(channels))
+		for _, channel := range channels {
+			channel.Models = *models
+			if err := channel.ValidateSettings(); err != nil {
+				return err
+			}
+			normalizedSettings[channel.Id] = channel.Setting
+		}
 	}
 	if group != nil && *group != "" {
 		shouldReCreateAbilities = true
@@ -899,7 +912,17 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 		updateData.HeaderOverride = headerOverride
 	}
 
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Updates(updateData).Error
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&Channel{}).Where("tag = ?", tag).Updates(updateData).Error; err != nil {
+			return err
+		}
+		for channelID, setting := range normalizedSettings {
+			if err := tx.Model(&Channel{}).Where("id = ?", channelID).Update("setting", setting).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
@@ -1021,15 +1044,23 @@ func (channel *Channel) ValidateSettings() error {
 	if err := channelParams.ValidateSystemPrompts(); err != nil {
 		return err
 	}
-	if err := channelParams.ModelInputModalities.Validate(); err != nil {
-		return err
-	}
 	if channelParams.ModelInputModalities != nil {
-		normalized, err := common.Marshal(channelParams.ModelInputModalities.Normalized())
-		if err != nil {
+		// Channel-level declarations only apply to models that remain enabled on this channel.
+		filtered := channelParams.ModelInputModalities.FilterForModels(channel.GetModels())
+		if err := filtered.Validate(); err != nil {
 			return err
 		}
-		setting, err := sjson.SetRawBytes([]byte(*channel.Setting), "model_input_modalities", normalized)
+		setting := []byte(*channel.Setting)
+		var err error
+		if len(filtered) == 0 {
+			setting, err = sjson.DeleteBytes(setting, "model_input_modalities")
+		} else {
+			normalized, marshalErr := common.Marshal(filtered.Normalized())
+			if marshalErr != nil {
+				return marshalErr
+			}
+			setting, err = sjson.SetRawBytes(setting, "model_input_modalities", normalized)
+		}
 		if err != nil {
 			return err
 		}

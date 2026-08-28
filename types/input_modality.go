@@ -72,3 +72,22 @@ func (m ModelInputModalities) Normalized() ModelInputModalities {
 	}
 	return normalized
 }
+
+// FilterForModels returns declarations whose exact model names remain enabled on the channel.
+func (m ModelInputModalities) FilterForModels(models []string) ModelInputModalities {
+	allowedModels := make(map[string]struct{}, len(models))
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model != "" {
+			allowedModels[model] = struct{}{}
+		}
+	}
+
+	filtered := make(ModelInputModalities)
+	for model, modalities := range m {
+		if _, exists := allowedModels[model]; exists {
+			filtered[model] = modalities
+		}
+	}
+	return filtered
+}

@@ -151,6 +151,32 @@ func TestUpdateChannelRejectsStatusField(t *testing.T) {
 	assert.False(t, response.Success)
 }
 
+func TestNormalizeChannelUpdatePayloadPrunesPersistedInputModalities(t *testing.T) {
+	setting := `{"future_field":true,"model_input_modalities":{"model-a":["text","image"],"model-b":["text"]}}`
+	origin := &model.Channel{
+		Id:      1,
+		Type:    1,
+		Key:     "saved-key",
+		Models:  "model-a,model-b",
+		Setting: &setting,
+		ChannelInfo: model.ChannelInfo{
+			IsMultiKey: true,
+		},
+	}
+	patch := PatchChannel{Channel: model.Channel{Id: origin.Id, Models: "model-a"}}
+	rawBody := []byte(`{"id":1,"models":"model-a"}`)
+
+	require.NoError(t, normalizeChannelUpdatePayload(
+		&patch,
+		origin,
+		rawBody,
+		map[string]any{"id": float64(1), "models": "model-a"},
+	))
+	require.NotNil(t, patch.Setting)
+	assert.JSONEq(t, `{"future_field":true,"model_input_modalities":{"model-a":["text","image"]}}`, *patch.Setting)
+	assert.True(t, origin.ChannelInfo.IsMultiKey)
+}
+
 func TestChannelStatusValidation(t *testing.T) {
 	assert.True(t, isManageableChannelStatus(common.ChannelStatusEnabled))
 	assert.True(t, isManageableChannelStatus(common.ChannelStatusManuallyDisabled))

@@ -404,7 +404,7 @@ function ChannelInputModalityEditor(props: ScopedInputModalityEditorProps) {
                 </p>
                 <p className='text-muted-foreground text-xs'>
                   {t(
-                    'These overrides belong to models removed from the current channel model list. Restore inheritance to remove them.'
+                    'These overrides belong to models removed from the current channel model list. They will be removed automatically when the channel is saved.'
                   )}
                 </p>
               </div>

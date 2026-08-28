@@ -88,6 +88,18 @@ export type ModelProtocolPromotion = {
   modelOverrides: Record<string, ModelProtocolProfile>
 }
 
+/** Report whether a saved credential or current draft key can run selected probes. */
+export function isProtocolProbeReady(
+  channelId: number | undefined,
+  draftKey: string | undefined,
+  selectedModelCount: number
+): boolean {
+  return (
+    selectedModelCount > 0 &&
+    Boolean(channelId || String(draftKey || '').trim())
+  )
+}
+
 /**
  * Read a model's capability object without trusting an editable JSON draft to
  * already match the TypeScript type.

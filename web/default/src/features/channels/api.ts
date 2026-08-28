@@ -26,6 +26,7 @@ import type {
   Channel,
   ChannelBalanceResponse,
   ChannelConnectionTestRequest,
+  ChannelNativeProbeRequest,
   ChannelOpsResponse,
   ChannelPromptTestRequest,
   ChannelPromptTestResponse,
@@ -261,28 +262,14 @@ export async function testChannelConnectionPrompt(
   return res.data
 }
 
-/**
- * Probe endpoint reachability or one semantic compatibility scenario without persisting settings.
- */
-export async function probeChannelProtocol(
-  id: number,
-  params: {
-    model: string
-    endpoint_type: string
-    stream: boolean
-    probe_mode: 'native'
-    probe_case:
-      | 'basic'
-      | 'assistant_history'
-      | 'tool_cycle'
-      | 'reasoning_history'
-      | 'invalid_tool_id'
-      | 'tool_id_collision'
-  }
+/** Probe one native protocol against an immutable unsaved channel draft. */
+export async function probeChannelProtocolDraft(
+  data: ChannelNativeProbeRequest
 ): Promise<ChannelProtocolProbeResponse> {
-  const res = await api.get(
-    `/api/channel/test/${id}`,
-    channelActionConfig({ params })
+  const res = await api.post(
+    '/api/channel/test/native',
+    data,
+    channelActionConfig()
   )
   return res.data
 }

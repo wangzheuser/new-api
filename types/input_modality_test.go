@@ -57,3 +57,16 @@ func TestModelInputModalitiesNormalized(t *testing.T) {
 		"text":   {InputModalityText},
 	}, value.Normalized())
 }
+
+func TestModelInputModalitiesFilterForModels(t *testing.T) {
+	value := ModelInputModalities{
+		"model-a": {InputModalityText},
+		"Model-A": {InputModalityText, InputModalityImage},
+		"model-b": {InputModalityText},
+	}
+
+	assert.Equal(t, ModelInputModalities{
+		"model-a": {InputModalityText},
+		"Model-A": {InputModalityText, InputModalityImage},
+	}, value.FilterForModels([]string{" model-a ", "Model-A", "model-a"}))
+}

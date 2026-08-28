@@ -161,6 +161,7 @@ import {
   getAdvancedCustomStats,
   hasConfiguredSystemPrompt,
   transformChannelToFormDefaults,
+  transformFormDataToNativeProbeDraft,
   type ChannelFormValues,
   deduplicateKeys,
   getChannelTypeIcon,
@@ -739,6 +740,15 @@ export function ChannelMutateDrawer({
     resolver: zodResolver(channelFormSchema),
     defaultValues: CHANNEL_FORM_DEFAULT_VALUES,
   })
+
+  const getProtocolProbeDraft = useCallback(
+    () =>
+      transformFormDataToNativeProbeDraft(
+        form.getValues(),
+        channelId ?? undefined
+      ),
+    [channelId, form]
+  )
 
   const handleContextFallbackValidityChange = useCallback(
     (error: string | null) => {
@@ -4479,6 +4489,8 @@ export function ChannelMutateDrawer({
                                 <FormItem>
                                   <ProtocolPolicyEditor
                                     channelId={channelId ?? undefined}
+                                    draftKey={currentKey}
+                                    getProbeDraft={getProtocolProbeDraft}
                                     channelType={currentType}
                                     models={currentModelsArray}
                                     value={field.value}

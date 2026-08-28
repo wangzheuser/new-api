@@ -1,14 +1,21 @@
 package controller
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestNormalizeModelNames(t *testing.T) {
@@ -70,6 +77,37 @@ func TestApplySelectedModelChanges(t *testing.T) {
 
 		require.Equal(t, []string{"gpt-4o", "gpt-4.1"}, result)
 	})
+}
+
+func TestUpdateChannelUpstreamModelSettingsPrunesRemovedInputModalities(t *testing.T) {
+	previousDB := model.DB
+	dsn := fmt.Sprintf("file:upstream-settings-%d?mode=memory&cache=shared", time.Now().UnixNano())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.Channel{}))
+	model.DB = db
+	t.Cleanup(func() { model.DB = previousDB })
+
+	setting := `{"future_field":true,"model_input_modalities":{"model-a":["text"],"model-b":["text"]}}`
+	channel := &model.Channel{
+		Type:    constant.ChannelTypeOpenAI,
+		Key:     "test-key",
+		Status:  common.ChannelStatusEnabled,
+		Name:    "upstream channel",
+		Models:  "model-a,model-b",
+		Group:   "default",
+		Setting: &setting,
+	}
+	require.NoError(t, db.Create(channel).Error)
+
+	channel.Models = "model-a"
+	require.NoError(t, updateChannelUpstreamModelSettings(channel, dto.ChannelOtherSettings{}, true))
+
+	var stored model.Channel
+	require.NoError(t, db.First(&stored, channel.Id).Error)
+	assert.Equal(t, "model-a", stored.Models)
+	require.NotNil(t, stored.Setting)
+	assert.JSONEq(t, `{"future_field":true,"model_input_modalities":{"model-a":["text"]}}`, *stored.Setting)
 }
 
 func TestCollectPendingApplyUpstreamModelChanges(t *testing.T) {

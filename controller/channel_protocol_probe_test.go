@@ -184,3 +184,91 @@ func TestRecommendedProtocolProbeModeNeverPromotesBasicReachabilityToNative(t *t
 		protocolProbeCaseAssistantHistory, execution, "upstream_error",
 	))
 }
+
+func TestBuildDraftNativeProbeChannelCredentialSelection(t *testing.T) {
+	t.Run("new channel uses first non-empty draft key", func(t *testing.T) {
+		baseURL := "https://draft.example.com"
+		probeChannel, err := buildDraftNativeProbeChannel(nil, &model.Channel{
+			Type:    constant.ChannelTypeOpenAI,
+			Key:     "  \n draft-key \n second-key ",
+			BaseURL: &baseURL,
+			Models:  "MODEL_X",
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, "draft-key", probeChannel.Key)
+		assert.Equal(t, baseURL, probeChannel.GetBaseURL())
+		assert.False(t, probeChannel.ChannelInfo.IsMultiKey)
+	})
+
+	t.Run("blank draft key reuses saved enabled-key state without sharing maps", func(t *testing.T) {
+		savedBaseURL := "https://saved.example.com"
+		draftBaseURL := "https://draft.example.com"
+		savedChannel := &model.Channel{
+			Id:      42,
+			Type:    constant.ChannelTypeOpenAI,
+			Key:     "disabled-key\nenabled-key",
+			BaseURL: &savedBaseURL,
+			Models:  "MODEL_X",
+			ChannelInfo: model.ChannelInfo{
+				IsMultiKey:           true,
+				MultiKeySize:         2,
+				MultiKeyStatusList:   map[int]int{0: common.ChannelStatusAutoDisabled},
+				MultiKeyPollingIndex: 1,
+				MultiKeyMode:         constant.MultiKeyModePolling,
+			},
+		}
+		probeChannel, err := buildDraftNativeProbeChannel(savedChannel, &model.Channel{
+			Type:    constant.ChannelTypeOpenAI,
+			BaseURL: &draftBaseURL,
+			Models:  "MODEL_X",
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, savedChannel.Id, probeChannel.Id)
+		assert.Equal(t, savedChannel.Key, probeChannel.Key)
+		assert.Equal(t, draftBaseURL, probeChannel.GetBaseURL())
+		assert.True(t, probeChannel.ChannelInfo.IsMultiKey)
+		assert.Equal(t, common.ChannelStatusAutoDisabled, probeChannel.ChannelInfo.MultiKeyStatusList[0])
+		assert.Equal(t, constant.MultiKeyModeRandom, probeChannel.ChannelInfo.MultiKeyMode)
+		selectedKey, selectedIndex, apiErr := probeChannel.GetNextEnabledKey()
+		require.Nil(t, apiErr)
+		assert.Equal(t, "enabled-key", selectedKey)
+		assert.Equal(t, 1, selectedIndex)
+		assert.Equal(t, 1, savedChannel.ChannelInfo.MultiKeyPollingIndex)
+
+		probeChannel.ChannelInfo.MultiKeyStatusList[0] = common.ChannelStatusEnabled
+		assert.Equal(t, common.ChannelStatusAutoDisabled, savedChannel.ChannelInfo.MultiKeyStatusList[0])
+	})
+
+	t.Run("explicit edit key is isolated from saved multi-key metadata", func(t *testing.T) {
+		savedChannel := &model.Channel{
+			Id:  42,
+			Key: "saved-key",
+			ChannelInfo: model.ChannelInfo{
+				IsMultiKey:         true,
+				MultiKeyStatusList: map[int]int{0: common.ChannelStatusManuallyDisabled},
+			},
+		}
+		probeChannel, err := buildDraftNativeProbeChannel(savedChannel, &model.Channel{
+			Type:   constant.ChannelTypeOpenAI,
+			Key:    "draft-key",
+			Models: "MODEL_X",
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, "draft-key", probeChannel.Key)
+		assert.False(t, probeChannel.ChannelInfo.IsMultiKey)
+		assert.Empty(t, probeChannel.ChannelInfo.MultiKeyStatusList)
+	})
+
+	_, err := buildDraftNativeProbeChannel(nil, &model.Channel{Type: constant.ChannelTypeOpenAI})
+	require.ErrorContains(t, err, "API key is required")
+}
+
+func TestCompactProbeErrorRedactsCredentialsBeforeTruncation(t *testing.T) {
+	message := compactProbeError("request failed with draft-secret and saved-secret", "draft-secret", "saved-secret")
+
+	assert.Equal(t, "request failed with *** and ***", message)
+	assert.NotContains(t, message, "secret")
+}

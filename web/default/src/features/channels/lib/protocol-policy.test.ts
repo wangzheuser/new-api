@@ -28,6 +28,7 @@ import {
   applyProtocolProbeResults,
   createProtocolProbeBatch,
   isProtocolProbeBatchComplete,
+  isProtocolProbeReady,
   parseModelOverridesDraft,
   promoteCommonModelProtocolCapabilities,
   protocolCapabilityState,
@@ -103,6 +104,15 @@ describe('model protocol overrides draft', () => {
       success: false,
       error: 'not_object',
     })
+  })
+})
+
+describe('protocol probe readiness', () => {
+  test('accepts saved credentials or a current unsaved key after model selection', () => {
+    assert.equal(isProtocolProbeReady(42, '', 1), true)
+    assert.equal(isProtocolProbeReady(undefined, ' draft-key ', 1), true)
+    assert.equal(isProtocolProbeReady(undefined, '', 1), false)
+    assert.equal(isProtocolProbeReady(42, '', 0), false)
   })
 })
 

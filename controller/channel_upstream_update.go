@@ -348,7 +348,12 @@ func updateChannelUpstreamModelSettings(channel *model.Channel, settings dto.Cha
 		"settings": channel.OtherSettings,
 	}
 	if updateModels {
+		// Keep channel-scoped input modality declarations aligned with the new model list.
+		if err := channel.ValidateSettings(); err != nil {
+			return err
+		}
 		updates["models"] = channel.Models
+		updates["setting"] = channel.Setting
 	}
 	return model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Updates(updates).Error
 }
