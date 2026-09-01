@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -24,22 +25,111 @@ const (
 
 	SubscriptionApplyActionCreated = "created"
 	SubscriptionApplyActionMerged  = "merged"
+
+	SubscriptionActivationImmediate = "immediate"
+	SubscriptionActivationRenew     = "renew"
+
+	MaxAdminSubscriptionQuantity = 1000
 )
 
 // SubscriptionApplyOptions describes how one purchase or admin grant applies a plan.
 type SubscriptionApplyOptions struct {
 	Source               string
 	ApplyMode            string
+	ActivationMode       string
+	Quantity             int
 	EnforcePurchaseLimit bool
 }
 
 // SubscriptionApplyResult describes the entitlement changed by one application.
 type SubscriptionApplyResult struct {
-	Subscription *UserSubscription `json:"subscription"`
-	Action       string            `json:"action"`
-	AppliedMode  string            `json:"applied_mode"`
-	PlanTitle    string            `json:"plan_title"`
-	Before       *UserSubscription `json:"-"`
+	Subscription   *UserSubscription `json:"subscription"`
+	Action         string            `json:"action"`
+	AppliedMode    string            `json:"applied_mode"`
+	ActivationMode string            `json:"-"`
+	PlanTitle      string            `json:"plan_title"`
+	Quantity       int               `json:"quantity"`
+	Before         *UserSubscription `json:"-"`
+}
+
+// NormalizeSubscriptionQuantity applies the legacy single-allocation default and validates explicit quantities.
+func NormalizeSubscriptionQuantity(quantity int) (int, error) {
+	if quantity == 0 {
+		return 1, nil
+	}
+	if quantity < 1 || quantity > MaxAdminSubscriptionQuantity {
+		return 0, fmt.Errorf("subscription quantity must be between 1 and %d", MaxAdminSubscriptionQuantity)
+	}
+	return quantity, nil
+}
+
+// ResolveSubscriptionActivationMode validates when an independent subscription starts.
+func ResolveSubscriptionActivationMode(activationMode string, applyMode string) (string, error) {
+	activationMode = strings.TrimSpace(activationMode)
+	if activationMode == "" {
+		return SubscriptionActivationImmediate, nil
+	}
+	if activationMode != SubscriptionActivationImmediate && activationMode != SubscriptionActivationRenew {
+		return "", fmt.Errorf("invalid subscription activation mode: %s", activationMode)
+	}
+	if activationMode == SubscriptionActivationRenew && applyMode != SubscriptionRepeatPurchaseIndependent {
+		return "", errors.New("renew activation requires independent apply mode")
+	}
+	return activationMode, nil
+}
+
+// calcPlanEndTimeForQuantity advances a plan by whole calendar periods without flattening months or years into seconds.
+func calcPlanEndTimeForQuantity(start time.Time, plan *SubscriptionPlan, quantity int) (int64, error) {
+	end := start
+	for range quantity {
+		endUnix, err := calcPlanEndTime(end, plan)
+		if err != nil {
+			return 0, err
+		}
+		if endUnix <= end.Unix() {
+			return 0, errors.New("subscription end time overflow")
+		}
+		end = time.Unix(endUnix, 0)
+	}
+	return end.Unix(), nil
+}
+
+// multiplySubscriptionQuota scales additive quota while preserving zero as unlimited.
+func multiplySubscriptionQuota(amount int64, quantity int) (int64, error) {
+	if amount == 0 {
+		return 0, nil
+	}
+	if amount < 0 || quantity < 1 || amount > math.MaxInt64/int64(quantity) {
+		return 0, errors.New("subscription quota overflow")
+	}
+	return amount * int64(quantity), nil
+}
+
+// sameSubscriptionBenefits reports whether two snapshots grant the same base and additional groups.
+func sameSubscriptionBenefits(subscription *UserSubscription, upgradeGroup string, entitlementGroup string, grantGroups GroupNames) bool {
+	if subscription == nil || strings.TrimSpace(subscription.UpgradeGroup) != strings.TrimSpace(upgradeGroup) {
+		return false
+	}
+	existingGroups := NormalizeGroupNames(append(GroupNames{subscription.EntitlementGroup}, subscription.GrantGroups...))
+	incomingGroups := NormalizeGroupNames(append(GroupNames{entitlementGroup}, grantGroups...))
+	return slices.Equal(existingGroups, incomingGroups)
+}
+
+// findRenewalTargetTx returns the latest active or scheduled subscription with the same benefit snapshot.
+func findRenewalTargetTx(tx *gorm.DB, userId int, now int64, upgradeGroup string, entitlementGroup string, grantGroups GroupNames) (*UserSubscription, error) {
+	var subscriptions []UserSubscription
+	if err := lockForUpdate(tx).
+		Where("user_id = ? AND status IN ? AND end_time > ?", userId, []string{"active", "scheduled"}, now).
+		Order("end_time desc, id desc").
+		Find(&subscriptions).Error; err != nil {
+		return nil, err
+	}
+	for index := range subscriptions {
+		if sameSubscriptionBenefits(&subscriptions[index], upgradeGroup, entitlementGroup, grantGroups) {
+			return &subscriptions[index], nil
+		}
+	}
+	return nil, nil
 }
 
 // NormalizeSubscriptionRepeatPurchaseMode returns a safe mode for persisted legacy values.
@@ -117,7 +207,11 @@ func mergeRepeatedUserSubscriptionTx(tx *gorm.DB, plan *SubscriptionPlan, incomi
 	if allocationCount < 1 {
 		allocationCount = 1
 	}
-	if allocationCount == math.MaxInt64 {
+	quantity := incoming.AllocationCount
+	if quantity < 1 {
+		quantity = 1
+	}
+	if quantity > math.MaxInt64-allocationCount {
 		return nil, errors.New("subscription allocation count overflow")
 	}
 
@@ -127,7 +221,7 @@ func mergeRepeatedUserSubscriptionTx(tx *gorm.DB, plan *SubscriptionPlan, incomi
 		target = *incoming
 		target.Id = before.Id
 		target.CreatedAt = createdAt
-		target.AllocationCount = allocationCount + 1
+		target.AllocationCount = allocationCount + quantity
 		if previousGroup != "" {
 			target.PrevUserGroup = previousGroup
 		}
@@ -139,7 +233,7 @@ func mergeRepeatedUserSubscriptionTx(tx *gorm.DB, plan *SubscriptionPlan, incomi
 		addQuota := mode == SubscriptionRepeatPurchaseAddQuota || mode == SubscriptionRepeatPurchaseExtendTimeAddQuota || mode == SubscriptionRepeatPurchaseMaxValidityAddQuota
 
 		if extendTime {
-			endTime, err := calcPlanEndTime(time.Unix(target.EndTime, 0), plan)
+			endTime, err := calcPlanEndTimeForQuantity(time.Unix(target.EndTime, 0), plan, int(quantity))
 			if err != nil {
 				return nil, err
 			}
@@ -181,7 +275,7 @@ func mergeRepeatedUserSubscriptionTx(tx *gorm.DB, plan *SubscriptionPlan, incomi
 			target.AmountUsed = 0
 		}
 
-		target.AllocationCount = allocationCount + 1
+		target.AllocationCount = allocationCount + quantity
 		target.GrantGroups = MergeGroupNames(target.GrantGroups, incoming.GrantGroups)
 		if incoming.EntitlementGroup != "" {
 			target.EntitlementGroup = incoming.EntitlementGroup
@@ -206,6 +300,7 @@ func mergeRepeatedUserSubscriptionTx(tx *gorm.DB, plan *SubscriptionPlan, incomi
 		Action:       SubscriptionApplyActionMerged,
 		AppliedMode:  mode,
 		PlanTitle:    plan.Title,
+		Quantity:     int(quantity),
 		Before:       &before,
 	}, nil
 }

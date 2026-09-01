@@ -433,6 +433,7 @@ export function SubscriptionPlansCard({
                   const now = Date.now() / 1000
                   const isExpired = (subscription?.end_time || 0) < now
                   const isCancelled = subscription?.status === 'cancelled'
+                  const isScheduled = subscription?.status === 'scheduled'
                   const isActive =
                     subscription?.status === 'active' && !isExpired
                   const nextResetTime = subscription?.next_reset_time ?? 0
@@ -448,6 +449,14 @@ export function SubscriptionPlansCard({
                       <StatusBadge
                         label={t('Active')}
                         variant='success'
+                        copyable={false}
+                      />
+                    )
+                  } else if (isScheduled) {
+                    statusBadge = (
+                      <StatusBadge
+                        label={t('Scheduled')}
+                        variant='info'
                         copyable={false}
                       />
                     )
@@ -490,12 +499,29 @@ export function SubscriptionPlansCard({
                           </span>
                         )}
                       </div>
-                      <div className='text-muted-foreground mt-1.5'>
-                        {endTimeLabel}{' '}
-                        {new Date(
-                          (subscription?.end_time || 0) * 1000
-                        ).toLocaleString()}
-                      </div>
+                      {isScheduled ? (
+                        <div className='text-muted-foreground mt-1.5'>
+                          <div>
+                            {t('Start')}:{' '}
+                            {new Date(
+                              (subscription?.start_time || 0) * 1000
+                            ).toLocaleString()}
+                          </div>
+                          <div>
+                            {t('Until')}{' '}
+                            {new Date(
+                              (subscription?.end_time || 0) * 1000
+                            ).toLocaleString()}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className='text-muted-foreground mt-1.5'>
+                          {endTimeLabel}{' '}
+                          {new Date(
+                            (subscription?.end_time || 0) * 1000
+                          ).toLocaleString()}
+                        </div>
+                      )}
                       {isActive && nextResetTime > 0 && (
                         <div className='text-muted-foreground mt-1'>
                           {t('Next reset')}:{' '}

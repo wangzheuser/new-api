@@ -40,6 +40,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuShortcut,
 } from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
 import {
   Select,
   SelectContent,
@@ -70,6 +71,7 @@ import { getRepeatPurchaseModeOptions } from '../../constants'
 import { formatTimestamp } from '../../lib'
 import type {
   PlanRecord,
+  SubscriptionActivationMode,
   SubscriptionApplyMode,
   UserSubscriptionRecord,
 } from '../../types'
@@ -82,10 +84,106 @@ interface Props {
   onSuccess?: () => void
 }
 
+/** Normalizes the group snapshot used to recommend a renewal target. */
+function getBenefitGroups(entitlementGroup?: string, grantGroups?: string[]) {
+  return [entitlementGroup || '', ...(grantGroups || [])]
+    .map((group) => group.trim())
+    .filter(Boolean)
+    .filter((group, index, groups) => groups.indexOf(group) === index)
+    .sort()
+}
+
+/** Compares the base and additional groups that define one renewal scope. */
+function hasSameBenefits(
+  plan: PlanRecord['plan'],
+  subscription: UserSubscriptionRecord['subscription']
+) {
+  if (
+    (plan.upgrade_group || '').trim() !==
+    (subscription.upgrade_group || '').trim()
+  ) {
+    return false
+  }
+  return (
+    JSON.stringify(
+      getBenefitGroups(plan.entitlement_group, plan.grant_groups)
+    ) ===
+    JSON.stringify(
+      getBenefitGroups(
+        subscription.entitlement_group,
+        subscription.grant_groups
+      )
+    )
+  )
+}
+
+/** Returns the latest non-ended subscription with the same benefit snapshot. */
+function findRenewalTarget(
+  plan: PlanRecord['plan'] | undefined,
+  subscriptions: UserSubscriptionRecord[]
+) {
+  if (!plan) return undefined
+  const now = Date.now() / 1000
+  return subscriptions
+    .filter((record) => {
+      const subscription = record.subscription
+      return (
+        (subscription.status === 'active' ||
+          subscription.status === 'scheduled') &&
+        subscription.end_time > now &&
+        hasSameBenefits(plan, subscription)
+      )
+    })
+    .sort(
+      (left, right) =>
+        right.subscription.end_time - left.subscription.end_time ||
+        right.subscription.id - left.subscription.id
+    )[0]
+}
+
+/** Advances the preview by whole plan periods to mirror the backend calculation. */
+function calculateSubscriptionEndTime(
+  startTime: number,
+  plan: PlanRecord['plan'],
+  quantity: number
+) {
+  const end = new Date(startTime * 1000)
+  for (let index = 0; index < quantity; index += 1) {
+    const value = Number(plan.duration_value || 1)
+    switch (plan.duration_unit) {
+      case 'year':
+        end.setFullYear(end.getFullYear() + value)
+        break
+      case 'month':
+        end.setMonth(end.getMonth() + value)
+        break
+      case 'day':
+        end.setTime(end.getTime() + value * 86400 * 1000)
+        break
+      case 'hour':
+        end.setTime(end.getTime() + value * 3600 * 1000)
+        break
+      case 'custom':
+        end.setTime(end.getTime() + Number(plan.custom_seconds || 0) * 1000)
+        break
+    }
+  }
+  return Math.floor(end.getTime() / 1000)
+}
+
 function SubscriptionStatusBadge(props: {
   sub: UserSubscriptionRecord['subscription']
   t: (key: string) => string
 }) {
+  if (props.sub.status === 'scheduled') {
+    return (
+      <StatusBadge
+        label={props.t('Scheduled')}
+        variant='info'
+        copyable={false}
+      />
+    )
+  }
   // eslint-disable-next-line react-hooks/purity
   const now = Date.now() / 1000
   const isExpired = (props.sub.end_time || 0) > 0 && props.sub.end_time < now
@@ -126,6 +224,9 @@ export function UserSubscriptionsDialog(props: Props) {
   const [selectedPlanId, setSelectedPlanId] = useState<string>('')
   const [applyMode, setApplyMode] =
     useState<SubscriptionApplyMode>('plan_default')
+  const [activationMode, setActivationMode] =
+    useState<SubscriptionActivationMode>('immediate')
+  const [quantity, setQuantity] = useState(1)
   const [replaceConfirmOpen, setReplaceConfirmOpen] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [advanceResetTime, setAdvanceResetTime] = useState(true)
@@ -149,6 +250,30 @@ export function UserSubscriptionsDialog(props: Props) {
     return map
   }, [plans])
 
+  const selectedPlan = plans.find(
+    (record) => String(record.plan.id) === selectedPlanId
+  )?.plan
+  const resolvedApplyMode =
+    applyMode === 'plan_default'
+      ? selectedPlan?.repeat_purchase_mode
+      : applyMode
+  const renewalTarget = findRenewalTarget(selectedPlan, subs)
+  const canChooseActivation = resolvedApplyMode === 'independent'
+  let previewStartTime = 0
+  if (selectedPlan) {
+    // eslint-disable-next-line react-hooks/purity
+    previewStartTime = Date.now() / 1000
+    if (activationMode === 'renew') {
+      previewStartTime = Math.max(
+        previewStartTime,
+        renewalTarget?.subscription.end_time || 0
+      )
+    }
+  }
+  const previewEndTime = selectedPlan
+    ? calculateSubscriptionEndTime(previewStartTime, selectedPlan, quantity)
+    : 0
+
   const loadData = useCallback(async () => {
     if (!props.user?.id) return
     setLoading(true)
@@ -170,9 +295,34 @@ export function UserSubscriptionsDialog(props: Props) {
     if (props.open && props.user?.id) {
       setSelectedPlanId('')
       setApplyMode('plan_default')
+      setActivationMode('immediate')
+      setQuantity(1)
       loadData()
     }
   }, [props.open, props.user?.id, loadData])
+
+  const handlePlanChange = (value: string) => {
+    setSelectedPlanId(value)
+    const plan = plans.find((record) => String(record.plan.id) === value)?.plan
+    const mode =
+      applyMode === 'plan_default' ? plan?.repeat_purchase_mode : applyMode
+    setActivationMode(
+      mode === 'independent' && findRenewalTarget(plan, subs)
+        ? 'renew'
+        : 'immediate'
+    )
+  }
+
+  const handleApplyModeChange = (value: SubscriptionApplyMode) => {
+    setApplyMode(value)
+    const mode =
+      value === 'plan_default' ? selectedPlan?.repeat_purchase_mode : value
+    setActivationMode(
+      mode === 'independent' && findRenewalTarget(selectedPlan, subs)
+        ? 'renew'
+        : 'immediate'
+    )
+  }
 
   const createSubscriptionForUser = async () => {
     if (!props.user?.id || !selectedPlanId) return
@@ -181,11 +331,15 @@ export function UserSubscriptionsDialog(props: Props) {
       const res = await createUserSubscription(props.user.id, {
         plan_id: Number(selectedPlanId),
         apply_mode: applyMode,
+        activation_mode: activationMode,
+        quantity,
       })
       if (res.success) {
         toast.success(res.data?.message || t('Added successfully'))
         setSelectedPlanId('')
         setApplyMode('plan_default')
+        setActivationMode('immediate')
+        setQuantity(1)
         await loadData()
       }
     } catch {
@@ -200,14 +354,7 @@ export function UserSubscriptionsDialog(props: Props) {
       toast.error(t('Please select a subscription plan'))
       return
     }
-    const selectedPlan = plans.find(
-      (record) => String(record.plan.id) === selectedPlanId
-    )
-    const resolvedMode =
-      applyMode === 'plan_default'
-        ? selectedPlan?.plan.repeat_purchase_mode
-        : applyMode
-    if (resolvedMode === 'replace') {
+    if (resolvedApplyMode === 'replace') {
       setReplaceConfirmOpen(true)
       return
     }
@@ -276,7 +423,7 @@ export function UserSubscriptionsDialog(props: Props) {
           </SheetHeader>
 
           <div className={sideDrawerFormClassName()}>
-            <div className='flex flex-col gap-2 sm:flex-row'>
+            <div className='flex flex-col gap-2 sm:flex-row sm:flex-wrap'>
               <Select
                 items={plans.map((p) => ({
                   value: String(p.plan.id),
@@ -288,7 +435,7 @@ export function UserSubscriptionsDialog(props: Props) {
                   ),
                 }))}
                 value={selectedPlanId}
-                onValueChange={(v) => v !== null && setSelectedPlanId(v)}
+                onValueChange={(v) => v !== null && handlePlanChange(v)}
               >
                 <SelectTrigger className='flex-1'>
                   <SelectValue placeholder={t('Select subscription plan')} />
@@ -311,7 +458,8 @@ export function UserSubscriptionsDialog(props: Props) {
                 ]}
                 value={applyMode}
                 onValueChange={(value) =>
-                  value !== null && setApplyMode(value as SubscriptionApplyMode)
+                  value !== null &&
+                  handleApplyModeChange(value as SubscriptionApplyMode)
                 }
               >
                 <SelectTrigger className='sm:w-56'>
@@ -330,6 +478,54 @@ export function UserSubscriptionsDialog(props: Props) {
                   </SelectGroup>
                 </SelectContent>
               </Select>
+              <Input
+                type='number'
+                min={1}
+                max={1000}
+                step={1}
+                value={quantity}
+                aria-label={t('Quantity')}
+                className='sm:w-24'
+                onChange={(event) => {
+                  const value = Number.parseInt(event.target.value, 10)
+                  if (Number.isInteger(value)) {
+                    setQuantity(Math.min(1000, Math.max(1, value)))
+                  }
+                }}
+              />
+              {canChooseActivation && (
+                <Select
+                  items={[
+                    {
+                      value: 'renew',
+                      label: t('Renew after current subscription'),
+                    },
+                    {
+                      value: 'immediate',
+                      label: t('Activate immediately'),
+                    },
+                  ]}
+                  value={activationMode}
+                  onValueChange={(value) =>
+                    value !== null &&
+                    setActivationMode(value as SubscriptionActivationMode)
+                  }
+                >
+                  <SelectTrigger className='sm:w-56'>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent alignItemWithTrigger={false}>
+                    <SelectGroup>
+                      <SelectItem value='renew'>
+                        {t('Renew after current subscription')}
+                      </SelectItem>
+                      <SelectItem value='immediate'>
+                        {t('Activate immediately')}
+                      </SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              )}
               <Button
                 onClick={handleCreate}
                 disabled={creating || !selectedPlanId}
@@ -338,6 +534,33 @@ export function UserSubscriptionsDialog(props: Props) {
                 {t('Add subscription')}
               </Button>
             </div>
+
+            {selectedPlan && canChooseActivation && (
+              <div className='bg-muted/40 text-muted-foreground grid gap-1 rounded-lg border px-3 py-2 text-xs sm:grid-cols-2'>
+                <div>
+                  {t('Start')}: {formatTimestamp(previewStartTime)}
+                </div>
+                <div>
+                  {t('End')}: {formatTimestamp(previewEndTime)}
+                </div>
+                <div>
+                  {t('Quantity')}: {quantity}
+                </div>
+                <div>
+                  {t('Total Quota')}: {formatQuota(selectedPlan.total_amount)}
+                </div>
+                {activationMode === 'renew' && renewalTarget && (
+                  <div className='sm:col-span-2'>
+                    {t('Renewal target')}: #{renewalTarget.subscription.id} ·{' '}
+                    {planTitleMap.get(renewalTarget.subscription.plan_id) ||
+                      `#${renewalTarget.subscription.plan_id}`}
+                  </div>
+                )}
+                <div className='sm:col-span-2'>
+                  {t('One subscription record will be created')}
+                </div>
+              </div>
+            )}
 
             <StaticDataTable
               data={loading ? [] : subs}
@@ -432,6 +655,7 @@ export function UserSubscriptionsDialog(props: Props) {
                     const isExpired =
                       (sub.end_time || 0) > 0 && sub.end_time < now
                     const isActive = sub.status === 'active' && !isExpired
+                    const isScheduled = sub.status === 'scheduled'
 
                     return (
                       <DataTableRowActionMenu ariaLabel={t('Actions')}>
@@ -460,7 +684,7 @@ export function UserSubscriptionsDialog(props: Props) {
                           </DropdownMenuShortcut>
                         </DropdownMenuItem>
                         <DropdownMenuItem
-                          disabled={!isActive}
+                          disabled={!isActive && !isScheduled}
                           onClick={() =>
                             setConfirmAction({
                               type: 'invalidate',

@@ -144,11 +144,15 @@ Default 和 Classic 的用户订阅管理弹窗增加“重复分配处理”选
 ```json
 {
   "plan_id": 1,
-  "apply_mode": "plan_default"
+  "apply_mode": "plan_default",
+  "quantity": 1,
+  "activation_mode": "immediate"
 }
 ```
 
-`apply_mode` 缺省时按 `plan_default` 处理。由于现有套餐迁移后的默认模式为 `independent`，旧客户端行为不变。
+`apply_mode` 缺省时按 `plan_default` 处理，`quantity` 缺省为 1，`activation_mode` 缺省为 `immediate`。由于现有套餐迁移后的默认模式为 `independent`，旧客户端行为不变。
+
+管理员可将 `quantity` 设置为 1 到 1000。一次请求最多创建或更新一条订阅记录：数量直接累计到 `allocation_count`，有效期按完整套餐周期逐次计算；仅显式增加额度的模式会按数量放大额度。独立模式使用 `renew` 时，从同升级分组、同额外权益分组订阅链的最晚结束时间开始，并在未来开始时保存为 `scheduled`。
 
 套餐创建、更新和查询继续使用现有 API，仅在套餐 JSON 中增加 `repeat_purchase_mode`。
 
@@ -202,7 +206,7 @@ Default 和 Classic 的用户订阅管理弹窗增加“重复分配处理”选
 ## 12. 不在本次范围
 
 - 一次性额度在下个重置周期自动失效。
-- 跨不同套餐合并、升级补差价或额度折算。
+- 跨不同套餐合并、升级补差价或额度折算；相同权益套餐仅支持创建独立的续订记录。
 - 管理员指定某一条订阅作为合并目标。
 - 自动破坏性合并历史多条订阅。
 - 管理员赠送不计入购买上限。

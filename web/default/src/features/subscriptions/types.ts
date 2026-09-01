@@ -87,6 +87,8 @@ export const userSubscriptionSchema = z.object({
   allocation_count: z.number().optional().default(1),
   entitlement_group: z.string().optional(),
   grant_groups: z.array(z.string()).optional().default([]),
+  upgrade_group: z.string().optional(),
+  downgrade_group: z.string().optional(),
   next_reset_time: z.number().optional(),
   allow_wallet_overflow: z.boolean().optional(),
 })
@@ -138,6 +140,8 @@ export interface SubscriptionPayResponse {
 export interface CreateUserSubscriptionRequest {
   plan_id: number
   apply_mode?: SubscriptionApplyMode
+  activation_mode?: SubscriptionActivationMode
+  quantity?: number
 }
 
 export interface UpdateUserSubscriptionRequest {
@@ -156,6 +160,8 @@ export type SubscriptionApplyMode =
   | 'max_validity_add_quota'
   | 'extend_time_reset_quota'
   | 'replace'
+
+export type SubscriptionActivationMode = 'immediate' | 'renew'
 
 export interface ResetUserSubscriptionsRequest {
   plan_id: number

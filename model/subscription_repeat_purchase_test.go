@@ -3,6 +3,7 @@ package model
 import (
 	"math"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/stretchr/testify/assert"
@@ -516,4 +517,197 @@ func TestSubscriptionAllocationBackfillAndLegacyCount(t *testing.T) {
 	actual := getRepeatPurchaseSubscriptions(t, 4001, plan.Id)
 	require.Len(t, actual, 1)
 	assert.EqualValues(t, 1, actual[0].AllocationCount)
+}
+
+// TestAdminSubscriptionQuantityCreatesOneCalculatedRecord verifies quantity is materialized in one row.
+func TestAdminSubscriptionQuantityCreatesOneCalculatedRecord(t *testing.T) {
+	truncateTables(t)
+	plan := seedRepeatPurchaseUserAndPlan(t, 4101, 4102, SubscriptionRepeatPurchaseIndependent)
+
+	result, err := AdminBindSubscriptionWithOptions(4101, plan.Id, SubscriptionRepeatPurchaseIndependent, SubscriptionActivationImmediate, 3)
+	require.NoError(t, err)
+	require.NotNil(t, result.Subscription)
+
+	subscriptions := getRepeatPurchaseSubscriptions(t, 4101, plan.Id)
+	require.Len(t, subscriptions, 1)
+	assert.EqualValues(t, 3, subscriptions[0].AllocationCount)
+	assert.EqualValues(t, 100, subscriptions[0].AmountTotal)
+	assert.Equal(t, int64(3*3600), subscriptions[0].EndTime-subscriptions[0].StartTime)
+	assert.Equal(t, "active", subscriptions[0].Status)
+	assert.Equal(t, 3, result.Quantity)
+}
+
+// TestAdminSubscriptionRenewalQuantityAppendsOneCrossPlanRecord verifies benefit-equivalent plans form one scheduled row.
+func TestAdminSubscriptionRenewalQuantityAppendsOneCrossPlanRecord(t *testing.T) {
+	truncateTables(t)
+	user := &User{Id: 4201, Username: "renew_quantity_user", Status: common.UserStatusEnabled, Group: "default"}
+	require.NoError(t, DB.Create(user).Error)
+	firstPlan := &SubscriptionPlan{
+		Id: 4202, Title: "First", Currency: "USD", DurationUnit: SubscriptionDurationCustom, CustomSeconds: 3600,
+		Enabled: true, TotalAmount: 100, RepeatPurchaseMode: SubscriptionRepeatPurchaseIndependent,
+		UpgradeGroup: "vip", GrantGroups: GroupNames{" group-b ", "group-a"},
+	}
+	renewalPlan := &SubscriptionPlan{
+		Id: 4203, Title: "Renewal", Currency: "USD", DurationUnit: SubscriptionDurationCustom, CustomSeconds: 7200,
+		Enabled: true, TotalAmount: 200, RepeatPurchaseMode: SubscriptionRepeatPurchaseIndependent,
+		UpgradeGroup: "vip", GrantGroups: GroupNames{"group-a", "group-b", "group-a"},
+	}
+	require.NoError(t, DB.Create(&[]SubscriptionPlan{*firstPlan, *renewalPlan}).Error)
+
+	first, err := AdminBindSubscriptionWithOptions(user.Id, firstPlan.Id, SubscriptionRepeatPurchaseIndependent, SubscriptionActivationImmediate, 1)
+	require.NoError(t, err)
+	renewal, err := AdminBindSubscriptionWithOptions(user.Id, renewalPlan.Id, SubscriptionRepeatPurchaseIndependent, SubscriptionActivationRenew, 3)
+	require.NoError(t, err)
+
+	require.NotNil(t, renewal.Subscription)
+	assert.Equal(t, first.Subscription.EndTime, renewal.Subscription.StartTime)
+	assert.Equal(t, int64(3*7200), renewal.Subscription.EndTime-renewal.Subscription.StartTime)
+	assert.EqualValues(t, 200, renewal.Subscription.AmountTotal)
+	assert.EqualValues(t, 3, renewal.Subscription.AllocationCount)
+	assert.Equal(t, "scheduled", renewal.Subscription.Status)
+	var count int64
+	require.NoError(t, DB.Model(&UserSubscription{}).Where("user_id = ? AND plan_id = ?", user.Id, renewalPlan.Id).Count(&count).Error)
+	assert.EqualValues(t, 1, count)
+}
+
+// TestAdminSubscriptionQuantityAddsQuotaOnce verifies additive modes scale quota without creating rows.
+func TestAdminSubscriptionQuantityAddsQuotaOnce(t *testing.T) {
+	truncateTables(t)
+	plan := seedRepeatPurchaseUserAndPlan(t, 4301, 4302, SubscriptionRepeatPurchaseAddQuota)
+	first, err := AdminBindSubscriptionWithOptions(4301, plan.Id, SubscriptionRepeatPurchaseAddQuota, SubscriptionActivationImmediate, 1)
+	require.NoError(t, err)
+	second, err := AdminBindSubscriptionWithOptions(4301, plan.Id, SubscriptionRepeatPurchaseAddQuota, SubscriptionActivationImmediate, 3)
+	require.NoError(t, err)
+
+	assert.Equal(t, first.Subscription.Id, second.Subscription.Id)
+	assert.EqualValues(t, 400, second.Subscription.AmountTotal)
+	assert.EqualValues(t, 4, second.Subscription.AllocationCount)
+	assert.Len(t, getRepeatPurchaseSubscriptions(t, 4301, plan.Id), 1)
+}
+
+// TestAdminSubscriptionQuantityCalculatesEveryMergeMode verifies each strategy updates one row directly.
+func TestAdminSubscriptionQuantityCalculatesEveryMergeMode(t *testing.T) {
+	testCases := []struct {
+		name             string
+		mode             string
+		expectedDuration int64
+		expectedTotal    int64
+		expectedUsed     int64
+	}{
+		{name: "extend time", mode: SubscriptionRepeatPurchaseExtendTime, expectedDuration: 4 * 3600, expectedTotal: 100, expectedUsed: 25},
+		{name: "add quota", mode: SubscriptionRepeatPurchaseAddQuota, expectedDuration: 3600, expectedTotal: 400, expectedUsed: 25},
+		{name: "extend time and add quota", mode: SubscriptionRepeatPurchaseExtendTimeAddQuota, expectedDuration: 4 * 3600, expectedTotal: 400, expectedUsed: 25},
+		{name: "max validity", mode: SubscriptionRepeatPurchaseMaxValidity, expectedDuration: 3 * 3600, expectedTotal: 100, expectedUsed: 25},
+		{name: "max validity and add quota", mode: SubscriptionRepeatPurchaseMaxValidityAddQuota, expectedDuration: 3 * 3600, expectedTotal: 400, expectedUsed: 25},
+		{name: "extend time and reset quota", mode: SubscriptionRepeatPurchaseExtendTimeResetQuota, expectedDuration: 4 * 3600, expectedTotal: 100, expectedUsed: 0},
+		{name: "replace", mode: SubscriptionRepeatPurchaseReplace, expectedDuration: 3 * 3600, expectedTotal: 100, expectedUsed: 0},
+	}
+
+	for index, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			truncateTables(t)
+			userId := 4500 + index*10
+			plan := seedRepeatPurchaseUserAndPlan(t, userId, userId+1, testCase.mode)
+			first, err := AdminBindSubscriptionWithOptions(userId, plan.Id, testCase.mode, SubscriptionActivationImmediate, 1)
+			require.NoError(t, err)
+			require.NoError(t, DB.Model(&UserSubscription{}).Where("id = ?", first.Subscription.Id).Update("amount_used", 25).Error)
+
+			result, err := AdminBindSubscriptionWithOptions(userId, plan.Id, testCase.mode, SubscriptionActivationImmediate, 3)
+			require.NoError(t, err)
+			require.NotNil(t, result.Subscription)
+			assert.Len(t, getRepeatPurchaseSubscriptions(t, userId, plan.Id), 1)
+			assert.EqualValues(t, 4, result.Subscription.AllocationCount)
+			assert.Equal(t, testCase.expectedDuration, result.Subscription.EndTime-result.Subscription.StartTime)
+			assert.Equal(t, testCase.expectedTotal, result.Subscription.AmountTotal)
+			assert.Equal(t, testCase.expectedUsed, result.Subscription.AmountUsed)
+		})
+	}
+}
+
+// TestScheduledSubscriptionIsExcludedFromActiveBehavior verifies future records cannot grant or fund early.
+func TestScheduledSubscriptionIsExcludedFromActiveBehavior(t *testing.T) {
+	truncateTables(t)
+	now := GetDBTimestamp()
+	user := &User{Id: 4601, Username: "scheduled_inactive_user", Status: common.UserStatusEnabled, Group: "default"}
+	require.NoError(t, DB.Create(user).Error)
+	require.NoError(t, DB.Create(&UserSubscription{
+		Id: 4602, UserId: user.Id, PlanId: 4603, Status: "scheduled", StartTime: now + 3600, EndTime: now + 7200,
+		AmountTotal: 100, GrantGroups: GroupNames{"vip"}, AllowWalletOverflow: false,
+	}).Error)
+
+	active, err := HasActiveUserSubscription(user.Id)
+	require.NoError(t, err)
+	assert.False(t, active)
+	activeSubscriptions, err := GetAllActiveUserSubscriptions(user.Id)
+	require.NoError(t, err)
+	assert.Empty(t, activeSubscriptions)
+	publicSubscriptions, err := GetAllActivePublicUserSubscriptions(user.Id)
+	require.NoError(t, err)
+	assert.Empty(t, publicSubscriptions)
+	groups, err := GetActiveUserEntitlementGroups(user.Id)
+	require.NoError(t, err)
+	assert.Empty(t, groups)
+	allowOverflow, err := UserActiveSubscriptionsAllowWalletOverflow(user.Id)
+	require.NoError(t, err)
+	assert.True(t, allowOverflow)
+	_, err = PreConsumeUserSubscriptionForGroup("scheduled-not-active", user.Id, "model", 0, 1, "vip")
+	require.ErrorContains(t, err, "no active subscription")
+}
+
+// TestAdminSubscriptionQuantityRejectsUnsafeCalculations verifies mode conflicts and integer overflow roll back.
+func TestAdminSubscriptionQuantityRejectsUnsafeCalculations(t *testing.T) {
+	truncateTables(t)
+	plan := seedRepeatPurchaseUserAndPlan(t, 4701, 4702, SubscriptionRepeatPurchaseAddQuota)
+	plan.TotalAmount = math.MaxInt64
+	require.NoError(t, DB.Model(plan).Update("total_amount", int64(math.MaxInt64)).Error)
+
+	_, err := AdminBindSubscriptionWithOptions(4701, plan.Id, SubscriptionRepeatPurchaseAddQuota, SubscriptionActivationImmediate, 2)
+	require.ErrorContains(t, err, "quota overflow")
+	assert.Empty(t, getRepeatPurchaseSubscriptions(t, 4701, plan.Id))
+
+	_, err = AdminBindSubscriptionWithOptions(4701, plan.Id, SubscriptionRepeatPurchaseAddQuota, SubscriptionActivationRenew, 1)
+	require.ErrorContains(t, err, "renew activation requires independent")
+}
+
+// TestReconcileDueUserSubscriptionsActivatesScheduledRenewal verifies the handoff updates lifecycle and group state.
+func TestReconcileDueUserSubscriptionsActivatesScheduledRenewal(t *testing.T) {
+	truncateTables(t)
+	now := GetDBTimestamp()
+	user := &User{Id: 4401, Username: "scheduled_activation_user", Status: common.UserStatusEnabled, Group: "default"}
+	require.NoError(t, DB.Create(user).Error)
+	require.NoError(t, DB.Create(&[]UserSubscription{
+		{Id: 4402, UserId: user.Id, PlanId: 1, Status: "active", StartTime: now - 3600, EndTime: now - 1, UpgradeGroup: "vip", PrevUserGroup: "default"},
+		{Id: 4403, UserId: user.Id, PlanId: 2, Status: "scheduled", StartTime: now - 1, EndTime: now + 3600, UpgradeGroup: "vip", PrevUserGroup: "default"},
+	}).Error)
+
+	require.NoError(t, ReconcileDueUserSubscriptions(user.Id))
+	var subscriptions []UserSubscription
+	require.NoError(t, DB.Where("user_id = ?", user.Id).Order("id asc").Find(&subscriptions).Error)
+	require.Len(t, subscriptions, 2)
+	assert.Equal(t, "expired", subscriptions[0].Status)
+	assert.Equal(t, "active", subscriptions[1].Status)
+	group, err := GetUserGroup(user.Id, true)
+	require.NoError(t, err)
+	assert.Equal(t, "vip", group)
+}
+
+// TestSubscriptionQuantityValidationAndCalendarPeriods verifies the management bound and calendar iteration.
+func TestSubscriptionQuantityValidationAndCalendarPeriods(t *testing.T) {
+	assert.Equal(t, 1, mustSubscriptionQuantity(t, 0))
+	assert.Equal(t, MaxAdminSubscriptionQuantity, mustSubscriptionQuantity(t, MaxAdminSubscriptionQuantity))
+	_, err := NormalizeSubscriptionQuantity(MaxAdminSubscriptionQuantity + 1)
+	require.Error(t, err)
+
+	start := time.Date(2024, time.January, 31, 12, 0, 0, 0, time.UTC)
+	end, err := calcPlanEndTimeForQuantity(start, &SubscriptionPlan{DurationUnit: SubscriptionDurationMonth, DurationValue: 1}, 3)
+	require.NoError(t, err)
+	assert.Equal(t, time.Date(2024, time.May, 2, 12, 0, 0, 0, time.UTC).Unix(), end)
+}
+
+// mustSubscriptionQuantity returns a validated quantity for concise assertions.
+func mustSubscriptionQuantity(t *testing.T, quantity int) int {
+	t.Helper()
+	actual, err := NormalizeSubscriptionQuantity(quantity)
+	require.NoError(t, err)
+	return actual
 }

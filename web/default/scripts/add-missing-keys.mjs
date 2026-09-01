@@ -9,6 +9,12 @@ function stableStringify(obj) {
 
 const newKeys = {
   en: {
+    'Activate immediately': 'Activate immediately',
+    'One subscription record will be created':
+      'One subscription record will be created',
+    'Renew after current subscription': 'Renew after current subscription',
+    'Renewal target': 'Renewal target',
+    Scheduled: 'Scheduled',
     Abnormal: 'Abnormal',
     'Authentication failed': 'Authentication failed',
     Confirmed: 'Confirmed',
@@ -85,6 +91,11 @@ const newKeys = {
     'registration code': 'registration code',
   },
   zh: {
+    'Activate immediately': '立即生效',
+    'One subscription record will be created': '将创建一条订阅记录',
+    'Renew after current subscription': '在当前订阅结束后续订',
+    'Renewal target': '续订目标',
+    Scheduled: '待生效',
     Abnormal: '异常',
     'Authentication failed': '认证失败',
     Confirmed: '已确认',
@@ -154,6 +165,11 @@ const newKeys = {
     'registration code': '注册码',
   },
   'zh-TW': {
+    'Activate immediately': '立即生效',
+    'One subscription record will be created': '將建立一筆訂閱記錄',
+    'Renew after current subscription': '於目前訂閱結束後續訂',
+    'Renewal target': '續訂目標',
+    Scheduled: '待生效',
     Abnormal: '異常',
     'Authentication failed': '驗證失敗',
     Confirmed: '已確認',
@@ -223,6 +239,11 @@ const newKeys = {
     'registration code': '註冊碼',
   },
   fr: {
+    'Activate immediately': 'Activer immédiatement',
+    'One subscription record will be created': 'Un seul abonnement sera créé',
+    'Renew after current subscription': 'Renouveler après l’abonnement actuel',
+    'Renewal target': 'Cible du renouvellement',
+    Scheduled: 'Planifié',
     Abnormal: 'Anormal',
     'Authentication failed': 'Échec de l’authentification',
     Confirmed: 'Confirmé',
@@ -302,6 +323,12 @@ const newKeys = {
     'registration code': 'code d’inscription',
   },
   ja: {
+    'Activate immediately': '今すぐ有効化',
+    'One subscription record will be created':
+      'サブスクリプションレコードが1件作成されます',
+    'Renew after current subscription': '現在のサブスクリプション終了後に更新',
+    'Renewal target': '更新対象',
+    Scheduled: '予約済み',
     Abnormal: '異常',
     'Authentication failed': '認証失敗',
     Confirmed: '確認済み',
@@ -376,6 +403,13 @@ const newKeys = {
     'registration code': '登録コード',
   },
   ru: {
+    'Activate immediately': 'Активировать сразу',
+    'One subscription record will be created':
+      'Будет создана одна запись подписки',
+    'Renew after current subscription':
+      'Продлить после окончания текущей подписки',
+    'Renewal target': 'Целевая подписка',
+    Scheduled: 'Запланирована',
     Abnormal: 'С ошибками',
     'Authentication failed': 'Ошибка аутентификации',
     Confirmed: 'Подтверждено',
@@ -452,6 +486,11 @@ const newKeys = {
     'registration code': 'код регистрации',
   },
   vi: {
+    'Activate immediately': 'Kích hoạt ngay',
+    'One subscription record will be created': 'Sẽ tạo một bản ghi gói đăng ký',
+    'Renew after current subscription': 'Gia hạn sau gói đăng ký hiện tại',
+    'Renewal target': 'Gói gia hạn',
+    Scheduled: 'Đã lên lịch',
     Abnormal: 'Bất thường',
     'Authentication failed': 'Xác thực thất bại',
     Confirmed: 'Đã xác nhận',

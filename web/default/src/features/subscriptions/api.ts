@@ -83,7 +83,13 @@ export async function getUserSubscriptions(
 export async function createUserSubscription(
   userId: number,
   data: CreateUserSubscriptionRequest
-): Promise<ApiResponse<{ message?: string }>> {
+): Promise<
+  ApiResponse<{
+    message?: string
+    quantity?: number
+    subscription?: UserSubscriptionRecord['subscription']
+  }>
+> {
   const res = await api.post(
     `/api/subscription/admin/users/${userId}/subscriptions`,
     data

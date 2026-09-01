@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -455,9 +456,11 @@ func AdminUpdateSubscriptionPlanStatus(c *gin.Context) {
 }
 
 type AdminBindSubscriptionRequest struct {
-	UserId    int    `json:"user_id"`
-	PlanId    int    `json:"plan_id"`
-	ApplyMode string `json:"apply_mode"`
+	UserId         int    `json:"user_id"`
+	PlanId         int    `json:"plan_id"`
+	ApplyMode      string `json:"apply_mode"`
+	ActivationMode string `json:"activation_mode"`
+	Quantity       *int   `json:"quantity"`
 }
 
 // subscriptionAuditSnapshot returns the entitlement fields required by management audit logs.
@@ -480,8 +483,8 @@ func subscriptionAuditSnapshot(sub *model.UserSubscription) map[string]interface
 }
 
 // handleAdminSubscriptionApply applies one admin grant and records both user and management audit logs.
-func handleAdminSubscriptionApply(c *gin.Context, userId int, planId int, applyMode string) {
-	result, err := model.AdminBindSubscription(userId, planId, applyMode)
+func handleAdminSubscriptionApply(c *gin.Context, userId int, planId int, applyMode string, activationMode string, quantity int) {
+	result, err := model.AdminBindSubscriptionWithOptions(userId, planId, applyMode, activationMode, quantity)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -494,22 +497,32 @@ func handleAdminSubscriptionApply(c *gin.Context, userId int, planId int, applyM
 	if result.Action == model.SubscriptionApplyActionMerged {
 		actionLabel = "合并"
 	}
-	message := fmt.Sprintf("已%s订阅 %s，累计分配 %d 次", actionLabel, result.PlanTitle, result.Subscription.AllocationCount)
+	message := fmt.Sprintf("已%s订阅 %s，数量 %d，累计分配 %d 次", actionLabel, result.PlanTitle, result.Quantity, result.Subscription.AllocationCount)
+	if result.Action == model.SubscriptionApplyActionCreated {
+		if result.Subscription.Status == "scheduled" {
+			message = fmt.Sprintf("已续订 %s，数量 %d，将从 %s 生效，共创建 1 条订阅记录", result.PlanTitle, result.Quantity, time.Unix(result.Subscription.StartTime, 0).Format(time.DateTime))
+		} else {
+			message = fmt.Sprintf("已立即新增 %s，数量 %d，共创建 1 条订阅记录", result.PlanTitle, result.Quantity)
+		}
+	}
 	adminInfo := auditOperatorInfo(c)
 	model.RecordLogWithAdminInfo(userId, model.LogTypeManage, message, adminInfo)
 	recordManageAuditFor(c, userId, "subscription.user_grant", map[string]interface{}{
-		"target_user_id": userId,
-		"plan_id":        planId,
-		"plan_title":     result.PlanTitle,
-		"action":         result.Action,
-		"applied_mode":   result.AppliedMode,
-		"before":         subscriptionAuditSnapshot(result.Before),
-		"after":          subscriptionAuditSnapshot(result.Subscription),
+		"target_user_id":  userId,
+		"plan_id":         planId,
+		"plan_title":      result.PlanTitle,
+		"action":          result.Action,
+		"applied_mode":    result.AppliedMode,
+		"activation_mode": result.ActivationMode,
+		"quantity":        result.Quantity,
+		"before":          subscriptionAuditSnapshot(result.Before),
+		"after":           subscriptionAuditSnapshot(result.Subscription),
 	})
 	common.ApiSuccess(c, gin.H{
 		"message":      message,
 		"action":       result.Action,
 		"applied_mode": result.AppliedMode,
+		"quantity":     result.Quantity,
 		"subscription": result.Subscription,
 	})
 }
@@ -524,7 +537,12 @@ func AdminBindSubscription(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-	handleAdminSubscriptionApply(c, req.UserId, req.PlanId, req.ApplyMode)
+	quantity, err := resolveAdminSubscriptionQuantity(req.Quantity)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	handleAdminSubscriptionApply(c, req.UserId, req.PlanId, req.ApplyMode, req.ActivationMode, quantity)
 }
 
 // ---- Admin: user subscription management ----
@@ -533,6 +551,10 @@ func AdminListUserSubscriptions(c *gin.Context) {
 	userId, _ := strconv.Atoi(c.Param("id"))
 	if userId <= 0 {
 		common.ApiErrorMsg(c, "无效的用户ID")
+		return
+	}
+	if err := model.ReconcileDueUserSubscriptions(userId); err != nil {
+		common.ApiError(c, err)
 		return
 	}
 	subs, err := model.GetAllUserSubscriptions(userId)
@@ -544,8 +566,10 @@ func AdminListUserSubscriptions(c *gin.Context) {
 }
 
 type AdminCreateUserSubscriptionRequest struct {
-	PlanId    int    `json:"plan_id"`
-	ApplyMode string `json:"apply_mode"`
+	PlanId         int    `json:"plan_id"`
+	ApplyMode      string `json:"apply_mode"`
+	ActivationMode string `json:"activation_mode"`
+	Quantity       *int   `json:"quantity"`
 }
 
 type AdminUpdateUserSubscriptionRequest struct {
@@ -564,6 +588,17 @@ func resolveAdvanceResetTime(value *bool) bool {
 		return true
 	}
 	return *value
+}
+
+// resolveAdminSubscriptionQuantity applies the compatible default and validates the management request boundary.
+func resolveAdminSubscriptionQuantity(value *int) (int, error) {
+	if value == nil {
+		return 1, nil
+	}
+	if *value < 1 || *value > model.MaxAdminSubscriptionQuantity {
+		return 0, fmt.Errorf("订阅数量必须在 1 到 %d 之间", model.MaxAdminSubscriptionQuantity)
+	}
+	return *value, nil
 }
 
 func recordSubscriptionResetUserLogs(result *model.SubscriptionResetResult, adminInfo map[string]interface{}) {
@@ -592,7 +627,12 @@ func AdminCreateUserSubscription(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-	handleAdminSubscriptionApply(c, userId, req.PlanId, req.ApplyMode)
+	quantity, err := resolveAdminSubscriptionQuantity(req.Quantity)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	handleAdminSubscriptionApply(c, userId, req.PlanId, req.ApplyMode, req.ActivationMode, quantity)
 }
 
 // AdminUpdateUserSubscription updates one user subscription and records its before/after state.
