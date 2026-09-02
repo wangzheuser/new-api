@@ -1827,6 +1827,172 @@ for (const [key, zh, zhTW, fr, ja, ru, vi] of modelInputModalityRows) {
   Object.assign(newKeys.vi, { [key]: vi })
 }
 
+const userOverviewRows = [
+  [
+    'Account Details',
+    '账户详情',
+    '帳戶詳情',
+    'Détails du compte',
+    'アカウント詳細',
+    'Данные аккаунта',
+    'Chi tiết tài khoản',
+  ],
+  [
+    'Admin Grant',
+    '管理员分配',
+    '管理員分配',
+    'Attribution administrateur',
+    '管理者による付与',
+    'Выдано администратором',
+    'Quản trị viên cấp',
+  ],
+  [
+    'Balance Purchase',
+    '余额购买',
+    '餘額購買',
+    'Achat avec le solde',
+    '残高で購入',
+    'Покупка с баланса',
+    'Mua bằng số dư',
+  ],
+  [
+    'Billing Preference',
+    '计费偏好',
+    '計費偏好',
+    'Préférence de facturation',
+    '請求設定',
+    'Приоритет списания',
+    'Ưu tiên thanh toán',
+  ],
+  [
+    'Current Subscriptions',
+    '当前生效订阅',
+    '目前生效訂閱',
+    'Abonnements actifs',
+    '現在有効なサブスクリプション',
+    'Активные подписки',
+    'Gói đăng ký đang hoạt động',
+  ],
+  [
+    'Expected End',
+    '预计到期',
+    '預計到期',
+    'Fin prévue',
+    '終了予定',
+    'Ожидаемое окончание',
+    'Dự kiến kết thúc',
+  ],
+  [
+    'Expected Start',
+    '预计生效',
+    '預計生效',
+    'Début prévu',
+    '開始予定',
+    'Ожидаемое начало',
+    'Dự kiến bắt đầu',
+  ],
+  [
+    'Invitation Summary',
+    '邀请摘要',
+    '邀請摘要',
+    'Résumé des invitations',
+    '招待の概要',
+    'Сводка приглашений',
+    'Tóm tắt lời mời',
+  ],
+  [
+    'Next Reset',
+    '下次重置',
+    '下次重設',
+    'Prochaine réinitialisation',
+    '次回リセット',
+    'Следующий сброс',
+    'Lần đặt lại tiếp theo',
+  ],
+  [
+    'No active subscriptions',
+    '暂无生效中的订阅',
+    '暫無生效中的訂閱',
+    'Aucun abonnement actif',
+    '有効なサブスクリプションはありません',
+    'Нет активных подписок',
+    'Không có gói đăng ký đang hoạt động',
+  ],
+  [
+    'No current or scheduled subscriptions',
+    '暂无当前生效或待生效订阅',
+    '暫無目前生效或待生效訂閱',
+    'Aucun abonnement actif ou planifié',
+    '有効または開始予定のサブスクリプションはありません',
+    'Нет активных или запланированных подписок',
+    'Không có gói đăng ký đang hoạt động hoặc chờ kích hoạt',
+  ],
+  [
+    'No scheduled subscriptions',
+    '暂无待生效订阅',
+    '暫無待生效訂閱',
+    'Aucun abonnement planifié',
+    '開始予定のサブスクリプションはありません',
+    'Нет запланированных подписок',
+    'Không có gói đăng ký đang chờ kích hoạt',
+  ],
+  [
+    'Order Purchase',
+    '订单购买',
+    '訂單購買',
+    'Achat par commande',
+    '注文による購入',
+    'Покупка по заказу',
+    'Mua qua đơn hàng',
+  ],
+  [
+    'Review this user account, usage, access groups, and current subscription status.',
+    '查看该用户的账户、用量、可用分组和当前订阅状态。',
+    '查看此使用者的帳戶、用量、可用分組和目前訂閱狀態。',
+    'Consultez le compte, l’utilisation, les groupes d’accès et les abonnements actuels de cet utilisateur.',
+    'このユーザーのアカウント、使用量、アクセスグループ、現在のサブスクリプション状況を確認します。',
+    'Просмотрите аккаунт, использование, группы доступа и текущие подписки пользователя.',
+    'Xem tài khoản, mức sử dụng, nhóm truy cập và trạng thái đăng ký hiện tại của người dùng.',
+  ],
+  [
+    'Scheduled Subscriptions',
+    '待生效订阅',
+    '待生效訂閱',
+    'Abonnements planifiés',
+    '開始予定のサブスクリプション',
+    'Запланированные подписки',
+    'Gói đăng ký chờ kích hoạt',
+  ],
+  [
+    'Subscription Quota',
+    '订阅额度',
+    '訂閱額度',
+    'Quota d’abonnement',
+    'サブスクリプション割り当て',
+    'Квота подписки',
+    'Hạn mức đăng ký',
+  ],
+  [
+    'Subscription Quota Only',
+    '仅使用订阅额度',
+    '僅使用訂閱額度',
+    'Quota d’abonnement uniquement',
+    'サブスクリプション割り当てのみ',
+    'Только квота подписки',
+    'Chỉ dùng hạn mức đăng ký',
+  ],
+]
+
+for (const [key, zh, zhTW, fr, ja, ru, vi] of userOverviewRows) {
+  Object.assign(newKeys.en, { [key]: key })
+  Object.assign(newKeys.zh, { [key]: zh })
+  Object.assign(newKeys['zh-TW'], { [key]: zhTW })
+  Object.assign(newKeys.fr, { [key]: fr })
+  Object.assign(newKeys.ja, { [key]: ja })
+  Object.assign(newKeys.ru, { [key]: ru })
+  Object.assign(newKeys.vi, { [key]: vi })
+}
+
 async function main() {
   let totalAdded = 0
 

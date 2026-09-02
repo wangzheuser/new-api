@@ -52,7 +52,11 @@ import {
   updateBillingPreference,
 } from '@/features/subscriptions/api'
 import { SubscriptionPurchaseDialog } from '@/features/subscriptions/components/dialogs/subscription-purchase-dialog'
-import { formatDuration, formatResetPeriod } from '@/features/subscriptions/lib'
+import {
+  formatDuration,
+  formatResetPeriod,
+  getBillingPreferenceLabel,
+} from '@/features/subscriptions/lib'
 import type {
   PlanRecord,
   UserSubscriptionRecord,
@@ -76,24 +80,6 @@ function getEpayMethods(payMethods: PaymentMethod[] = []): PaymentMethod[] {
   return payMethods.filter(
     (m) => m?.type && m.type !== 'stripe' && m.type !== 'creem'
   )
-}
-
-function getBillingPreferenceLabel(
-  preference: string,
-  t: (key: string) => string
-): string {
-  switch (preference) {
-    case 'subscription_first':
-      return t('Subscription First')
-    case 'wallet_first':
-      return t('Wallet First')
-    case 'subscription_only':
-      return t('Subscription Only')
-    case 'wallet_only':
-      return t('Wallet Only')
-    default:
-      return preference
-  }
 }
 
 export function SubscriptionPlansCard({

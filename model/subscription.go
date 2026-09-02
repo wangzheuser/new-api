@@ -1167,6 +1167,42 @@ func GetAllUserSubscriptions(userId int) ([]SubscriptionSummary, error) {
 	return buildSubscriptionSummaries(subs), nil
 }
 
+// GetCurrentAndScheduledUserSubscriptions returns non-ended active and scheduled subscriptions for an overview snapshot.
+func GetCurrentAndScheduledUserSubscriptions(userId int, now int64) ([]SubscriptionSummary, error) {
+	if userId <= 0 {
+		return nil, errors.New("invalid userId")
+	}
+	var subscriptions []UserSubscription
+	if err := DB.Where("user_id = ? AND end_time > ? AND status IN ?", userId, now, []string{"active", "scheduled"}).
+		Find(&subscriptions).Error; err != nil {
+		return nil, err
+	}
+	return buildSubscriptionSummaries(subscriptions), nil
+}
+
+// GetSubscriptionPlanTitles returns the current titles for the requested plan IDs.
+func GetSubscriptionPlanTitles(planIds []int) (map[int]string, error) {
+	titles := make(map[int]string)
+	if len(planIds) == 0 {
+		return titles, nil
+	}
+	type planTitle struct {
+		Id    int
+		Title string
+	}
+	var plans []planTitle
+	if err := DB.Model(&SubscriptionPlan{}).
+		Select("id", "title").
+		Where("id IN ?", planIds).
+		Find(&plans).Error; err != nil {
+		return nil, err
+	}
+	for _, plan := range plans {
+		titles[plan.Id] = plan.Title
+	}
+	return titles, nil
+}
+
 // GetAllPublicUserSubscriptions returns all owner-visible subscriptions using a column whitelist.
 func GetAllPublicUserSubscriptions(userId int) ([]PublicSubscriptionSummary, error) {
 	if userId <= 0 {

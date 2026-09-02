@@ -66,3 +66,22 @@ export function formatTimestamp(ts: number): string {
   if (!ts) return '-'
   return dayjs(ts * 1000).format('YYYY-MM-DD HH:mm:ss')
 }
+
+/** Returns the localized label for a normalized billing preference. */
+export function getBillingPreferenceLabel(
+  preference: string,
+  t: (key: string) => string
+): string {
+  switch (preference) {
+    case 'subscription_first':
+      return t('Subscription First')
+    case 'wallet_first':
+      return t('Wallet First')
+    case 'subscription_only':
+      return t('Subscription Only')
+    case 'wallet_only':
+      return t('Wallet Only')
+    default:
+      return preference
+  }
+}

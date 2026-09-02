@@ -426,19 +426,50 @@ export interface FetchLogsConfig {
 }
 
 // ============================================================================
-// User Info Types
+// User Overview Types
 // ============================================================================
 
-export interface UserInfo {
+export interface UserInvitationOverview {
+  code: string
+  inviter_id: number
+  invited_count: number
+  available_quota: number
+  history_quota: number
+}
+
+export interface UserSubscriptionOverview {
+  id: number
+  plan_id: number
+  plan_title: string
+  status: 'active' | 'scheduled'
+  source: string
+  start_time: number
+  end_time: number
+  amount_total: number
+  amount_used: number
+  allocation_count: number
+  next_reset_time: number
+  benefit_groups: string[]
+  allow_wallet_overflow: boolean
+}
+
+export interface AdminUserOverview {
   id: number
   username: string
-  display_name?: string
+  display_name: string
+  email: string
+  role: number
+  status: number
+  base_group: string
+  effective_groups: string[]
   quota: number
   used_quota: number
   request_count: number
-  group?: string
-  aff_code?: string
-  aff_count?: number
-  aff_quota?: number
-  remark?: string
+  billing_preference: string
+  created_at: number
+  last_login_at: number
+  remark: string
+  invitation: UserInvitationOverview
+  active_subscriptions: UserSubscriptionOverview[]
+  scheduled_subscriptions: UserSubscriptionOverview[]
 }

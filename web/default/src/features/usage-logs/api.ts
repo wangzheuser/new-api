@@ -25,7 +25,7 @@ import type {
   GetLogStatsResponse,
   GetMidjourneyLogsParams,
   GetTaskLogsParams,
-  UserInfo,
+  AdminUserOverview,
 } from './types'
 
 // ============================================================================
@@ -98,10 +98,10 @@ export const getUserLogStats = (
   params: Omit<GetLogStatsParams, 'username' | 'channel'> = {}
 ) => fetchLogStats('/api/log', params, false)
 
-export async function getUserInfo(
+export async function getAdminUserOverview(
   userId: number
-): Promise<{ success: boolean; message?: string; data?: UserInfo }> {
-  const res = await api.get(`/api/user/${userId}`)
+): Promise<{ success: boolean; message?: string; data?: AdminUserOverview }> {
+  const res = await api.get(`/api/user/${userId}/overview`)
   return res.data
 }
 
