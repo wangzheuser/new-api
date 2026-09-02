@@ -152,8 +152,8 @@ func TestGetRegistrationCodesFilters(t *testing.T) {
 		filter RegistrationCodeQuery
 		codes  []string
 	}{
-		{name: "keyword", filter: RegistrationCodeQuery{Keyword: "alpha", Now: now}, codes: []string{"alpha-unused"}},
-		{name: "full code keyword", filter: RegistrationCodeQuery{Keyword: "alpha-unused", Now: now}, codes: []string{"alpha-unused"}},
+		{name: "code substring ignores case", filter: RegistrationCodeQuery{Keyword: "HA-UN", Now: now}, codes: []string{"alpha-unused"}},
+		{name: "name substring ignores case", filter: RegistrationCodeQuery{Keyword: "RTIA", Now: now}, codes: []string{"partial"}},
 		{name: "disabled", filter: RegistrationCodeQuery{Status: common.RegistrationCodeStatusDisabled, Now: now}, codes: []string{"disabled"}},
 		{name: "unused", filter: RegistrationCodeQuery{Usage: "unused", Now: now}, codes: []string{"disabled", "expired", "pending", "alpha-unused"}},
 		{name: "partial", filter: RegistrationCodeQuery{Usage: "partial", Now: now}, codes: []string{"partial"}},

@@ -80,6 +80,7 @@ func GetAllRedemptions(startIdx int, num int) (redemptions []*Redemption, total 
 	return redemptions, total, nil
 }
 
+// SearchRedemptions returns a filtered page of redemption codes.
 func SearchRedemptions(keyword string, status string, startIdx int, num int) (redemptions []*Redemption, total int64, err error) {
 	tx := DB.Begin()
 	if tx.Error != nil {
@@ -93,11 +94,13 @@ func SearchRedemptions(keyword string, status string, startIdx int, num int) (re
 
 	query := tx.Model(&Redemption{})
 
+	keyword = strings.TrimSpace(keyword)
 	if keyword != "" {
+		searchKeyword := "%" + strings.ToLower(keyword) + "%"
 		if id, err := strconv.Atoi(keyword); err == nil {
-			query = query.Where(commonKeyCol+" = ? OR id = ? OR name LIKE ?", keyword, id, keyword+"%")
+			query = query.Where("(LOWER("+commonKeyCol+") LIKE ? OR LOWER(name) LIKE ? OR id = ?)", searchKeyword, searchKeyword, id)
 		} else {
-			query = query.Where(commonKeyCol+" = ? OR name LIKE ?", keyword, keyword+"%")
+			query = query.Where("(LOWER("+commonKeyCol+") LIKE ? OR LOWER(name) LIKE ?)", searchKeyword, searchKeyword)
 		}
 	}
 
