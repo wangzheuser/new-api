@@ -353,7 +353,10 @@ export function ProtocolPolicyEditor({
       probeBatch,
       probeResults
     )
-    if (!overrides) return
+    if (!overrides) {
+      toast.warning(t('No changes made'))
+      return
+    }
 
     const nextPolicy = structuredClone(policy ?? createDefaultPolicy())
     nextPolicy.model_overrides = overrides
@@ -785,12 +788,7 @@ export function ProtocolPolicyEditor({
                   type='button'
                   size='sm'
                   variant='outline'
-                  disabled={
-                    disabled ||
-                    isProbing ||
-                    !probeBatchComplete ||
-                    probeBatch?.capabilityLevel !== 'semantic'
-                  }
+                  disabled={disabled || isProbing || !probeBatchComplete}
                   onClick={applyProbeResults}
                 >
                   <Wand2 className='mr-2 h-3.5 w-3.5' />

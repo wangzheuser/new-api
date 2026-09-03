@@ -473,22 +473,80 @@ function probeSuiteRecommendedMode(
 }
 
 /**
- * Apply only a complete full semantic batch, preserving models outside the
- * batch and never converting endpoint-only results into native declarations.
+ * Apply a complete probe batch without promoting endpoint reachability to a
+ * native capability. Endpoint-only results add normalized capabilities while
+ * semantic results replace the selected model profiles.
  */
 export function applyProtocolProbeResults(
   baseOverrides: Record<string, ModelProtocolProfile>,
   batch: ProtocolProbeBatch,
   results: ProtocolProbeResultMap
 ): Record<string, ModelProtocolProfile> | null {
-  if (
-    batch.capabilityLevel !== 'semantic' ||
-    !isProtocolProbeBatchComplete(batch, results)
-  ) {
+  if (!isProtocolProbeBatchComplete(batch, results)) {
     return null
   }
 
   const nextOverrides = structuredClone(baseOverrides)
+  if (batch.capabilityLevel === 'endpoint') {
+    // Endpoint evidence only expands safe normalization and never replaces stronger declarations.
+    let changed = false
+    for (const model of batch.models) {
+      const native = nextOverrides[model]?.native ?? {}
+      for (const endpointType of TEXT_PROTOCOLS) {
+        const currentCapability = native[endpointType]
+        if (
+          currentCapability &&
+          effectiveProtocolCapabilityMode(currentCapability) !== 'normalized'
+        ) {
+          continue
+        }
+
+        let nonStream = false
+        let stream = false
+        for (const isStream of [false, true]) {
+          const result =
+            results[protocolProbeKey(model, endpointType, isStream, 'basic')]
+          if (
+            result?.classification !== 'confirmed' ||
+            result.capability_level !== 'endpoint' ||
+            result.recommended_mode !== 'normalized'
+          ) {
+            continue
+          }
+          if (isStream) {
+            stream = true
+          } else {
+            nonStream = true
+          }
+        }
+        if (!nonStream && !stream) continue
+
+        const nextNonStream = currentCapability?.non_stream || nonStream
+        const nextStream = currentCapability?.stream || stream
+        if (
+          currentCapability?.non_stream === nextNonStream &&
+          currentCapability.stream === nextStream
+        ) {
+          continue
+        }
+
+        const capability: ProtocolCapability = {
+          ...currentCapability,
+          non_stream: nextNonStream,
+          stream: nextStream,
+          mode: 'normalized',
+        }
+        if (!currentCapability && endpointType === 'anthropic') {
+          capability.reasoning_history = 'strip'
+        }
+        native[endpointType] = capability
+        nextOverrides[model] = { native }
+        changed = true
+      }
+    }
+    return changed ? nextOverrides : null
+  }
+
   for (const model of batch.models) {
     delete nextOverrides[model]
     const native: ModelProtocolProfile['native'] = {}

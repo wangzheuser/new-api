@@ -211,18 +211,123 @@ describe('protocol probe batches', () => {
     )
   })
 
-  test('never applies basic reachability as a native capability', () => {
-    const batch = createProtocolProbeBatch(['MODEL_A'], 'endpoint')
+  test('applies only normalized endpoint suggestions without replacing stronger configuration', () => {
+    const batch = createProtocolProbeBatch(['MODEL_A', 'MODEL_C'], 'endpoint')
+    const results = createCompleteProbeResults(batch, (endpointType) =>
+      endpointType === 'anthropic' || endpointType === 'openai-response'
+        ? 'normalized'
+        : 'unsupported'
+    )
+    const ignoredLevelKey = protocolProbeKey(
+      'MODEL_C',
+      'openai-response',
+      false,
+      'basic'
+    )
+    results[ignoredLevelKey] = {
+      ...results[ignoredLevelKey],
+      capability_level: 'semantic',
+    }
+    const ignoredFailureKey = protocolProbeKey(
+      'MODEL_C',
+      'openai-response',
+      true,
+      'basic'
+    )
+    results[ignoredFailureKey] = {
+      ...results[ignoredFailureKey],
+      success: false,
+      classification: 'upstream_error',
+    }
+    const partialClaudeKey = protocolProbeKey(
+      'MODEL_C',
+      'anthropic',
+      true,
+      'basic'
+    )
+    results[partialClaudeKey] = {
+      ...results[partialClaudeKey],
+      recommended_mode: 'unsupported',
+    }
+
     const applied = applyProtocolProbeResults(
       {
         MODEL_A: {
-          native: { openai: { non_stream: true, stream: true } },
+          native: {
+            openai: { non_stream: true, stream: true },
+            'openai-response': { non_stream: true, stream: false },
+            anthropic: {
+              non_stream: false,
+              stream: true,
+              mode: 'normalized',
+              reasoning_history: 'preserve',
+            },
+          },
+        },
+        MODEL_B: {
+          native: { gemini: { non_stream: true, stream: false } },
         },
       },
       batch,
-      createCompleteProbeResults(batch, () => 'native')
+      results
     )
-    assert.equal(applied, null)
+
+    assert.deepEqual(applied, {
+      MODEL_A: {
+        native: {
+          openai: { non_stream: true, stream: true },
+          'openai-response': { non_stream: true, stream: false },
+          anthropic: {
+            non_stream: true,
+            stream: true,
+            mode: 'normalized',
+            reasoning_history: 'preserve',
+          },
+        },
+      },
+      MODEL_B: {
+        native: { gemini: { non_stream: true, stream: false } },
+      },
+      MODEL_C: {
+        native: {
+          anthropic: {
+            non_stream: true,
+            stream: false,
+            mode: 'normalized',
+            reasoning_history: 'strip',
+          },
+        },
+      },
+    })
+  })
+
+  test('does not apply native, unsupported, failed, or incomplete endpoint results', () => {
+    const batch = createProtocolProbeBatch(['MODEL_A'], 'endpoint')
+    const nativeResults = createCompleteProbeResults(batch)
+    nativeResults[batch.expectedResultKeys[0]].recommended_mode = 'native'
+    assert.equal(applyProtocolProbeResults({}, batch, nativeResults), null)
+
+    const failedResults = createCompleteProbeResults(batch, () => 'normalized')
+    for (const result of Object.values(failedResults)) {
+      result.success = false
+      result.classification = 'transport_error'
+    }
+    assert.equal(applyProtocolProbeResults({}, batch, failedResults), null)
+
+    const incompleteResults = createCompleteProbeResults(
+      batch,
+      () => 'normalized'
+    )
+    delete incompleteResults[batch.expectedResultKeys[0]]
+    assert.equal(applyProtocolProbeResults({}, batch, incompleteResults), null)
+    assert.equal(
+      applyProtocolProbeResults(
+        {},
+        { ...batch, stopped: true },
+        createCompleteProbeResults(batch, () => 'normalized')
+      ),
+      null
+    )
   })
 
   test('applies a complete semantic suite without upgrading normalized routes', () => {
