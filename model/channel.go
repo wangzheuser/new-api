@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/samber/lo"
@@ -57,7 +58,8 @@ type Channel struct {
 	OtherSettings string `json:"settings" gorm:"column:settings"` // 其他设置，存储azure版本等不需要检索的信息，详见dto.ChannelOtherSettings
 
 	// cache info
-	Keys []string `json:"-" gorm:"-"`
+	Keys                 []string                      `json:"-" gorm:"-"`
+	TemporaryAutoDisable *dto.TemporaryAutoDisableInfo `json:"temporary_auto_disable,omitempty" gorm:"-"`
 }
 
 type ChannelInfo struct {
@@ -394,7 +396,7 @@ func (channel *Channel) SetTag(tag string) {
 
 func (channel *Channel) GetAutoBan() bool {
 	if channel.AutoBan == nil {
-		return false
+		return true
 	}
 	return *channel.AutoBan == 1
 }
@@ -1100,6 +1102,28 @@ func (channel *Channel) ValidateSettings() error {
 		if err := channelOtherSettings.AdvancedCustom.Validate(); err != nil {
 			return err
 		}
+	}
+	if channelOtherSettings.AutoDisableOverride != nil {
+		if err := validateChannelAutoDisableOverride(*channelOtherSettings.AutoDisableOverride); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateChannelAutoDisableOverride validates a complete per-channel threshold override.
+func validateChannelAutoDisableOverride(value dto.ChannelAutoDisableOverride) error {
+	if value.WindowMinutes < operation_setting.ChannelAutoDisableMinWindowMinutes || value.WindowMinutes > operation_setting.ChannelAutoDisableMaxWindowMinutes {
+		return fmt.Errorf("auto_disable_override.window_minutes must be between %d and %d", operation_setting.ChannelAutoDisableMinWindowMinutes, operation_setting.ChannelAutoDisableMaxWindowMinutes)
+	}
+	if value.MinRequests < operation_setting.ChannelAutoDisableMinRequests || value.MinRequests > operation_setting.ChannelAutoDisableMaxRequests {
+		return fmt.Errorf("auto_disable_override.min_requests must be between %d and %d", operation_setting.ChannelAutoDisableMinRequests, operation_setting.ChannelAutoDisableMaxRequests)
+	}
+	if value.ErrorRatePercent < operation_setting.ChannelAutoDisableMinErrorRate || value.ErrorRatePercent > operation_setting.ChannelAutoDisableMaxErrorRate {
+		return fmt.Errorf("auto_disable_override.error_rate_percent must be between %d and %d", operation_setting.ChannelAutoDisableMinErrorRate, operation_setting.ChannelAutoDisableMaxErrorRate)
+	}
+	if value.DisableMinutes < operation_setting.ChannelAutoDisableMinDisableMinutes || value.DisableMinutes > operation_setting.ChannelAutoDisableMaxDisableMinutes {
+		return fmt.Errorf("auto_disable_override.disable_minutes must be between %d and %d", operation_setting.ChannelAutoDisableMinDisableMinutes, operation_setting.ChannelAutoDisableMaxDisableMinutes)
 	}
 	return nil
 }

@@ -89,6 +89,9 @@ func TestRelayErrorHandlerTruncatesInvalidJSONBodyInLog(t *testing.T) {
 
 	require.NotNil(t, newAPIError)
 	require.Equal(t, "bad response status code 500", newAPIError.Error())
+	upstreamStatusCode, ok := newAPIError.GetUpstreamStatusCode()
+	require.True(t, ok)
+	require.Equal(t, http.StatusInternalServerError, upstreamStatusCode)
 	require.Contains(t, logBuffer.String(), "[truncated")
 	require.Contains(t, logBuffer.String(), fmt.Sprintf("original_length=%d", len(body)))
 	require.NotContains(t, logBuffer.String(), strings.Repeat("b", common.LocalLogContentLimit+1))

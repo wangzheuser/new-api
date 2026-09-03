@@ -354,6 +354,7 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.remark?.trim() ||
     values.priority ||
     values.weight ||
+    !values.auto_disable_use_global ||
     values.proxy?.trim() ||
     values.force_format ||
     values.thinking_to_content ||
@@ -703,6 +704,34 @@ export function ChannelMutateDrawer({
     isError: isSystemOptionsError,
   } = useSystemOptions()
 
+  const globalAutoDisableDefaults = useMemo(() => {
+    const options = systemOptionsData?.data || []
+    const readInteger = (key: string, fallback: number) => {
+      const raw = options.find((item) => item.key === key)?.value
+      const parsed = Number(raw)
+      return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
+    }
+    return {
+      statusCodes:
+        options.find(
+          (item) => item.key === 'channel_auto_disable_setting.status_codes'
+        )?.value || '400-599',
+      windowMinutes: readInteger(
+        'channel_auto_disable_setting.window_minutes',
+        10
+      ),
+      minRequests: readInteger('channel_auto_disable_setting.min_requests', 30),
+      errorRatePercent: readInteger(
+        'channel_auto_disable_setting.error_rate_percent',
+        80
+      ),
+      disableMinutes: readInteger(
+        'channel_auto_disable_setting.disable_minutes',
+        10
+      ),
+    }
+  }, [systemOptionsData?.data])
+
   // Fetch prefill model groups
   const { data: prefillGroupsData } = useQuery({
     queryKey: ['prefill_groups', 'model'],
@@ -794,6 +823,7 @@ export function ChannelMutateDrawer({
   const currentWeight = form.watch('weight')
   const currentTestModel = form.watch('test_model')
   const currentAutoBan = form.watch('auto_ban')
+  const autoDisableUseGlobal = form.watch('auto_disable_use_global')
   const currentTag = form.watch('tag')
   const currentRemark = form.watch('remark')
   const currentStatusCodeMapping = form.watch('status_code_mapping')
@@ -1109,7 +1139,8 @@ export function ChannelMutateDrawer({
     currentWeight ||
     currentTestModel?.trim() ||
     currentModelContextFallbacks?.trim() ||
-    (currentAutoBan ?? 1) !== 1
+    (currentAutoBan ?? 1) !== 1 ||
+    !autoDisableUseGlobal
   )
   const internalNotesConfigured = Boolean(
     currentTag?.trim() || currentRemark?.trim()
@@ -1418,6 +1449,39 @@ export function ChannelMutateDrawer({
       initialStatusCodeMappingRef.current = ''
     }
   }, [isEditing, channelData, form, isRoot])
+
+  useEffect(() => {
+    if (!open || !form.getValues('auto_disable_use_global')) return
+    form.setValue(
+      'auto_disable_window_minutes',
+      globalAutoDisableDefaults.windowMinutes,
+      { shouldDirty: false }
+    )
+    form.setValue(
+      'auto_disable_min_requests',
+      globalAutoDisableDefaults.minRequests,
+      { shouldDirty: false }
+    )
+    form.setValue(
+      'auto_disable_error_rate_percent',
+      globalAutoDisableDefaults.errorRatePercent,
+      { shouldDirty: false }
+    )
+    form.setValue(
+      'auto_disable_disable_minutes',
+      globalAutoDisableDefaults.disableMinutes,
+      { shouldDirty: false }
+    )
+  }, [
+    autoDisableUseGlobal,
+    channelData?.data,
+    form,
+    globalAutoDisableDefaults.disableMinutes,
+    globalAutoDisableDefaults.errorRatePercent,
+    globalAutoDisableDefaults.minRequests,
+    globalAutoDisableDefaults.windowMinutes,
+    open,
+  ])
 
   // Handle type change - set default values for specific types
   useEffect(() => {
@@ -4124,7 +4188,9 @@ export function ChannelMutateDrawer({
                               render={({ field }) => (
                                 <FormItem className='flex items-center justify-between'>
                                   <div className='space-y-0.5'>
-                                    <FormLabel>{t('Auto Ban')}</FormLabel>
+                                    <FormLabel>
+                                      {t('Automatic disable protection')}
+                                    </FormLabel>
                                     <FormDescription>
                                       {t(FIELD_DESCRIPTIONS.AUTO_BAN)}
                                     </FormDescription>
@@ -4140,6 +4206,169 @@ export function ChannelMutateDrawer({
                                 </FormItem>
                               )}
                             />
+
+                            <FormField
+                              control={form.control}
+                              name='auto_disable_use_global'
+                              render={({ field }) => (
+                                <FormItem className='flex items-center justify-between'>
+                                  <div className='space-y-0.5'>
+                                    <FormLabel>
+                                      {t('Use system auto-disable rules')}
+                                    </FormLabel>
+                                    <FormDescription>
+                                      {t(
+                                        'Disable this option to override the statistical thresholds for this channel.'
+                                      )}
+                                    </FormDescription>
+                                  </div>
+                                  <FormControl>
+                                    <Switch
+                                      checked={field.value}
+                                      disabled={currentAutoBan !== 1}
+                                      onCheckedChange={field.onChange}
+                                    />
+                                  </FormControl>
+                                </FormItem>
+                              )}
+                            />
+
+                            <div className='bg-muted/30 grid gap-4 rounded-lg border p-3 sm:grid-cols-2'>
+                              <div className='sm:col-span-2'>
+                                <div className='text-sm font-medium'>
+                                  {t('Error-rate status codes')}
+                                </div>
+                                <p className='text-muted-foreground text-sm'>
+                                  {globalAutoDisableDefaults.statusCodes}
+                                </p>
+                              </div>
+
+                              <FormField
+                                control={form.control}
+                                name='auto_disable_window_minutes'
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>
+                                      {t('Statistics window (minutes)')}
+                                    </FormLabel>
+                                    <FormControl>
+                                      <Input
+                                        type='number'
+                                        min={1}
+                                        max={60}
+                                        step={1}
+                                        disabled={
+                                          currentAutoBan !== 1 ||
+                                          autoDisableUseGlobal
+                                        }
+                                        value={field.value}
+                                        onChange={(event) =>
+                                          field.onChange(
+                                            Number(event.target.value)
+                                          )
+                                        }
+                                      />
+                                    </FormControl>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+
+                              <FormField
+                                control={form.control}
+                                name='auto_disable_min_requests'
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>
+                                      {t('Minimum upstream responses')}
+                                    </FormLabel>
+                                    <FormControl>
+                                      <Input
+                                        type='number'
+                                        min={1}
+                                        max={100000}
+                                        step={1}
+                                        disabled={
+                                          currentAutoBan !== 1 ||
+                                          autoDisableUseGlobal
+                                        }
+                                        value={field.value}
+                                        onChange={(event) =>
+                                          field.onChange(
+                                            Number(event.target.value)
+                                          )
+                                        }
+                                      />
+                                    </FormControl>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+
+                              <FormField
+                                control={form.control}
+                                name='auto_disable_error_rate_percent'
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>
+                                      {t('Error-rate threshold (%)')}
+                                    </FormLabel>
+                                    <FormControl>
+                                      <Input
+                                        type='number'
+                                        min={1}
+                                        max={100}
+                                        step={1}
+                                        disabled={
+                                          currentAutoBan !== 1 ||
+                                          autoDisableUseGlobal
+                                        }
+                                        value={field.value}
+                                        onChange={(event) =>
+                                          field.onChange(
+                                            Number(event.target.value)
+                                          )
+                                        }
+                                      />
+                                    </FormControl>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+
+                              <FormField
+                                control={form.control}
+                                name='auto_disable_disable_minutes'
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>
+                                      {t(
+                                        'Temporary disable duration (minutes)'
+                                      )}
+                                    </FormLabel>
+                                    <FormControl>
+                                      <Input
+                                        type='number'
+                                        min={1}
+                                        max={1440}
+                                        step={1}
+                                        disabled={
+                                          currentAutoBan !== 1 ||
+                                          autoDisableUseGlobal
+                                        }
+                                        value={field.value}
+                                        onChange={(event) =>
+                                          field.onChange(
+                                            Number(event.target.value)
+                                          )
+                                        }
+                                      />
+                                    </FormControl>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+                            </div>
                           </div>
 
                           <div

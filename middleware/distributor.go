@@ -58,6 +58,10 @@ func Distribute() func(c *gin.Context) {
 				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
 				return
 			}
+			if channel.GetAutoBan() && service.IsChannelTemporarilyDisabled(channel.Id) {
+				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
+				return
+			}
 		} else {
 			// Select a channel for the user
 			// check token model mapping
@@ -117,6 +121,7 @@ func Distribute() func(c *gin.Context) {
 					affinityUsable := false
 					preferred, err := model.CacheGetChannel(preferredChannelID)
 					if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
+						(!preferred.GetAutoBan() || !service.IsChannelTemporarilyDisabled(preferred.Id)) &&
 						channelSupportsRequest(preferred, c.Request.URL.Path, modelRequest.Model, modelRequest.Stream) {
 						if usingGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)

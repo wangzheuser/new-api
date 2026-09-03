@@ -17,12 +17,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useQuery } from '@tanstack/react-query'
 import { useMemo, useRef } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import * as z from 'zod'
 
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   Form,
   FormControl,
@@ -44,6 +46,7 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { getChannelOps } from '@/features/channels/api'
 import { parseHttpStatusCodeRules } from '@/lib/http-status-code-rules'
 
 import {
@@ -74,6 +77,13 @@ const routingReliabilitySchema = z
     AutomaticEnableChannelEnabled: z.boolean(),
     AutomaticDisableKeywords: z.string(),
     AutomaticDisableStatusCodes: z.string(),
+    channel_auto_disable_setting: z.object({
+      status_codes: z.string(),
+      window_minutes: z.coerce.number().int().min(1).max(60),
+      min_requests: z.coerce.number().int().min(1).max(100000),
+      error_rate_percent: z.coerce.number().int().min(1).max(100),
+      disable_minutes: z.coerce.number().int().min(1).max(1440),
+    }),
     AutomaticRetryStatusCodes: z.string(),
     monitor_setting: z.object({
       auto_test_channel_enabled: z.boolean(),
@@ -95,6 +105,21 @@ const routingReliabilitySchema = z
         message: `Invalid status code rules: ${disableParsed.invalidTokens.join(
           ', '
         )}`,
+      })
+    }
+
+    const statisticalDisableParsed = parseHttpStatusCodeRules(
+      values.channel_auto_disable_setting.status_codes
+    )
+    if (!statisticalDisableParsed.ok || !statisticalDisableParsed.normalized) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['channel_auto_disable_setting', 'status_codes'],
+        message: statisticalDisableParsed.ok
+          ? 'Status code rules cannot be empty'
+          : `Invalid status code rules: ${statisticalDisableParsed.invalidTokens.join(
+              ', '
+            )}`,
       })
     }
 
@@ -123,6 +148,11 @@ type RoutingReliabilitySectionProps = {
     AutomaticEnableChannelEnabled: boolean
     AutomaticDisableKeywords: string
     AutomaticDisableStatusCodes: string
+    'channel_auto_disable_setting.status_codes': string
+    'channel_auto_disable_setting.window_minutes': number
+    'channel_auto_disable_setting.min_requests': number
+    'channel_auto_disable_setting.error_rate_percent': number
+    'channel_auto_disable_setting.disable_minutes': number
     AutomaticRetryStatusCodes: string
     'monitor_setting.auto_test_channel_enabled': boolean
     'monitor_setting.auto_test_channel_minutes': number
@@ -141,6 +171,11 @@ type NormalizedRoutingReliabilityValues = {
   AutomaticEnableChannelEnabled: boolean
   AutomaticDisableKeywords: string
   AutomaticDisableStatusCodes: string
+  'channel_auto_disable_setting.status_codes': string
+  'channel_auto_disable_setting.window_minutes': number
+  'channel_auto_disable_setting.min_requests': number
+  'channel_auto_disable_setting.error_rate_percent': number
+  'channel_auto_disable_setting.disable_minutes': number
   AutomaticRetryStatusCodes: string
   'monitor_setting.auto_test_channel_enabled': boolean
   'monitor_setting.auto_test_channel_minutes': number
@@ -162,6 +197,17 @@ const buildFormDefaults = (
     defaults.AutomaticDisableKeywords ?? ''
   ),
   AutomaticDisableStatusCodes: defaults.AutomaticDisableStatusCodes ?? '',
+  channel_auto_disable_setting: {
+    status_codes:
+      defaults['channel_auto_disable_setting.status_codes'] ?? '400-599',
+    window_minutes:
+      defaults['channel_auto_disable_setting.window_minutes'] ?? 10,
+    min_requests: defaults['channel_auto_disable_setting.min_requests'] ?? 30,
+    error_rate_percent:
+      defaults['channel_auto_disable_setting.error_rate_percent'] ?? 80,
+    disable_minutes:
+      defaults['channel_auto_disable_setting.disable_minutes'] ?? 10,
+  },
   AutomaticRetryStatusCodes: defaults.AutomaticRetryStatusCodes ?? '',
   monitor_setting: {
     auto_test_channel_enabled:
@@ -187,6 +233,17 @@ const normalizeDefaults = (
   AutomaticDisableStatusCodes: parseHttpStatusCodeRules(
     defaults.AutomaticDisableStatusCodes ?? ''
   ).normalized,
+  'channel_auto_disable_setting.status_codes': parseHttpStatusCodeRules(
+    defaults['channel_auto_disable_setting.status_codes'] ?? '400-599'
+  ).normalized,
+  'channel_auto_disable_setting.window_minutes':
+    defaults['channel_auto_disable_setting.window_minutes'] ?? 10,
+  'channel_auto_disable_setting.min_requests':
+    defaults['channel_auto_disable_setting.min_requests'] ?? 30,
+  'channel_auto_disable_setting.error_rate_percent':
+    defaults['channel_auto_disable_setting.error_rate_percent'] ?? 80,
+  'channel_auto_disable_setting.disable_minutes':
+    defaults['channel_auto_disable_setting.disable_minutes'] ?? 10,
   AutomaticRetryStatusCodes: parseHttpStatusCodeRules(
     defaults.AutomaticRetryStatusCodes ?? ''
   ).normalized,
@@ -212,6 +269,17 @@ const normalizeFormValues = (
   AutomaticDisableStatusCodes: parseHttpStatusCodeRules(
     values.AutomaticDisableStatusCodes
   ).normalized,
+  'channel_auto_disable_setting.status_codes': parseHttpStatusCodeRules(
+    values.channel_auto_disable_setting.status_codes
+  ).normalized,
+  'channel_auto_disable_setting.window_minutes':
+    values.channel_auto_disable_setting.window_minutes,
+  'channel_auto_disable_setting.min_requests':
+    values.channel_auto_disable_setting.min_requests,
+  'channel_auto_disable_setting.error_rate_percent':
+    values.channel_auto_disable_setting.error_rate_percent,
+  'channel_auto_disable_setting.disable_minutes':
+    values.channel_auto_disable_setting.disable_minutes,
   AutomaticRetryStatusCodes: parseHttpStatusCodeRules(
     values.AutomaticRetryStatusCodes
   ).normalized,
@@ -227,6 +295,12 @@ export function RoutingReliabilitySection({
 }: RoutingReliabilitySectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const channelOpsQuery = useQuery({
+    queryKey: ['channel-ops'],
+    queryFn: getChannelOps,
+    retry: false,
+    staleTime: 5 * 60 * 1000,
+  })
   const baselineRef = useRef<NormalizedRoutingReliabilityValues>(
     normalizeDefaults(defaultValues)
   )
@@ -248,6 +322,9 @@ export function RoutingReliabilitySection({
   useResetForm(form, formDefaults)
 
   const autoDisableStatusCodes = form.watch('AutomaticDisableStatusCodes')
+  const statisticalDisableStatusCodes = form.watch(
+    'channel_auto_disable_setting.status_codes'
+  )
   const autoRetryStatusCodes = form.watch('AutomaticRetryStatusCodes')
   const channelTestMode = form.watch('monitor_setting.channel_test_mode')
   const autoDisableParsed = useMemo(
@@ -257,6 +334,10 @@ export function RoutingReliabilitySection({
   const autoRetryParsed = useMemo(
     () => parseHttpStatusCodeRules(autoRetryStatusCodes),
     [autoRetryStatusCodes]
+  )
+  const statisticalDisableParsed = useMemo(
+    () => parseHttpStatusCodeRules(statisticalDisableStatusCodes),
+    [statisticalDisableStatusCodes]
   )
 
   const onSubmit = async (values: RoutingReliabilityFormValues) => {
@@ -485,6 +566,15 @@ export function RoutingReliabilitySection({
               <h4 className='text-sm font-medium'>{t('Auto-disable rules')}</h4>
             </div>
             <div className='grid min-w-0 gap-6 lg:grid-cols-2'>
+              {channelOpsQuery.data?.data?.redis_enabled === false && (
+                <Alert variant='destructive' className='lg:col-span-2'>
+                  <AlertDescription>
+                    {t(
+                      'Redis is not enabled. Statistical temporary auto-disable will not run.'
+                    )}
+                  </AlertDescription>
+                </Alert>
+              )}
               <FormField
                 control={form.control}
                 name='AutomaticDisableChannelEnabled'
@@ -493,7 +583,9 @@ export function RoutingReliabilitySection({
                     <SettingsSwitchContent>
                       <FormLabel>{t('Disable on failure')}</FormLabel>
                       <FormDescription>
-                        {t('Automatically disable channels when tests fail')}
+                        {t(
+                          'Automatically protect channels after qualifying failures.'
+                        )}
                       </FormDescription>
                     </SettingsSwitchContent>
                     <FormControl>
@@ -536,7 +628,9 @@ export function RoutingReliabilitySection({
                 name='AutomaticDisableStatusCodes'
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t('Auto-disable status codes')}</FormLabel>
+                    <FormLabel>
+                      {t('Immediate auto-disable status codes')}
+                    </FormLabel>
                     <FormControl>
                       <Input
                         placeholder={t('e.g. 401, 403, 429, 500-599')}
@@ -555,6 +649,139 @@ export function RoutingReliabilitySection({
                             {t('Normalized:')} {autoDisableParsed.normalized}
                           </span>
                         )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='channel_auto_disable_setting.status_codes'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Error-rate status codes')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        value={field.value}
+                        onChange={(event) => field.onChange(event.target.value)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Only real upstream HTTP responses in these ranges count as statistical failures.'
+                      )}{' '}
+                      {statisticalDisableParsed.ok &&
+                        statisticalDisableParsed.normalized &&
+                        statisticalDisableParsed.normalized !==
+                          field.value.trim() && (
+                          <span className='text-muted-foreground'>
+                            {t('Normalized:')}{' '}
+                            {statisticalDisableParsed.normalized}
+                          </span>
+                        )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='channel_auto_disable_setting.window_minutes'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Statistics window (minutes)')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={1}
+                        max={60}
+                        step={1}
+                        {...safeNumberFieldProps(field)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Count upstream responses from the latest time window.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='channel_auto_disable_setting.min_requests'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Minimum upstream responses')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={1}
+                        max={100000}
+                        step={1}
+                        {...safeNumberFieldProps(field)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Do not disable a channel before this sample size is reached.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='channel_auto_disable_setting.error_rate_percent'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Error-rate threshold (%)')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={1}
+                        max={100}
+                        step={1}
+                        {...safeNumberFieldProps(field)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Temporarily disable the channel when the error rate reaches this value.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='channel_auto_disable_setting.disable_minutes'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      {t('Temporary disable duration (minutes)')}
+                    </FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={1}
+                        max={1440}
+                        step={1}
+                        {...safeNumberFieldProps(field)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'The channel automatically returns to routing after this duration.'
+                      )}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>

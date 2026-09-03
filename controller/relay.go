@@ -264,6 +264,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 
 		if newAPIError == nil {
+			service.RecordChannelUpstreamResponseAsync(channel, http.StatusOK)
 			relayInfo.LastError = nil
 			// Response overrides may map one successful, billable upstream attempt
 			// to a client 4xx/5xx without changing its internal success semantics.
@@ -306,6 +307,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			willRetry = common.RetryTimes-retryParam.GetRetry() > 0 &&
 				!(relayInfo.IsContextFallbackActive() && relayInfo.ContextFallback.RouteMode == dto.ContextFallbackModeSame)
 		} else {
+			if upstreamStatusCode, ok := newAPIError.GetUpstreamStatusCode(); ok && !service.ShouldDisableChannel(newAPIError) {
+				service.RecordChannelUpstreamResponseAsync(channel, upstreamStatusCode)
+			}
 			processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 		}
 		if willRetry {
@@ -596,7 +600,9 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	if info.IsContextFallbackActive() && info.ContextFallback.RouteMode == dto.ContextFallbackModeSame {
 		selectGroup = contextFallbackRoutingGroup(c, info)
 		channel, err = model.CacheGetChannel(info.ContextFallback.SourceChannelID)
-		if err == nil && !contextFallbackTargetEligible(channel, selectGroup, info.GetAttemptModelName(), c.Request.URL.Path, info.IsStream) {
+		if err == nil && channel != nil && channel.GetAutoBan() && service.IsChannelTemporarilyDisabled(channel.Id) {
+			channel = nil
+		} else if err == nil && !contextFallbackTargetEligible(channel, selectGroup, info.GetAttemptModelName(), c.Request.URL.Path, info.IsStream) {
 			channel = nil
 		}
 	} else if info.IsContextFallbackActive() && info.ContextFallback.RouteMode == dto.ContextFallbackModeCross {
@@ -955,6 +961,10 @@ func RelayTask(c *gin.Context) {
 				break
 			}
 		}
+		if channel.GetAutoBan() && service.IsChannelTemporarilyDisabled(channel.Id) {
+			taskErr = service.TaskErrorWrapperLocal(errors.New("channel is temporarily disabled"), "channel_temporarily_disabled", http.StatusServiceUnavailable)
+			break
+		}
 
 		addUsedChannel(c, channel.Id)
 		bodyStorage, bodyErr := common.GetBodyStorage(c)
@@ -970,12 +980,16 @@ func RelayTask(c *gin.Context) {
 
 		result, taskErr = relay.RelayTaskSubmit(c, relayInfo)
 		if taskErr == nil {
+			service.RecordChannelUpstreamResponseAsync(channel, http.StatusOK)
 			break
 		}
 
 		willRetry := shouldRetryTaskRelay(c, channel.Id, taskErr, common.RetryTimes-retryParam.GetRetry())
 		if !taskErr.LocalError {
-			relayError := types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode)
+			relayError := types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode, types.ErrOptionWithUpstreamStatusCode(taskErr.StatusCode))
+			if !service.ShouldDisableChannel(relayError) {
+				service.RecordChannelUpstreamResponseAsync(channel, taskErr.StatusCode)
+			}
 			processChannelError(c,
 				*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey,
 					common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()),

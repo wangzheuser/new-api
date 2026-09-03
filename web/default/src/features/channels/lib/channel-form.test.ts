@@ -140,6 +140,49 @@ describe('channel system prompt form defaults', () => {
   })
 })
 
+describe('channel temporary auto-disable overrides', () => {
+  test('inherits global settings by default', () => {
+    const payload = transformFormDataToCreatePayload({
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      name: 'test channel',
+      key: 'test-key',
+      models: 'MODEL_A',
+    })
+    const settings = JSON.parse(String(payload.channel.settings))
+
+    assert.equal(Object.hasOwn(settings, 'auto_disable_override'), false)
+    assert.equal(CHANNEL_FORM_DEFAULT_VALUES.auto_ban, 1)
+  })
+
+  test('restores and persists a complete channel override', () => {
+    const channel = createChannel({})
+    channel.settings = JSON.stringify({
+      auto_disable_override: {
+        window_minutes: 5,
+        min_requests: 20,
+        error_rate_percent: 70,
+        disable_minutes: 30,
+      },
+    })
+
+    const defaults = transformChannelToFormDefaults(channel)
+    assert.equal(defaults.auto_disable_use_global, false)
+    assert.equal(defaults.auto_disable_window_minutes, 5)
+    assert.equal(defaults.auto_disable_min_requests, 20)
+    assert.equal(defaults.auto_disable_error_rate_percent, 70)
+    assert.equal(defaults.auto_disable_disable_minutes, 30)
+
+    const payload = transformFormDataToUpdatePayload(defaults, channel.id)
+    const settings = JSON.parse(String(payload.settings))
+    assert.deepEqual(settings.auto_disable_override, {
+      window_minutes: 5,
+      min_requests: 20,
+      error_rate_percent: 70,
+      disable_minutes: 30,
+    })
+  })
+})
+
 describe('channel protocol policy persistence', () => {
   test('persists and reloads an explicitly empty model override object', () => {
     const protocolPolicy = {

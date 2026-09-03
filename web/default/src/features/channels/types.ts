@@ -73,6 +73,16 @@ export const channelSchema = z.object({
     multi_key_mode: 'random',
   }),
   settings: z.string().default('{}'), // other_settings JSON
+  temporary_auto_disable: z
+    .object({
+      disabled_until: z.number(),
+      window_minutes: z.number(),
+      requests: z.number(),
+      errors: z.number(),
+      error_rate_percent: z.number(),
+      status_codes: z.string(),
+    })
+    .optional(),
 })
 
 export type Channel = z.infer<typeof channelSchema>
@@ -216,6 +226,14 @@ export interface ChannelOpsResponse {
   message?: string
   data?: {
     retry_times: number
+    redis_enabled: boolean
+    auto_disable_defaults: {
+      status_codes: string
+      window_minutes: number
+      min_requests: number
+      error_rate_percent: number
+      disable_minutes: number
+    }
   }
 }
 
@@ -490,6 +508,11 @@ export interface ChannelFormData {
   weight?: number
   test_model?: string
   auto_ban?: number
+  auto_disable_use_global?: boolean
+  auto_disable_window_minutes?: number
+  auto_disable_min_requests?: number
+  auto_disable_error_rate_percent?: number
+  auto_disable_disable_minutes?: number
   status: number
   status_code_mapping?: string
   tag?: string

@@ -20,6 +20,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -94,7 +95,9 @@ func buildChannelListQuery(group string, statusFilter int, typeFilter int) *gorm
 
 func GetChannelOps(c *gin.Context) {
 	common.ApiSuccess(c, gin.H{
-		"retry_times": common.RetryTimes,
+		"retry_times":           common.RetryTimes,
+		"auto_disable_defaults": operation_setting.GetChannelAutoDisableSetting(),
+		"redis_enabled":         common.RedisEnabled,
 	})
 }
 
@@ -166,6 +169,7 @@ func GetAllChannels(c *gin.Context) {
 		}
 	}
 
+	service.AttachChannelTemporaryAutoDisable(channelData)
 	for _, datum := range channelData {
 		clearChannelInfo(datum)
 	}
@@ -372,6 +376,7 @@ func SearchChannels(c *gin.Context) {
 
 	pagedData := channelData[startIdx:endIdx]
 
+	service.AttachChannelTemporaryAutoDisable(pagedData)
 	for _, datum := range pagedData {
 		clearChannelInfo(datum)
 	}
@@ -400,6 +405,7 @@ func GetChannel(c *gin.Context) {
 		return
 	}
 	if channel != nil {
+		service.AttachChannelTemporaryAutoDisable([]*model.Channel{channel})
 		clearChannelInfo(channel)
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -630,6 +636,9 @@ func AddChannel(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if addChannelRequest.Channel.AutoBan == nil {
+		addChannelRequest.Channel.AutoBan = common.GetPointer(1)
+	}
 
 	// 使用统一的校验函数
 	if err := validateChannel(addChannelRequest.Channel, true); err != nil {
@@ -745,6 +754,7 @@ func DeleteChannel(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	service.ClearChannelTemporaryAutoDisable(id)
 	model.InitChannelCache()
 	recordManageAudit(c, "channel.delete", map[string]interface{}{
 		"id":   id,
@@ -916,6 +926,9 @@ func DeleteChannelBatch(c *gin.Context) {
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	for _, id := range channelBatch.Ids {
+		service.ClearChannelTemporaryAutoDisable(id)
 	}
 	model.InitChannelCache()
 	recordManageAudit(c, "channel.delete_batch", map[string]interface{}{
@@ -1111,6 +1124,9 @@ func UpdateChannel(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if !channel.GetAutoBan() {
+		service.ClearChannelTemporaryAutoDisable(channel.Id)
+	}
 	model.InitChannelCache()
 	service.ResetProxyClientCache()
 	// 记录变更的字段名（语言无关的字段标识），密钥仅记录"已更换"绝不记录内容。
@@ -1157,6 +1173,9 @@ func UpdateChannelStatus(c *gin.Context) {
 		return
 	}
 	changed := model.UpdateChannelStatus(id, "", req.Status, "manual operation")
+	if req.Status == common.ChannelStatusEnabled && service.ClearChannelTemporaryAutoDisable(id) {
+		changed = true
+	}
 	if changed {
 		model.InitChannelCache()
 		service.ResetProxyClientCache()
@@ -1181,7 +1200,11 @@ func BatchUpdateChannelStatus(c *gin.Context) {
 	}
 	changedCount := 0
 	for _, id := range req.Ids {
-		if model.UpdateChannelStatus(id, "", req.Status, "manual batch operation") {
+		changed := model.UpdateChannelStatus(id, "", req.Status, "manual batch operation")
+		if req.Status == common.ChannelStatusEnabled && service.ClearChannelTemporaryAutoDisable(id) {
+			changed = true
+		}
+		if changed {
 			changedCount++
 		}
 	}

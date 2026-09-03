@@ -251,6 +251,11 @@ export const channelFormSchema = z
     weight: z.number().optional(),
     test_model: z.string().optional(),
     auto_ban: z.number().optional(),
+    auto_disable_use_global: z.boolean(),
+    auto_disable_window_minutes: z.number().int().min(1).max(60),
+    auto_disable_min_requests: z.number().int().min(1).max(100000),
+    auto_disable_error_rate_percent: z.number().int().min(1).max(100),
+    auto_disable_disable_minutes: z.number().int().min(1).max(1440),
     status: z.number(),
     status_code_mapping: z
       .string()
@@ -533,6 +538,11 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   weight: 0,
   test_model: '',
   auto_ban: 1,
+  auto_disable_use_global: true,
+  auto_disable_window_minutes: 10,
+  auto_disable_min_requests: 30,
+  auto_disable_error_rate_percent: 80,
+  auto_disable_disable_minutes: 10,
   status: CHANNEL_STATUS.ENABLED,
   status_code_mapping: '',
   tag: '',
@@ -679,6 +689,11 @@ export function transformChannelToFormDefaults(
   let upstreamModelUpdateAutoSyncEnabled = false
   let upstreamModelUpdateIgnoredModels = ''
   let advancedCustom = ''
+  let autoDisableUseGlobal = true
+  let autoDisableWindowMinutes = 10
+  let autoDisableMinRequests = 30
+  let autoDisableErrorRatePercent = 80
+  let autoDisableDisableMinutes = 10
 
   if (channel.settings) {
     try {
@@ -708,6 +723,24 @@ export function transformChannelToFormDefaults(
       if (parsed.advanced_custom) {
         advancedCustom = stringifyAdvancedCustomConfig(parsed.advanced_custom)
       }
+      const autoDisableOverride = parsed.auto_disable_override
+      if (
+        autoDisableOverride &&
+        typeof autoDisableOverride === 'object' &&
+        !Array.isArray(autoDisableOverride)
+      ) {
+        autoDisableUseGlobal = false
+        autoDisableWindowMinutes = Number(
+          autoDisableOverride.window_minutes ?? 10
+        )
+        autoDisableMinRequests = Number(autoDisableOverride.min_requests ?? 30)
+        autoDisableErrorRatePercent = Number(
+          autoDisableOverride.error_rate_percent ?? 80
+        )
+        autoDisableDisableMinutes = Number(
+          autoDisableOverride.disable_minutes ?? 10
+        )
+      }
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error('Failed to parse channel settings:', error)
@@ -727,6 +760,11 @@ export function transformChannelToFormDefaults(
     weight: channel.weight || 0,
     test_model: channel.test_model || '',
     auto_ban: channel.auto_ban ?? 1,
+    auto_disable_use_global: autoDisableUseGlobal,
+    auto_disable_window_minutes: autoDisableWindowMinutes,
+    auto_disable_min_requests: autoDisableMinRequests,
+    auto_disable_error_rate_percent: autoDisableErrorRatePercent,
+    auto_disable_disable_minutes: autoDisableDisableMinutes,
     status: channel.status,
     status_code_mapping: channel.status_code_mapping || '',
     tag: channel.tag || '',
@@ -821,6 +859,17 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error('Failed to parse existing settings:', error)
+    }
+  }
+
+  if (formData.auto_disable_use_global) {
+    delete settingsObj.auto_disable_override
+  } else {
+    settingsObj.auto_disable_override = {
+      window_minutes: formData.auto_disable_window_minutes,
+      min_requests: formData.auto_disable_min_requests,
+      error_rate_percent: formData.auto_disable_error_rate_percent,
+      disable_minutes: formData.auto_disable_disable_minutes,
     }
   }
 

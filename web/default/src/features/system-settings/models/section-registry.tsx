@@ -87,6 +87,16 @@ const MODELS_SECTIONS = [
           AutomaticEnableChannelEnabled: settings.AutomaticEnableChannelEnabled,
           AutomaticDisableKeywords: settings.AutomaticDisableKeywords,
           AutomaticDisableStatusCodes: settings.AutomaticDisableStatusCodes,
+          'channel_auto_disable_setting.status_codes':
+            settings['channel_auto_disable_setting.status_codes'],
+          'channel_auto_disable_setting.window_minutes':
+            settings['channel_auto_disable_setting.window_minutes'],
+          'channel_auto_disable_setting.min_requests':
+            settings['channel_auto_disable_setting.min_requests'],
+          'channel_auto_disable_setting.error_rate_percent':
+            settings['channel_auto_disable_setting.error_rate_percent'],
+          'channel_auto_disable_setting.disable_minutes':
+            settings['channel_auto_disable_setting.disable_minutes'],
           AutomaticRetryStatusCodes: settings.AutomaticRetryStatusCodes,
           'monitor_setting.auto_test_channel_enabled':
             settings['monitor_setting.auto_test_channel_enabled'],

@@ -98,6 +98,7 @@ type NewAPIError struct {
 	errorType          ErrorType
 	errorCode          ErrorCode
 	StatusCode         int
+	upstreamStatusCode int
 	Metadata           json.RawMessage
 }
 
@@ -121,6 +122,14 @@ func (e *NewAPIError) GetErrorType() ErrorType {
 		return ""
 	}
 	return e.errorType
+}
+
+// GetUpstreamStatusCode returns the original HTTP status received from upstream.
+func (e *NewAPIError) GetUpstreamStatusCode() (int, bool) {
+	if e == nil || e.upstreamStatusCode == 0 {
+		return 0, false
+	}
+	return e.upstreamStatusCode, true
 }
 
 func (e *NewAPIError) Error() string {
@@ -411,6 +420,13 @@ func ErrOptionWithNoRecordErrorLog() NewAPIErrorOptions {
 func ErrOptionWithStatusCode(statusCode int) NewAPIErrorOptions {
 	return func(e *NewAPIError) {
 		e.StatusCode = statusCode
+	}
+}
+
+// ErrOptionWithUpstreamStatusCode marks an error as originating from an upstream HTTP response.
+func ErrOptionWithUpstreamStatusCode(statusCode int) NewAPIErrorOptions {
+	return func(e *NewAPIError) {
+		e.upstreamStatusCode = statusCode
 	}
 }
 

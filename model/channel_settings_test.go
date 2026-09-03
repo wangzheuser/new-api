@@ -74,6 +74,14 @@ func TestChannelValidateSettingsInputModalities(t *testing.T) {
 	assert.ErrorContains(t, invalid.ValidateSettings(), "text input modality is required")
 }
 
+func TestChannelValidateSettingsAutoDisableOverride(t *testing.T) {
+	valid := &Channel{OtherSettings: `{"auto_disable_override":{"window_minutes":10,"min_requests":30,"error_rate_percent":80,"disable_minutes":10}}`}
+	require.NoError(t, valid.ValidateSettings())
+
+	invalid := &Channel{OtherSettings: `{"auto_disable_override":{"window_minutes":0,"min_requests":30,"error_rate_percent":80,"disable_minutes":10}}`}
+	assert.ErrorContains(t, invalid.ValidateSettings(), "auto_disable_override.window_minutes")
+}
+
 func TestChannelValidateSettingsPrunesRemovedInputModalities(t *testing.T) {
 	setting := `{"force_format":true,"future_field":{"enabled":true},"model_input_modalities":{"model-a":["image","text"],"model-b":["text"]}}`
 	channel := &Channel{Models: " model-a ,Model-A", Setting: &setting}

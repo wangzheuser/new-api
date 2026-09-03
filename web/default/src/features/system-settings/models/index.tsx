@@ -70,6 +70,11 @@ const defaultModelSettings: ModelSettings = {
   AutomaticEnableChannelEnabled: false,
   AutomaticDisableKeywords: '',
   AutomaticDisableStatusCodes: '401',
+  'channel_auto_disable_setting.status_codes': '400-599',
+  'channel_auto_disable_setting.window_minutes': 10,
+  'channel_auto_disable_setting.min_requests': 30,
+  'channel_auto_disable_setting.error_rate_percent': 80,
+  'channel_auto_disable_setting.disable_minutes': 10,
   AutomaticRetryStatusCodes:
     '100-199,300-399,401-407,409-499,500-503,505-523,525-599',
   'monitor_setting.auto_test_channel_enabled': false,

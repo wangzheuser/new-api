@@ -193,8 +193,18 @@ func CacheGetRandomSatisfiedChannelWithRoute(param *RetryParam) (*model.Channel,
 
 	for {
 		channel, selectGroup, err := CacheGetRandomSatisfiedChannel(param)
-		if err != nil || channel == nil || !isTextProtocol {
+		if err != nil || channel == nil {
 			return channel, nil, selectGroup, err
+		}
+		if channel.GetAutoBan() && IsChannelTemporarilyDisabled(channel.Id) {
+			if param.ExcludedChannelIDs == nil {
+				param.ExcludedChannelIDs = make(map[int]struct{})
+			}
+			param.ExcludedChannelIDs[channel.Id] = struct{}{}
+			continue
+		}
+		if !isTextProtocol {
+			return channel, nil, selectGroup, nil
 		}
 		plan, planErr := PlanChannelProtocolRoute(channel, param.ModelName, param.RequestPath, param.IsStream)
 		if planErr != nil {

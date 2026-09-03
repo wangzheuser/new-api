@@ -12,8 +12,10 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/types"
+	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -117,4 +119,46 @@ func TestCacheGetRandomSatisfiedChannelWithRouteSkipsHigherPriorityMismatch(t *t
 			assert.True(t, excluded)
 		})
 	}
+}
+
+func TestCacheGetRandomSatisfiedChannelWithRouteSkipsTemporarilyDisabledChannel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupChannelSelectProtocolTestDB(t)
+	highPriority := createProtocolSelectionChannel(t, db, "temporarily-disabled", 10, constant.EndpointTypeOpenAIResponse)
+	available := createProtocolSelectionChannel(t, db, "available", 1, constant.EndpointTypeOpenAIResponse)
+
+	server, err := miniredis.Run()
+	require.NoError(t, err)
+	t.Cleanup(server.Close)
+	previousClient := common.RDB
+	previousRedisEnabled := common.RedisEnabled
+	previousAutoDisableEnabled := common.AutomaticDisableChannelEnabled
+	common.RDB = redis.NewClient(&redis.Options{Addr: server.Addr()})
+	common.RedisEnabled = true
+	common.AutomaticDisableChannelEnabled = true
+	t.Cleanup(func() {
+		_ = common.RDB.Close()
+		common.RDB = previousClient
+		common.RedisEnabled = previousRedisEnabled
+		common.AutomaticDisableChannelEnabled = previousAutoDisableEnabled
+	})
+	require.NoError(t, common.RedisSet(channelAutoDisableBlockedKey(highPriority.Id), `{}`, time.Minute))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	param := &RetryParam{
+		Ctx:         ctx,
+		TokenGroup:  "vip",
+		ModelName:   "MODEL_X",
+		RequestPath: "/v1/responses",
+		Retry:       common.GetPointer(0),
+	}
+
+	selected, _, _, err := CacheGetRandomSatisfiedChannelWithRoute(param)
+
+	require.NoError(t, err)
+	require.NotNil(t, selected)
+	assert.Equal(t, available.Id, selected.Id)
+	_, excluded := param.ExcludedChannelIDs[highPriority.Id]
+	assert.True(t, excluded)
 }

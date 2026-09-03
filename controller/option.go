@@ -152,6 +152,20 @@ func UpdateOption(c *gin.Context) {
 		}
 	}
 	switch option.Key {
+	case "channel_auto_disable_setting.status_codes",
+		"channel_auto_disable_setting.window_minutes",
+		"channel_auto_disable_setting.min_requests",
+		"channel_auto_disable_setting.error_rate_percent",
+		"channel_auto_disable_setting.disable_minutes":
+		normalized, normalizeErr := operation_setting.NormalizeChannelAutoDisableOption(option.Key, option.Value.(string))
+		if normalizeErr != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": normalizeErr.Error(),
+			})
+			return
+		}
+		option.Value = normalized
 	case "GitHubOAuthEnabled":
 		if option.Value == "true" && common.GitHubClientId == "" {
 			c.JSON(http.StatusOK, gin.H{

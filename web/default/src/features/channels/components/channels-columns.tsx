@@ -46,12 +46,12 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { toIntlLocale } from '@/i18n/languages'
 import {
   formatCurrencyFromUSD,
   formatQuotaWithCurrency,
   getCurrencyLabel,
 } from '@/lib/currency'
-import { toIntlLocale } from '@/i18n/languages'
 import { formatTimestampToDate } from '@/lib/format'
 import { truncateText } from '@/lib/utils'
 
@@ -71,6 +71,7 @@ import {
   handleUpdateChannelField,
   handleUpdateTagField,
   handleUpdateChannelBalance,
+  handleEnableChannel,
   isTagAggregateRow,
   type TagRow,
 } from '../lib'
@@ -519,6 +520,7 @@ export function useChannelsColumns(
 ): ColumnDef<Channel>[] {
   const { t, i18n } = useTranslation()
   const { sensitiveVisible } = useChannels()
+  const queryClient = useQueryClient()
   const enableSelection = options.enableSelection ?? true
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   // The column definitions only depend on the translation function, the active
@@ -862,6 +864,64 @@ export function useChannelsColumns(
             }
           }
 
+          const temporaryDisable = channel.temporary_auto_disable
+          if (
+            status === 1 &&
+            temporaryDisable &&
+            temporaryDisable.disabled_until > Date.now() / 1000
+          ) {
+            return (
+              <TooltipProvider delay={100}>
+                <Tooltip>
+                  <TooltipTrigger render={<span />}>
+                    <StatusBadge
+                      label={t('Temporarily disabled')}
+                      variant='warning'
+                      size='sm'
+                      copyable={false}
+                    />
+                  </TooltipTrigger>
+                  <TooltipContent side='top' className='max-w-sm'>
+                    <div className='space-y-1.5 text-xs'>
+                      <div>
+                        {t('Disabled until:')}{' '}
+                        {formatTimestampToDate(temporaryDisable.disabled_until)}
+                      </div>
+                      <div>
+                        {t('Statistics window:')}{' '}
+                        {temporaryDisable.window_minutes} {t('minutes')}
+                      </div>
+                      <div>
+                        {t('Upstream responses:')} {temporaryDisable.requests}
+                      </div>
+                      <div>
+                        {t('Matching errors:')} {temporaryDisable.errors}
+                      </div>
+                      <div>
+                        {t('Error rate:')}{' '}
+                        {temporaryDisable.error_rate_percent.toFixed(1)}%
+                      </div>
+                      <div>
+                        {t('Status codes:')} {temporaryDisable.status_codes}
+                      </div>
+                      <Button
+                        type='button'
+                        variant='outline'
+                        size='sm'
+                        className='mt-1 h-7'
+                        onClick={() =>
+                          handleEnableChannel(channel.id, queryClient)
+                        }
+                      >
+                        {t('Release temporary disable')}
+                      </Button>
+                    </div>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )
+          }
+
           // Regular channel row
           const config =
             CHANNEL_STATUS_CONFIG[
@@ -1153,6 +1213,6 @@ export function useChannelsColumns(
         meta: { pinned: 'right' as const },
       },
     ],
-    [enableSelection, t, locale, sensitiveVisible]
+    [enableSelection, t, locale, queryClient, sensitiveVisible]
   )
 }
