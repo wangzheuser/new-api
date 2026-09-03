@@ -162,3 +162,43 @@ func TestCacheGetRandomSatisfiedChannelWithRouteSkipsTemporarilyDisabledChannel(
 	_, excluded := param.ExcludedChannelIDs[highPriority.Id]
 	assert.True(t, excluded)
 }
+
+func TestCacheGetRandomSatisfiedChannelWithRouteFallsBackWhenAllChannelsAreTemporaryDisabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupChannelSelectProtocolTestDB(t)
+	first := createProtocolSelectionChannel(t, db, "first", 10, constant.EndpointTypeOpenAIResponse)
+	second := createProtocolSelectionChannel(t, db, "second", 1, constant.EndpointTypeOpenAIResponse)
+
+	server, err := miniredis.Run()
+	require.NoError(t, err)
+	t.Cleanup(server.Close)
+	previousClient := common.RDB
+	previousRedisEnabled := common.RedisEnabled
+	previousAutoDisableEnabled := common.AutomaticDisableChannelEnabled
+	common.RDB = redis.NewClient(&redis.Options{Addr: server.Addr()})
+	common.RedisEnabled = true
+	common.AutomaticDisableChannelEnabled = true
+	t.Cleanup(func() {
+		_ = common.RDB.Close()
+		common.RDB = previousClient
+		common.RedisEnabled = previousRedisEnabled
+		common.AutomaticDisableChannelEnabled = previousAutoDisableEnabled
+	})
+	require.NoError(t, common.RedisSet(channelAutoDisableBlockedKey(first.Id), `{}`, time.Minute))
+	require.NoError(t, common.RedisSet(channelAutoDisableBlockedKey(second.Id), `{}`, time.Minute))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	selected, plan, _, err := CacheGetRandomSatisfiedChannelWithRoute(&RetryParam{
+		Ctx:         ctx,
+		TokenGroup:  "vip",
+		ModelName:   "MODEL_X",
+		RequestPath: "/v1/responses",
+		Retry:       common.GetPointer(0),
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, selected)
+	assert.Equal(t, first.Id, selected.Id)
+	require.NotNil(t, plan)
+}
