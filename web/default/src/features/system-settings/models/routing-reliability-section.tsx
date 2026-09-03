@@ -438,12 +438,12 @@ export function RoutingReliabilitySection({
                 {t('Channel health checks')}
               </h4>
             </div>
-            <div className='grid min-w-0 gap-6 lg:grid-cols-3'>
+            <div className='grid min-w-0 items-start gap-x-6 gap-y-6 lg:grid-cols-2'>
               <FormField
                 control={form.control}
                 name='monitor_setting.auto_test_channel_enabled'
                 render={({ field }) => (
-                  <SettingsSwitchItem>
+                  <SettingsSwitchItem className='items-start py-0'>
                     <SettingsSwitchContent>
                       <FormLabel>{t('Scheduled channel tests')}</FormLabel>
                       <FormDescription>
@@ -454,6 +454,7 @@ export function RoutingReliabilitySection({
                     </SettingsSwitchContent>
                     <FormControl>
                       <Switch
+                        className='mt-0.5'
                         checked={field.value}
                         onCheckedChange={field.onChange}
                       />
@@ -538,7 +539,7 @@ export function RoutingReliabilitySection({
                 control={form.control}
                 name='AutomaticEnableChannelEnabled'
                 render={({ field }) => (
-                  <SettingsSwitchItem>
+                  <SettingsSwitchItem className='items-start py-0'>
                     <SettingsSwitchContent>
                       <FormLabel>{t('Re-enable on success')}</FormLabel>
                       <FormDescription>
@@ -549,6 +550,7 @@ export function RoutingReliabilitySection({
                     </SettingsSwitchContent>
                     <FormControl>
                       <Switch
+                        className='mt-0.5'
                         checked={field.value}
                         onCheckedChange={field.onChange}
                       />
