@@ -484,7 +484,7 @@ export function RoutingReliabilitySection({
                       onValueChange={field.onChange}
                     >
                       <FormControl>
-                        <SelectTrigger>
+                        <SelectTrigger className='w-full'>
                           <SelectValue />
                         </SelectTrigger>
                       </FormControl>
@@ -513,7 +513,7 @@ export function RoutingReliabilitySection({
                 control={form.control}
                 name='monitor_setting.auto_test_channel_minutes'
                 render={({ field }) => (
-                  <FormItem>
+                  <FormItem className='lg:col-start-2 lg:row-start-2'>
                     <FormLabel>{t('Test interval (minutes)')}</FormLabel>
                     <FormControl>
                       <Input
@@ -539,7 +539,7 @@ export function RoutingReliabilitySection({
                 control={form.control}
                 name='AutomaticEnableChannelEnabled'
                 render={({ field }) => (
-                  <SettingsSwitchItem className='items-start py-0'>
+                  <SettingsSwitchItem className='items-start py-0 lg:col-start-1 lg:row-start-2'>
                     <SettingsSwitchContent>
                       <FormLabel>{t('Re-enable on success')}</FormLabel>
                       <FormDescription>
