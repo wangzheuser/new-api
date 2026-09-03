@@ -100,6 +100,9 @@ export function SubscriptionPlansCard({
   const [allSubscriptions, setAllSubscriptions] = useState<
     UserSubscriptionRecord[]
   >([])
+  const [subscriptionPlanTitles, setSubscriptionPlanTitles] = useState<
+    Record<string, string>
+  >({})
   const [billingPreference, setBillingPreference] =
     useState('subscription_first')
   const [loading, setLoading] = useState(true)
@@ -137,6 +140,7 @@ export function SubscriptionPlansCard({
         )
         setActiveSubscriptions(res.data.subscriptions || [])
         setAllSubscriptions(res.data.all_subscriptions || [])
+        setSubscriptionPlanTitles(res.data.plan_titles || {})
       }
     } catch {
       // ignore
@@ -215,8 +219,11 @@ export function SubscriptionPlansCard({
         map.set(p.plan.id, p.plan.title || '')
       }
     }
+    for (const [planId, title] of Object.entries(subscriptionPlanTitles)) {
+      map.set(Number(planId), title)
+    }
     return map
-  }, [plans])
+  }, [plans, subscriptionPlanTitles])
 
   const getRemainingDays = (sub: UserSubscriptionRecord) => {
     const endTime = sub?.subscription?.end_time || 0

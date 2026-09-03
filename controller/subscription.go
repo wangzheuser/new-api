@@ -130,11 +130,22 @@ func GetSubscriptionSelf(c *gin.Context) {
 	if err != nil {
 		activeSubscriptions = []model.PublicSubscriptionSummary{}
 	}
+	planIds := make([]int, 0, len(allSubscriptions))
+	for _, item := range allSubscriptions {
+		if item.Subscription != nil && item.Subscription.PlanId > 0 {
+			planIds = append(planIds, item.Subscription.PlanId)
+		}
+	}
+	planTitles, err := model.GetSubscriptionPlanTitles(planIds)
+	if err != nil {
+		planTitles = map[int]string{}
+	}
 
 	common.ApiSuccess(c, gin.H{
 		"billing_preference": pref,
 		"subscriptions":      activeSubscriptions, // all active subscriptions
 		"all_subscriptions":  allSubscriptions,    // all subscriptions including expired
+		"plan_titles":        planTitles,
 	})
 }
 

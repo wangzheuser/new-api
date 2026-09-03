@@ -26,12 +26,12 @@ func TestGetCurrentAndScheduledUserSubscriptionsFiltersEndedHistory(t *testing.T
 	assert.ElementsMatch(t, []int{1, 2}, planIds)
 }
 
-// TestGetSubscriptionPlanTitlesReturnsExistingPlans verifies title lookup remains tolerant of missing plans.
-func TestGetSubscriptionPlanTitlesReturnsExistingPlans(t *testing.T) {
+// TestGetSubscriptionPlanTitlesIncludesDisabledPlans verifies owner-facing titles remain available after a plan is disabled.
+func TestGetSubscriptionPlanTitlesIncludesDisabledPlans(t *testing.T) {
 	truncateTables(t)
 	require.NoError(t, DB.Create(&[]SubscriptionPlan{
-		{Id: 11, Title: "Pro"},
-		{Id: 12, Title: "Team"},
+		{Id: 11, Title: "Pro", Enabled: true},
+		{Id: 12, Title: "Team", Enabled: false},
 	}).Error)
 
 	titles, err := GetSubscriptionPlanTitles([]int{11, 12, 999})

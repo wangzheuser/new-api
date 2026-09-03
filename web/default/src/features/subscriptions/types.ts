@@ -188,6 +188,7 @@ export interface SelfSubscriptionData {
   billing_preference: string
   subscriptions: UserSubscriptionRecord[]
   all_subscriptions: UserSubscriptionRecord[]
+  plan_titles?: Record<string, string>
 }
 
 // ============================================================================
