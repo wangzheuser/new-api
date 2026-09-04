@@ -287,6 +287,8 @@ const SENSITIVE_FORM_FIELDS = [
   'key',
   'openai_organization',
   'other',
+  'multi_key_mode',
+  'multi_key_type',
   'key_mode',
   'param_override',
   'header_override',
@@ -952,6 +954,11 @@ export function ChannelMutateDrawer({
   // Helper computed values
   const isBatchMode =
     multiKeyMode === 'batch' || multiKeyMode === 'multi_to_single'
+  const isConvertingToMultiKey =
+    isEditing && !isMultiKeyChannel && multiKeyMode === 'multi_to_single'
+  const showKeyUpdateMode =
+    isEditing && (isMultiKeyChannel || isConvertingToMultiKey)
+  const showMultiKeyStrategy = !isEditing || isConvertingToMultiKey
   const isChannelDetailLoading = isEditing && isChannelLoading
   const supportsMultiKeyAddMode =
     currentType !== 57 && !(currentType === 41 && vertexKeyType === 'api_key')
@@ -961,6 +968,13 @@ export function ChannelMutateDrawer({
         ? ADD_MODE_OPTIONS
         : ADD_MODE_OPTIONS.filter((option) => option.value === 'single'),
     [supportsMultiKeyAddMode]
+  )
+  const visibleAddModeOptions = useMemo(
+    () =>
+      isEditing
+        ? addModeOptions.filter((option) => option.value !== 'batch')
+        : addModeOptions,
+    [addModeOptions, isEditing]
   )
 
   const advancedCustomStats = useMemo(
@@ -1522,14 +1536,14 @@ export function ChannelMutateDrawer({
   }, [currentType, form])
 
   useEffect(() => {
-    if (isEditing || supportsMultiKeyAddMode) return
+    if (supportsMultiKeyAddMode) return
     if (multiKeyMode && multiKeyMode !== 'single') {
       form.setValue('multi_key_mode', 'single', {
         shouldDirty: true,
         shouldValidate: true,
       })
     }
-  }, [form, isEditing, multiKeyMode, supportsMultiKeyAddMode])
+  }, [form, multiKeyMode, supportsMultiKeyAddMode])
 
   // Validate base_url - warn if it ends with /v1
   useEffect(() => {
@@ -1851,6 +1865,14 @@ export function ChannelMutateDrawer({
         return
       }
 
+      if (isConvertingToMultiKey && !data.key?.trim()) {
+        form.setError('key', {
+          type: 'manual',
+          message: ERROR_MESSAGES.REQUIRED_KEY,
+        })
+        return
+      }
+
       if (sensitiveLocked) {
         const dirtyFields = form.formState.dirtyFields as Partial<
           Record<keyof ChannelFormValues, unknown>
@@ -1942,6 +1964,7 @@ export function ChannelMutateDrawer({
     },
     [
       isEditing,
+      isConvertingToMultiKey,
       sensitiveLocked,
       form,
       confirmMissingModelMappings,
@@ -3092,7 +3115,9 @@ export function ChannelMutateDrawer({
                             )}
 
                             <ChannelAuthSection>
-                              {!isEditing && (
+                              {(!isEditing ||
+                                (!isMultiKeyChannel &&
+                                  supportsMultiKeyAddMode)) && (
                                 <FormField
                                   control={form.control}
                                   name='multi_key_mode'
@@ -3102,10 +3127,12 @@ export function ChannelMutateDrawer({
                                         {t('Add Mode')}
                                       </FormLabel>
                                       <Select
-                                        items={addModeOptions.map((option) => ({
-                                          value: option.value,
-                                          label: t(option.label),
-                                        }))}
+                                        items={visibleAddModeOptions.map(
+                                          (option) => ({
+                                            value: option.value,
+                                            label: t(option.label),
+                                          })
+                                        )}
                                         onValueChange={field.onChange}
                                         value={field.value}
                                       >
@@ -3121,14 +3148,16 @@ export function ChannelMutateDrawer({
                                           alignItemWithTrigger={false}
                                         >
                                           <SelectGroup>
-                                            {addModeOptions.map((option) => (
-                                              <SelectItem
-                                                key={option.value}
-                                                value={option.value}
-                                              >
-                                                {t(option.label)}
-                                              </SelectItem>
-                                            ))}
+                                            {visibleAddModeOptions.map(
+                                              (option) => (
+                                                <SelectItem
+                                                  key={option.value}
+                                                  value={option.value}
+                                                >
+                                                  {t(option.label)}
+                                                </SelectItem>
+                                              )
+                                            )}
                                           </SelectGroup>
                                         </SelectContent>
                                       </Select>
@@ -3145,7 +3174,11 @@ export function ChannelMutateDrawer({
                                   let keyPlaceholder = t(
                                     getKeyPromptForType(currentType)
                                   )
-                                  if (isEditing) {
+                                  if (isConvertingToMultiKey) {
+                                    keyPlaceholder = t(
+                                      'Batch Add (one key per line)'
+                                    )
+                                  } else if (isEditing) {
                                     keyPlaceholder = t(
                                       'Leave empty to keep existing key'
                                     )
@@ -3184,7 +3217,16 @@ export function ChannelMutateDrawer({
                                   let keyDescription: ReactNode = t(
                                     FIELD_DESCRIPTIONS.KEY
                                   )
-                                  if (isEditing) {
+                                  if (isConvertingToMultiKey) {
+                                    keyDescription =
+                                      keyMode === 'replace'
+                                        ? t(
+                                            'Replace mode: Will completely replace all existing keys'
+                                          )
+                                        : t(
+                                            'Append mode: New keys will be added to the end of the existing key list'
+                                          )
+                                  } else if (isEditing) {
                                     let keyModeDescription = t(
                                       'Append mode: New keys will be added to the end of the existing key list'
                                     )
@@ -3345,7 +3387,7 @@ export function ChannelMutateDrawer({
                                 </div>
                               )}
 
-                              {isEditing && isMultiKeyChannel && (
+                              {showKeyUpdateMode && (
                                 <FormField
                                   control={form.control}
                                   name='key_mode'
@@ -3403,7 +3445,7 @@ export function ChannelMutateDrawer({
                                 />
                               )}
 
-                              {!isEditing &&
+                              {showMultiKeyStrategy &&
                                 multiKeyMode === 'multi_to_single' && (
                                   <FormField
                                     control={form.control}

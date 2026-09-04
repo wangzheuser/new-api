@@ -34,7 +34,7 @@ import {
   transformFormDataToUpdatePayload,
   type ChannelFormValues,
 } from '../lib'
-import type { Channel } from '../types'
+import type { Channel, UpdateChannelRequest } from '../types'
 
 type UseChannelMutateFormParams = {
   currentRow?: Channel | null
@@ -53,7 +53,9 @@ const SENSITIVE_UPDATE_FIELDS = [
   'setting',
   'settings',
   'other',
-] satisfies (keyof Channel)[]
+  'key_mode',
+  'multi_key_mode',
+] satisfies (keyof UpdateChannelRequest)[]
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -94,7 +96,8 @@ export function useChannelMutateForm(props: UseChannelMutateFormParams) {
       if (props.isEditing && props.currentRow) {
         const payload = transformFormDataToUpdatePayload(
           data,
-          props.currentRow.id
+          props.currentRow.id,
+          props.isMultiKeyChannel
         )
         if (!data.key?.trim()) {
           delete payload.key
@@ -104,21 +107,7 @@ export function useChannelMutateForm(props: UseChannelMutateFormParams) {
             delete payload[field]
           }
         }
-        const payloadWithKeyMode =
-          canEditSensitive &&
-          props.isMultiKeyChannel &&
-          data.key?.trim() &&
-          data.key_mode
-            ? {
-                ...payload,
-                key_mode: data.key_mode,
-              }
-            : payload
-
-        const response = await updateChannel(
-          props.currentRow.id,
-          payloadWithKeyMode
-        )
+        const response = await updateChannel(props.currentRow.id, payload)
         if (!response.success) {
           throw new Error(response.message || t(ERROR_MESSAGES.UPDATE_FAILED))
         }

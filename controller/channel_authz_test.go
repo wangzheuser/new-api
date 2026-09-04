@@ -2,6 +2,7 @@ package controller
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -175,6 +177,189 @@ func TestNormalizeChannelUpdatePayloadPrunesPersistedInputModalities(t *testing.
 	require.NotNil(t, patch.Setting)
 	assert.JSONEq(t, `{"future_field":true,"model_input_modalities":{"model-a":["text","image"]}}`, *patch.Setting)
 	assert.True(t, origin.ChannelInfo.IsMultiKey)
+}
+
+func TestPrepareMultiKeyUpdate(t *testing.T) {
+	random := string(constant.MultiKeyModeRandom)
+	appendMode := "append"
+
+	t.Run("promotes a single-key channel", func(t *testing.T) {
+		origin := &model.Channel{Type: 1, Key: "saved-key"}
+		patch := PatchChannel{
+			Channel:      model.Channel{Type: 1, Key: "new-key"},
+			MultiKeyMode: &random,
+			KeyMode:      &appendMode,
+		}
+
+		require.NoError(t, prepareMultiKeyUpdate(&patch, origin, map[string]any{
+			"key":            patch.Key,
+			"key_mode":       appendMode,
+			"multi_key_mode": random,
+		}))
+		assert.True(t, patch.ChannelInfo.IsMultiKey)
+		assert.Equal(t, constant.MultiKeyModeRandom, patch.ChannelInfo.MultiKeyMode)
+	})
+
+	t.Run("leaves a regular single-key update unchanged", func(t *testing.T) {
+		origin := &model.Channel{Type: 1, Key: "saved-key"}
+		patch := PatchChannel{Channel: model.Channel{Type: 1, Key: "new-key"}}
+
+		require.NoError(t, prepareMultiKeyUpdate(&patch, origin, map[string]any{
+			"key": patch.Key,
+		}))
+		assert.False(t, patch.ChannelInfo.IsMultiKey)
+	})
+
+	t.Run("rejects incomplete or unsupported conversions", func(t *testing.T) {
+		invalidMode := "invalid"
+		codexOrigin := &model.Channel{Type: constant.ChannelTypeCodex, Key: "saved-key"}
+
+		tests := []struct {
+			name    string
+			origin  *model.Channel
+			patch   PatchChannel
+			request map[string]any
+		}{
+			{
+				name:   "empty key",
+				origin: &model.Channel{Type: 1, Key: "saved-key"},
+				patch: PatchChannel{
+					Channel:      model.Channel{Type: 1},
+					MultiKeyMode: &random,
+					KeyMode:      &appendMode,
+				},
+				request: map[string]any{"key": "", "key_mode": appendMode, "multi_key_mode": random},
+			},
+			{
+				name:   "invalid key mode",
+				origin: &model.Channel{Type: 1, Key: "saved-key"},
+				patch: PatchChannel{
+					Channel:      model.Channel{Type: 1, Key: "new-key"},
+					MultiKeyMode: &random,
+					KeyMode:      &invalidMode,
+				},
+				request: map[string]any{"key": "new-key", "key_mode": invalidMode, "multi_key_mode": random},
+			},
+			{
+				name:   "codex channel",
+				origin: codexOrigin,
+				patch: PatchChannel{
+					Channel:      model.Channel{Type: constant.ChannelTypeCodex, Key: "new-key"},
+					MultiKeyMode: &random,
+					KeyMode:      &appendMode,
+				},
+				request: map[string]any{"key": "new-key", "key_mode": appendMode, "multi_key_mode": random},
+			},
+		}
+
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				require.Error(t, prepareMultiKeyUpdate(&test.patch, test.origin, test.request))
+				assert.False(t, test.patch.ChannelInfo.IsMultiKey)
+			})
+		}
+	})
+}
+
+// updateChannelForTest executes one root-authorized channel update and returns its business response.
+func updateChannelForTest(t *testing.T, body string) struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+} {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Set("id", 1)
+	ctx.Set("role", common.RoleRootUser)
+	ctx.Request = httptest.NewRequest(http.MethodPut, "/api/channel/", bytes.NewBufferString(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	UpdateChannel(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	return response
+}
+
+func TestUpdateChannelConvertsSingleKeyChannel(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+
+	createChannel := func(key string) model.Channel {
+		channel := model.Channel{
+			Type:   1,
+			Key:    key,
+			Name:   "single-key channel",
+			Models: "gpt-4o-mini",
+			Group:  "default",
+			Status: common.ChannelStatusEnabled,
+		}
+		require.NoError(t, db.Create(&channel).Error)
+		return channel
+	}
+
+	t.Run("append keeps the saved key", func(t *testing.T) {
+		channel := createChannel("saved-key")
+		response := updateChannelForTest(t, fmt.Sprintf(
+			`{"id":%d,"key":"new-key-a\nnew-key-b","key_mode":"append","multi_key_mode":"random"}`,
+			channel.Id,
+		))
+		require.True(t, response.Success, response.Message)
+
+		var updated model.Channel
+		require.NoError(t, db.First(&updated, channel.Id).Error)
+		assert.Equal(t, "saved-key\nnew-key-a\nnew-key-b", updated.Key)
+		assert.True(t, updated.ChannelInfo.IsMultiKey)
+		assert.Equal(t, 3, updated.ChannelInfo.MultiKeySize)
+		assert.Equal(t, constant.MultiKeyModeRandom, updated.ChannelInfo.MultiKeyMode)
+	})
+
+	t.Run("replace stores only submitted keys", func(t *testing.T) {
+		channel := createChannel("saved-key")
+		response := updateChannelForTest(t, fmt.Sprintf(
+			`{"id":%d,"key":"new-key-a\nnew-key-b","key_mode":"replace","multi_key_mode":"polling"}`,
+			channel.Id,
+		))
+		require.True(t, response.Success, response.Message)
+
+		var updated model.Channel
+		require.NoError(t, db.First(&updated, channel.Id).Error)
+		assert.Equal(t, "new-key-a\nnew-key-b", updated.Key)
+		assert.True(t, updated.ChannelInfo.IsMultiKey)
+		assert.Equal(t, 2, updated.ChannelInfo.MultiKeySize)
+		assert.Equal(t, constant.MultiKeyModePolling, updated.ChannelInfo.MultiKeyMode)
+	})
+
+	t.Run("ordinary key replacement remains single-key", func(t *testing.T) {
+		channel := createChannel("saved-key")
+		response := updateChannelForTest(t, fmt.Sprintf(
+			`{"id":%d,"key":"replacement-key"}`,
+			channel.Id,
+		))
+		require.True(t, response.Success, response.Message)
+
+		var updated model.Channel
+		require.NoError(t, db.First(&updated, channel.Id).Error)
+		assert.Equal(t, "replacement-key", updated.Key)
+		assert.False(t, updated.ChannelInfo.IsMultiKey)
+	})
+
+	t.Run("invalid conversion does not change the saved channel", func(t *testing.T) {
+		channel := createChannel("saved-key")
+		response := updateChannelForTest(t, fmt.Sprintf(
+			`{"id":%d,"key":"new-key","key_mode":"invalid","multi_key_mode":"random"}`,
+			channel.Id,
+		))
+		assert.False(t, response.Success)
+
+		var updated model.Channel
+		require.NoError(t, db.First(&updated, channel.Id).Error)
+		assert.Equal(t, "saved-key", updated.Key)
+		assert.False(t, updated.ChannelInfo.IsMultiKey)
+	})
 }
 
 func TestChannelStatusValidation(t *testing.T) {

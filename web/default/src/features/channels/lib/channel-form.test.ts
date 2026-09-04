@@ -183,6 +183,60 @@ describe('channel temporary auto-disable overrides', () => {
   })
 })
 
+describe('channel multi-key conversion payload', () => {
+  test('adds append mode and strategy when converting a single-key channel', () => {
+    const payload = transformFormDataToUpdatePayload(
+      {
+        ...CHANNEL_FORM_DEFAULT_VALUES,
+        name: 'test channel',
+        key: 'new-key-a\nnew-key-b',
+        models: 'MODEL_A',
+        multi_key_mode: 'multi_to_single',
+        multi_key_type: 'polling',
+        key_mode: 'append',
+      },
+      1,
+      false
+    )
+
+    assert.equal(payload.key_mode, 'append')
+    assert.equal(payload.multi_key_mode, 'polling')
+  })
+
+  test('keeps ordinary single-key updates free of multi-key fields', () => {
+    const payload = transformFormDataToUpdatePayload(
+      {
+        ...CHANNEL_FORM_DEFAULT_VALUES,
+        name: 'test channel',
+        key: 'replacement-key',
+        models: 'MODEL_A',
+      },
+      1,
+      false
+    )
+
+    assert.equal(payload.key_mode, undefined)
+    assert.equal(payload.multi_key_mode, undefined)
+  })
+
+  test('keeps the existing multi-key update mode', () => {
+    const payload = transformFormDataToUpdatePayload(
+      {
+        ...CHANNEL_FORM_DEFAULT_VALUES,
+        name: 'test channel',
+        key: 'replacement-key-a\nreplacement-key-b',
+        models: 'MODEL_A',
+        key_mode: 'replace',
+      },
+      1,
+      true
+    )
+
+    assert.equal(payload.key_mode, 'replace')
+    assert.equal(payload.multi_key_mode, undefined)
+  })
+})
+
 describe('channel protocol policy persistence', () => {
   test('persists and reloads an explicitly empty model override object', () => {
     const protocolPolicy = {

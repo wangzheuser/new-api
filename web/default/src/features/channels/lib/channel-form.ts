@@ -30,7 +30,11 @@ import {
   ERROR_MESSAGES,
   MODEL_FETCHABLE_TYPES,
 } from '../constants'
-import type { Channel, ChannelNativeProbeDraft } from '../types'
+import type {
+  Channel,
+  ChannelNativeProbeDraft,
+  UpdateChannelRequest,
+} from '../types'
 import {
   CHANNEL_TYPE_ADVANCED_CUSTOM,
   advancedCustomConfigUsesRelativeUpstreamPath,
@@ -1055,9 +1059,10 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
  */
 export function transformFormDataToUpdatePayload(
   formData: ChannelFormValues,
-  channelId: number
-): Partial<Channel> {
-  const payload: Partial<Channel> = {
+  channelId: number,
+  isMultiKeyChannel = false
+): UpdateChannelRequest {
+  const payload: UpdateChannelRequest = {
     id: channelId,
     name: formData.name,
     type: formData.type,
@@ -1083,6 +1088,15 @@ export function transformFormDataToUpdatePayload(
   // Only include key if it was changed (not empty)
   if (formData.key && formData.key.trim()) {
     payload.key = formData.key
+
+    const isConvertingToMultiKey =
+      !isMultiKeyChannel && formData.multi_key_mode === 'multi_to_single'
+    if (isMultiKeyChannel || isConvertingToMultiKey) {
+      payload.key_mode = formData.key_mode || 'append'
+    }
+    if (isConvertingToMultiKey) {
+      payload.multi_key_mode = formData.multi_key_type || 'random'
+    }
   }
 
   // Clean up empty strings to null for optional fields

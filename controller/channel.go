@@ -957,6 +957,62 @@ type ChannelStatusBatchRequest struct {
 	Status int   `json:"status"`
 }
 
+// prepareMultiKeyUpdate validates multi-key update options and promotes a single-key channel when requested.
+func prepareMultiKeyUpdate(channel *PatchChannel, originChannel *model.Channel, requestData map[string]any) error {
+	if channel.MultiKeyMode != nil && *channel.MultiKeyMode != "" {
+		switch constant.MultiKeyMode(*channel.MultiKeyMode) {
+		case constant.MultiKeyModeRandom, constant.MultiKeyModePolling:
+			channel.ChannelInfo.MultiKeyMode = constant.MultiKeyMode(*channel.MultiKeyMode)
+		default:
+			return fmt.Errorf("不支持的多密钥使用策略")
+		}
+	}
+
+	if channel.KeyMode == nil {
+		return nil
+	}
+	switch *channel.KeyMode {
+	case "append", "replace":
+	default:
+		return fmt.Errorf("不支持的密钥更新模式")
+	}
+
+	if originChannel.ChannelInfo.IsMultiKey {
+		return nil
+	}
+	if _, ok := requestData["key"]; !ok || strings.TrimSpace(channel.Key) == "" {
+		return fmt.Errorf("转换为多密钥模式时必须提供新密钥")
+	}
+	if channel.MultiKeyMode == nil || *channel.MultiKeyMode == "" {
+		return fmt.Errorf("转换为多密钥模式时必须指定多密钥使用策略")
+	}
+
+	effectiveType := originChannel.Type
+	if _, ok := requestData["type"]; ok {
+		effectiveType = channel.Type
+	}
+	if effectiveType == constant.ChannelTypeCodex {
+		return fmt.Errorf("Codex 渠道不支持多密钥模式")
+	}
+	if effectiveType == constant.ChannelTypeVertexAi {
+		settings := originChannel.GetOtherSettings()
+		if _, ok := requestData["settings"]; ok {
+			settings = channel.GetOtherSettings()
+		}
+		if settings.VertexKeyType == dto.VertexKeyTypeAPIKey {
+			return fmt.Errorf("Vertex AI API Key 模式不支持多密钥模式")
+		}
+	}
+
+	channel.ChannelInfo.IsMultiKey = true
+	channel.ChannelInfo.MultiKeySize = 0
+	channel.ChannelInfo.MultiKeyPollingIndex = 0
+	channel.ChannelInfo.MultiKeyStatusList = nil
+	channel.ChannelInfo.MultiKeyDisabledReason = nil
+	channel.ChannelInfo.MultiKeyDisabledTime = nil
+	return nil
+}
+
 // normalizeChannelUpdatePayload validates the effective saved-plus-patch channel and copies normalized mutable fields back to the patch.
 func normalizeChannelUpdatePayload(channel *PatchChannel, originChannel *model.Channel, rawBody []byte, requestData map[string]any) error {
 	effectiveChannel := PatchChannel{Channel: *originChannel}
@@ -1034,9 +1090,12 @@ func UpdateChannel(c *gin.Context) {
 		return
 	}
 
-	// If the request explicitly specifies a new MultiKeyMode, apply it on top of the original info.
-	if channel.MultiKeyMode != nil && *channel.MultiKeyMode != "" {
-		channel.ChannelInfo.MultiKeyMode = constant.MultiKeyMode(*channel.MultiKeyMode)
+	if err := prepareMultiKeyUpdate(&channel, originChannel, requestData); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
 	}
 
 	// 处理多key模式下的密钥追加/覆盖逻辑
