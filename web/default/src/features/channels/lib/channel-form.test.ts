@@ -183,6 +183,76 @@ describe('channel temporary auto-disable overrides', () => {
   })
 })
 
+describe('channel multi-key auto-disable overrides', () => {
+  test('inherits global settings by default', () => {
+    const payload = transformFormDataToCreatePayload({
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      name: 'test channel',
+      key: 'test-key-a\ntest-key-b',
+      models: 'MODEL_A',
+      multi_key_mode: 'batch',
+    })
+    const settings = JSON.parse(String(payload.channel.settings))
+
+    assert.equal(
+      Object.hasOwn(settings, 'multi_key_auto_disable_override'),
+      false
+    )
+  })
+
+  test('restores, normalizes, and persists a channel override', () => {
+    const channel = createChannel({})
+    channel.channel_info.is_multi_key = true
+    channel.settings = JSON.stringify({
+      multi_key_auto_disable_override: {
+        temporary_status_codes: '429, 500-501,501',
+        persistent_status_codes: '401,403',
+        temporary_disable_minutes: 30,
+      },
+    })
+
+    const defaults = transformChannelToFormDefaults(channel)
+    assert.equal(defaults.multi_key_auto_disable_use_global, false)
+    assert.equal(defaults.multi_key_temporary_status_codes, '429, 500-501,501')
+    assert.equal(defaults.multi_key_persistent_status_codes, '401,403')
+    assert.equal(defaults.multi_key_temporary_disable_minutes, 30)
+
+    const payload = transformFormDataToUpdatePayload(defaults, channel.id, true)
+    const settings = JSON.parse(String(payload.settings))
+    assert.deepEqual(settings.multi_key_auto_disable_override, {
+      temporary_status_codes: '429,500-501',
+      persistent_status_codes: '401,403',
+      temporary_disable_minutes: 30,
+    })
+  })
+
+  test('allows an empty rule list and rejects overlaps', () => {
+    const emptyList = channelFormSchema.safeParse({
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      name: 'test channel',
+      key: 'test-key-a\ntest-key-b',
+      models: 'MODEL_A',
+      multi_key_mode: 'batch',
+      multi_key_auto_disable_use_global: false,
+      multi_key_temporary_status_codes: '',
+      multi_key_persistent_status_codes: '401',
+    })
+    assert.equal(emptyList.success, true)
+
+    const overlap = channelFormSchema.safeParse({
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      name: 'test channel',
+      key: 'test-key-a\ntest-key-b',
+      models: 'MODEL_A',
+      multi_key_mode: 'batch',
+      multi_key_auto_disable_use_global: false,
+      multi_key_temporary_status_codes: '429-431',
+      multi_key_persistent_status_codes: '431',
+    })
+    assert.equal(overlap.success, false)
+  })
+})
+
 describe('channel multi-key conversion payload', () => {
   test('adds append mode and strategy when converting a single-key channel', () => {
     const payload = transformFormDataToUpdatePayload(

@@ -84,6 +84,11 @@ const routingReliabilitySchema = z
       error_rate_percent: z.coerce.number().int().min(1).max(100),
       disable_minutes: z.coerce.number().int().min(1).max(1440),
     }),
+    multi_key_auto_disable_setting: z.object({
+      temporary_status_codes: z.string(),
+      persistent_status_codes: z.string(),
+      temporary_disable_minutes: z.coerce.number().int().min(1).max(1440),
+    }),
     AutomaticRetryStatusCodes: z.string(),
     monitor_setting: z.object({
       auto_test_channel_enabled: z.boolean(),
@@ -135,9 +140,54 @@ const routingReliabilitySchema = z
         )}`,
       })
     }
+
+    const temporaryKeyParsed = parseHttpStatusCodeRules(
+      values.multi_key_auto_disable_setting.temporary_status_codes
+    )
+    const persistentKeyParsed = parseHttpStatusCodeRules(
+      values.multi_key_auto_disable_setting.persistent_status_codes
+    )
+    if (!temporaryKeyParsed.ok) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['multi_key_auto_disable_setting', 'temporary_status_codes'],
+        message: `Invalid status code rules: ${temporaryKeyParsed.invalidTokens.join(', ')}`,
+      })
+    }
+    if (!persistentKeyParsed.ok) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['multi_key_auto_disable_setting', 'persistent_status_codes'],
+        message: `Invalid status code rules: ${persistentKeyParsed.invalidTokens.join(', ')}`,
+      })
+    }
+    if (
+      temporaryKeyParsed.ok &&
+      persistentKeyParsed.ok &&
+      statusCodeRulesOverlap(temporaryKeyParsed, persistentKeyParsed)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['multi_key_auto_disable_setting', 'persistent_status_codes'],
+        message: 'Temporary and persistent status codes must not overlap',
+      })
+    }
   })
 
 type RoutingReliabilityFormValues = z.output<typeof routingReliabilitySchema>
+
+function statusCodeRulesOverlap(
+  first: ReturnType<typeof parseHttpStatusCodeRules>,
+  second: ReturnType<typeof parseHttpStatusCodeRules>
+): boolean {
+  return first.ranges.some((firstRange) =>
+    second.ranges.some(
+      (secondRange) =>
+        firstRange.start <= secondRange.end &&
+        secondRange.start <= firstRange.end
+    )
+  )
+}
 type RoutingReliabilityFormInput = z.input<typeof routingReliabilitySchema>
 
 type RoutingReliabilitySectionProps = {
@@ -153,6 +203,9 @@ type RoutingReliabilitySectionProps = {
     'channel_auto_disable_setting.min_requests': number
     'channel_auto_disable_setting.error_rate_percent': number
     'channel_auto_disable_setting.disable_minutes': number
+    'multi_key_auto_disable_setting.temporary_status_codes': string
+    'multi_key_auto_disable_setting.persistent_status_codes': string
+    'multi_key_auto_disable_setting.temporary_disable_minutes': number
     AutomaticRetryStatusCodes: string
     'monitor_setting.auto_test_channel_enabled': boolean
     'monitor_setting.auto_test_channel_minutes': number
@@ -176,6 +229,9 @@ type NormalizedRoutingReliabilityValues = {
   'channel_auto_disable_setting.min_requests': number
   'channel_auto_disable_setting.error_rate_percent': number
   'channel_auto_disable_setting.disable_minutes': number
+  'multi_key_auto_disable_setting.temporary_status_codes': string
+  'multi_key_auto_disable_setting.persistent_status_codes': string
+  'multi_key_auto_disable_setting.temporary_disable_minutes': number
   AutomaticRetryStatusCodes: string
   'monitor_setting.auto_test_channel_enabled': boolean
   'monitor_setting.auto_test_channel_minutes': number
@@ -207,6 +263,17 @@ const buildFormDefaults = (
       defaults['channel_auto_disable_setting.error_rate_percent'] ?? 80,
     disable_minutes:
       defaults['channel_auto_disable_setting.disable_minutes'] ?? 10,
+  },
+  multi_key_auto_disable_setting: {
+    temporary_status_codes:
+      defaults['multi_key_auto_disable_setting.temporary_status_codes'] ??
+      '429',
+    persistent_status_codes:
+      defaults['multi_key_auto_disable_setting.persistent_status_codes'] ??
+      '401',
+    temporary_disable_minutes:
+      defaults['multi_key_auto_disable_setting.temporary_disable_minutes'] ??
+      10,
   },
   AutomaticRetryStatusCodes: defaults.AutomaticRetryStatusCodes ?? '',
   monitor_setting: {
@@ -244,6 +311,17 @@ const normalizeDefaults = (
     defaults['channel_auto_disable_setting.error_rate_percent'] ?? 80,
   'channel_auto_disable_setting.disable_minutes':
     defaults['channel_auto_disable_setting.disable_minutes'] ?? 10,
+  'multi_key_auto_disable_setting.temporary_status_codes':
+    parseHttpStatusCodeRules(
+      defaults['multi_key_auto_disable_setting.temporary_status_codes'] ?? '429'
+    ).normalized,
+  'multi_key_auto_disable_setting.persistent_status_codes':
+    parseHttpStatusCodeRules(
+      defaults['multi_key_auto_disable_setting.persistent_status_codes'] ??
+        '401'
+    ).normalized,
+  'multi_key_auto_disable_setting.temporary_disable_minutes':
+    defaults['multi_key_auto_disable_setting.temporary_disable_minutes'] ?? 10,
   AutomaticRetryStatusCodes: parseHttpStatusCodeRules(
     defaults.AutomaticRetryStatusCodes ?? ''
   ).normalized,
@@ -280,6 +358,16 @@ const normalizeFormValues = (
     values.channel_auto_disable_setting.error_rate_percent,
   'channel_auto_disable_setting.disable_minutes':
     values.channel_auto_disable_setting.disable_minutes,
+  'multi_key_auto_disable_setting.temporary_status_codes':
+    parseHttpStatusCodeRules(
+      values.multi_key_auto_disable_setting.temporary_status_codes
+    ).normalized,
+  'multi_key_auto_disable_setting.persistent_status_codes':
+    parseHttpStatusCodeRules(
+      values.multi_key_auto_disable_setting.persistent_status_codes
+    ).normalized,
+  'multi_key_auto_disable_setting.temporary_disable_minutes':
+    values.multi_key_auto_disable_setting.temporary_disable_minutes,
   AutomaticRetryStatusCodes: parseHttpStatusCodeRules(
     values.AutomaticRetryStatusCodes
   ).normalized,
@@ -326,6 +414,12 @@ export function RoutingReliabilitySection({
     'channel_auto_disable_setting.status_codes'
   )
   const autoRetryStatusCodes = form.watch('AutomaticRetryStatusCodes')
+  const temporaryKeyStatusCodes = form.watch(
+    'multi_key_auto_disable_setting.temporary_status_codes'
+  )
+  const persistentKeyStatusCodes = form.watch(
+    'multi_key_auto_disable_setting.persistent_status_codes'
+  )
   const channelTestMode = form.watch('monitor_setting.channel_test_mode')
   const autoDisableParsed = useMemo(
     () => parseHttpStatusCodeRules(autoDisableStatusCodes),
@@ -339,16 +433,84 @@ export function RoutingReliabilitySection({
     () => parseHttpStatusCodeRules(statisticalDisableStatusCodes),
     [statisticalDisableStatusCodes]
   )
+  const temporaryKeyParsed = useMemo(
+    () => parseHttpStatusCodeRules(temporaryKeyStatusCodes),
+    [temporaryKeyStatusCodes]
+  )
+  const persistentKeyParsed = useMemo(
+    () => parseHttpStatusCodeRules(persistentKeyStatusCodes),
+    [persistentKeyStatusCodes]
+  )
 
   const onSubmit = async (values: RoutingReliabilityFormValues) => {
     const normalized = normalizeFormValues(values)
-    const updates = (
+    let updates = (
       Object.keys(normalized) as Array<keyof NormalizedRoutingReliabilityValues>
     ).filter((key) => normalized[key] !== baselineRef.current[key])
 
     if (updates.length === 0) {
       toast.info(t('No changes to save'))
       return
+    }
+
+    const temporaryKey =
+      'multi_key_auto_disable_setting.temporary_status_codes' as const
+    const persistentKey =
+      'multi_key_auto_disable_setting.persistent_status_codes' as const
+    if (updates.includes(temporaryKey) && updates.includes(persistentKey)) {
+      const oldTemporary = parseHttpStatusCodeRules(
+        baselineRef.current[temporaryKey]
+      )
+      const oldPersistent = parseHttpStatusCodeRules(
+        baselineRef.current[persistentKey]
+      )
+      const newTemporary = parseHttpStatusCodeRules(normalized[temporaryKey])
+      const newPersistent = parseHttpStatusCodeRules(normalized[persistentKey])
+
+      if (!statusCodeRulesOverlap(newTemporary, oldPersistent)) {
+        await updateOption.mutateAsync({
+          key: temporaryKey,
+          value: normalized[temporaryKey],
+        })
+        await updateOption.mutateAsync({
+          key: persistentKey,
+          value: normalized[persistentKey],
+        })
+      } else if (!statusCodeRulesOverlap(oldTemporary, newPersistent)) {
+        await updateOption.mutateAsync({
+          key: persistentKey,
+          value: normalized[persistentKey],
+        })
+        await updateOption.mutateAsync({
+          key: temporaryKey,
+          value: normalized[temporaryKey],
+        })
+      } else {
+        await updateOption.mutateAsync({ key: temporaryKey, value: '' })
+        try {
+          await updateOption.mutateAsync({
+            key: persistentKey,
+            value: normalized[persistentKey],
+          })
+          await updateOption.mutateAsync({
+            key: temporaryKey,
+            value: normalized[temporaryKey],
+          })
+        } catch (error) {
+          await updateOption.mutateAsync({
+            key: persistentKey,
+            value: baselineRef.current[persistentKey],
+          })
+          await updateOption.mutateAsync({
+            key: temporaryKey,
+            value: baselineRef.current[temporaryKey],
+          })
+          throw error
+        }
+      }
+      updates = updates.filter(
+        (key) => key !== temporaryKey && key !== persistentKey
+      )
     }
 
     for (const key of updates) {
@@ -572,7 +734,7 @@ export function RoutingReliabilitySection({
                 <Alert variant='destructive' className='lg:col-span-2'>
                   <AlertDescription>
                     {t(
-                      'Redis is not enabled. Statistical temporary auto-disable will not run.'
+                      'Redis is not enabled. Statistical and per-key temporary auto-disable will not run.'
                     )}
                   </AlertDescription>
                 </Alert>
@@ -783,6 +945,110 @@ export function RoutingReliabilitySection({
                     <FormDescription>
                       {t(
                         'The channel automatically returns to routing after this duration.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <div className='lg:col-span-2'>
+                <h5 className='text-sm font-medium'>
+                  {t('Multi-key health policy')}
+                </h5>
+                <p className='text-muted-foreground text-sm'>
+                  {t(
+                    'Temporarily cool down rate-limited keys and persistently disable keys with qualifying credential failures.'
+                  )}
+                </p>
+              </div>
+
+              <FormField
+                control={form.control}
+                name='multi_key_auto_disable_setting.temporary_status_codes'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      {t('Temporary key-disable status codes')}
+                    </FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder='429'
+                        value={field.value}
+                        onChange={(event) => field.onChange(event.target.value)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Matching real upstream responses temporarily remove only the selected key from routing.'
+                      )}{' '}
+                      {temporaryKeyParsed.ok &&
+                        temporaryKeyParsed.normalized &&
+                        temporaryKeyParsed.normalized !==
+                          field.value.trim() && (
+                          <span className='text-muted-foreground'>
+                            {t('Normalized:')} {temporaryKeyParsed.normalized}
+                          </span>
+                        )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='multi_key_auto_disable_setting.persistent_status_codes'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      {t('Persistent key-disable status codes')}
+                    </FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder='401'
+                        value={field.value}
+                        onChange={(event) => field.onChange(event.target.value)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Matching real upstream responses auto-disable only the selected key until recovery succeeds.'
+                      )}{' '}
+                      {persistentKeyParsed.ok &&
+                        persistentKeyParsed.normalized &&
+                        persistentKeyParsed.normalized !==
+                          field.value.trim() && (
+                          <span className='text-muted-foreground'>
+                            {t('Normalized:')} {persistentKeyParsed.normalized}
+                          </span>
+                        )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='multi_key_auto_disable_setting.temporary_disable_minutes'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      {t('Temporary key cooldown (minutes)')}
+                    </FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={1}
+                        max={1440}
+                        step={1}
+                        {...safeNumberFieldProps(field)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'A temporarily disabled key automatically returns after this duration.'
                       )}
                     </FormDescription>
                     <FormMessage />

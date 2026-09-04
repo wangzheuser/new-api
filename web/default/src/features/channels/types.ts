@@ -351,7 +351,15 @@ export interface CopyChannelResponse {
 export interface KeyStatus {
   index: number
   status: number // 1: enabled, 2: manual disabled, 3: auto disabled
+  effective_status:
+    | 'enabled'
+    | 'temporary_disabled'
+    | 'auto_disabled'
+    | 'manual_disabled'
+  temporary_disabled: boolean
   disabled_time?: number
+  disabled_until?: number
+  last_status_code?: number
   reason?: string
   key_preview?: string
 }
@@ -404,6 +412,7 @@ export interface MultiKeyStatusResponse {
     enabled_count: number
     manual_disabled_count: number
     auto_disabled_count: number
+    temporary_disabled_count: number
   }
 }
 

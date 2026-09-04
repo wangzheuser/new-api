@@ -14,16 +14,40 @@ import (
 )
 
 type RetryParam struct {
-	Ctx                *gin.Context
-	TokenGroup         string
-	ModelName          string
-	RequestPath        string
-	EndpointType       constant.EndpointType
-	RelayFormat        types.RelayFormat
-	IsStream           bool
-	Retry              *int
-	ExcludedChannelIDs map[int]struct{}
-	resetNextTry       bool
+	Ctx                     *gin.Context
+	TokenGroup              string
+	ModelName               string
+	RequestPath             string
+	EndpointType            constant.EndpointType
+	RelayFormat             types.RelayFormat
+	IsStream                bool
+	Retry                   *int
+	ExcludedChannelIDs      map[int]struct{}
+	PreferredChannelID      int
+	ExcludedKeyFingerprints map[int]map[string]struct{}
+	resetNextTry            bool
+}
+
+// ExcludeChannelKey prevents one request from selecting the same failed credential again.
+func (p *RetryParam) ExcludeChannelKey(channelId int, key string) {
+	if p == nil || channelId <= 0 || key == "" {
+		return
+	}
+	if p.ExcludedKeyFingerprints == nil {
+		p.ExcludedKeyFingerprints = make(map[int]map[string]struct{})
+	}
+	if p.ExcludedKeyFingerprints[channelId] == nil {
+		p.ExcludedKeyFingerprints[channelId] = make(map[string]struct{})
+	}
+	p.ExcludedKeyFingerprints[channelId][MultiKeyFingerprint(key)] = struct{}{}
+}
+
+// ExcludedChannelKeys returns the request-local credential exclusions for one channel.
+func (p *RetryParam) ExcludedChannelKeys(channelId int) map[string]struct{} {
+	if p == nil || p.ExcludedKeyFingerprints == nil {
+		return nil
+	}
+	return p.ExcludedKeyFingerprints[channelId]
 }
 
 func (p *RetryParam) GetRetry() int {
@@ -211,7 +235,7 @@ func CacheGetRandomSatisfiedChannelWithRoute(param *RetryParam) (*model.Channel,
 			}
 			return temporaryFallback, plan, temporaryFallbackGroup, nil
 		}
-		if channel.GetAutoBan() && IsChannelTemporarilyDisabled(channel.Id) {
+		if channel.GetAutoBan() && (IsChannelTemporarilyDisabled(channel.Id) || IsMultiKeyPoolTemporarilyDisabled(channel.Id)) {
 			if temporaryFallback == nil {
 				temporaryFallback = channel
 				temporaryFallbackGroup = selectGroup

@@ -26,6 +26,7 @@ import type { MultiKeyConfirmAction } from '../../types'
 type MultiKeyTableRowActionsProps = {
   keyIndex: number
   status: number
+  temporaryDisabled: boolean
   canDelete: boolean
   hasTestResult: boolean
   isTesting: boolean
@@ -36,6 +37,7 @@ type MultiKeyTableRowActionsProps = {
 export function MultiKeyTableRowActions({
   keyIndex,
   status,
+  temporaryDisabled,
   canDelete,
   hasTestResult,
   isTesting,
@@ -43,7 +45,7 @@ export function MultiKeyTableRowActions({
   onAction,
 }: MultiKeyTableRowActionsProps) {
   const { t } = useTranslation()
-  const isEnabled = status === 1
+  const isEnabled = status === 1 && !temporaryDisabled
   let TestIcon = Play
   if (isTesting) {
     TestIcon = Loader2

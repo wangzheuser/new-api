@@ -20,7 +20,11 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import type { MultiKeyTestResult } from '../types'
-import { getMultiKeyTestActionIndexes } from './multi-key-utils'
+import {
+  getMultiKeyCooldownMinutes,
+  getMultiKeyEffectiveStatusConfig,
+  getMultiKeyTestActionIndexes,
+} from './multi-key-utils'
 
 describe('getMultiKeyTestActionIndexes', () => {
   it('partitions completed results by availability', () => {
@@ -100,5 +104,31 @@ describe('getMultiKeyTestActionIndexes', () => {
       available: [2],
       unavailable: [],
     })
+  })
+})
+
+describe('multi-key effective health status', () => {
+  it('shows temporary disable without changing the persisted status', () => {
+    const key = {
+      index: 0,
+      status: 1,
+      effective_status: 'temporary_disabled' as const,
+      temporary_disabled: true,
+      disabled_until: 1_600,
+      last_status_code: 429,
+      reason: 'status_code=429, limited',
+    }
+
+    assert.deepEqual(getMultiKeyEffectiveStatusConfig(key), {
+      variant: 'warning',
+      label: 'Temporary Disabled',
+    })
+    assert.equal(key.status, 1)
+  })
+
+  it('rounds the recovery countdown up and stops at zero', () => {
+    assert.equal(getMultiKeyCooldownMinutes(1_600, 1_541), 1)
+    assert.equal(getMultiKeyCooldownMinutes(1_600, 1_481), 2)
+    assert.equal(getMultiKeyCooldownMinutes(1_600, 1_601), 0)
   })
 })

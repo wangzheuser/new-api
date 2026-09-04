@@ -507,16 +507,21 @@ func getTaskOriginModelName(c *gin.Context) string {
 }
 
 func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, modelName string) *types.NewAPIError {
-	return setupContextForSelectedChannel(c, channel, modelName, nil)
+	return setupContextForSelectedChannel(c, channel, modelName, nil, nil)
+}
+
+// SetupContextForSelectedChannelWithKeyExclusions initializes channel context while skipping failed keys from this request.
+func SetupContextForSelectedChannelWithKeyExclusions(c *gin.Context, channel *model.Channel, modelName string, excludedFingerprints map[string]struct{}) *types.NewAPIError {
+	return setupContextForSelectedChannel(c, channel, modelName, nil, excludedFingerprints)
 }
 
 // SetupContextForSelectedChannelKey initializes channel context with one exact multi-key index.
 func SetupContextForSelectedChannelKey(c *gin.Context, channel *model.Channel, modelName string, keyIndex int) *types.NewAPIError {
-	return setupContextForSelectedChannel(c, channel, modelName, &keyIndex)
+	return setupContextForSelectedChannel(c, channel, modelName, &keyIndex, nil)
 }
 
 // setupContextForSelectedChannel shares channel metadata setup between normal routing and targeted key tests.
-func setupContextForSelectedChannel(c *gin.Context, channel *model.Channel, modelName string, keyIndex *int) *types.NewAPIError {
+func setupContextForSelectedChannel(c *gin.Context, channel *model.Channel, modelName string, keyIndex *int, excludedFingerprints map[string]struct{}) *types.NewAPIError {
 	if common.GetContextKeyString(c, constant.ContextKeyOriginalModel) == "" {
 		common.SetContextKey(c, constant.ContextKeyOriginalModel, modelName)
 	}
@@ -560,7 +565,7 @@ func setupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	key := ""
 	index := 0
 	if keyIndex == nil {
-		selectedKey, selectedIndex, newAPIError := channel.GetNextEnabledKey()
+		selectedKey, selectedIndex, newAPIError := service.SelectNextEnabledChannelKey(channel, excludedFingerprints)
 		if newAPIError != nil {
 			return newAPIError
 		}

@@ -82,6 +82,17 @@ func TestChannelValidateSettingsAutoDisableOverride(t *testing.T) {
 	assert.ErrorContains(t, invalid.ValidateSettings(), "auto_disable_override.window_minutes")
 }
 
+func TestChannelValidateSettingsMultiKeyAutoDisableOverride(t *testing.T) {
+	valid := &Channel{OtherSettings: `{"multi_key_auto_disable_override":{"temporary_status_codes":"429,500-501","persistent_status_codes":"401","temporary_disable_minutes":10}}`}
+	require.NoError(t, valid.ValidateSettings())
+
+	overlap := &Channel{OtherSettings: `{"multi_key_auto_disable_override":{"temporary_status_codes":"429-431","persistent_status_codes":"431","temporary_disable_minutes":10}}`}
+	assert.ErrorContains(t, overlap.ValidateSettings(), "must not overlap")
+
+	invalidMinutes := &Channel{OtherSettings: `{"multi_key_auto_disable_override":{"temporary_status_codes":"429","persistent_status_codes":"401","temporary_disable_minutes":0}}`}
+	assert.ErrorContains(t, invalidMinutes.ValidateSettings(), "temporary disable minutes")
+}
+
 func TestChannelValidateSettingsPrunesRemovedInputModalities(t *testing.T) {
 	setting := `{"force_format":true,"future_field":{"enabled":true},"model_input_modalities":{"model-a":["image","text"],"model-b":["text"]}}`
 	channel := &Channel{Models: " model-a ,Model-A", Setting: &setting}

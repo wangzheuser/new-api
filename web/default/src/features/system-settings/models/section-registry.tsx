@@ -97,6 +97,14 @@ const MODELS_SECTIONS = [
             settings['channel_auto_disable_setting.error_rate_percent'],
           'channel_auto_disable_setting.disable_minutes':
             settings['channel_auto_disable_setting.disable_minutes'],
+          'multi_key_auto_disable_setting.temporary_status_codes':
+            settings['multi_key_auto_disable_setting.temporary_status_codes'],
+          'multi_key_auto_disable_setting.persistent_status_codes':
+            settings['multi_key_auto_disable_setting.persistent_status_codes'],
+          'multi_key_auto_disable_setting.temporary_disable_minutes':
+            settings[
+              'multi_key_auto_disable_setting.temporary_disable_minutes'
+            ],
           AutomaticRetryStatusCodes: settings.AutomaticRetryStatusCodes,
           'monitor_setting.auto_test_channel_enabled':
             settings['monitor_setting.auto_test_channel_enabled'],

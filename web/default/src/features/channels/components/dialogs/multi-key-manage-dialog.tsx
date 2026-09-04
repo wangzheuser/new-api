@@ -73,7 +73,8 @@ import { useMultiKeyTest } from '../../hooks/use-multi-key-test'
 import {
   channelsQueryKeys,
   formatTimestamp,
-  getMultiKeyStatusConfig,
+  getMultiKeyCooldownMinutes,
+  getMultiKeyEffectiveStatusConfig,
   getMultiKeyConfirmMessage,
   getMultiKeyTestActionIndexes,
   isDestructiveAction,
@@ -118,6 +119,8 @@ export function MultiKeyManageDialog({
   const [enabledCount, setEnabledCount] = useState(0)
   const [manualDisabledCount, setManualDisabledCount] = useState(0)
   const [autoDisabledCount, setAutoDisabledCount] = useState(0)
+  const [temporaryDisabledCount, setTemporaryDisabledCount] = useState(0)
+  const [nowSeconds, setNowSeconds] = useState(() => Date.now() / 1000)
   // UI state
   const [statusFilter, setStatusFilter] = useState<number | null>(null)
   const [confirmAction, setConfirmAction] =
@@ -134,6 +137,7 @@ export function MultiKeyManageDialog({
   // Reset and load data when dialog opens
   useEffect(() => {
     if (open && currentRow) {
+      setNowSeconds(Date.now() / 1000)
       setCurrentPage(1)
       setStatusFilter(null)
       multiKeyTest.reset()
@@ -141,6 +145,14 @@ export function MultiKeyManageDialog({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, currentRow?.id])
+
+  useEffect(() => {
+    if (!open || temporaryDisabledCount === 0) return
+    const timer = window.setInterval(() => {
+      setNowSeconds(Date.now() / 1000)
+    }, 30_000)
+    return () => window.clearInterval(timer)
+  }, [open, temporaryDisabledCount])
 
   const loadKeyStatus = async (
     page: number = currentPage,
@@ -167,6 +179,7 @@ export function MultiKeyManageDialog({
         setEnabledCount(response.data.enabled_count || 0)
         setManualDisabledCount(response.data.manual_disabled_count || 0)
         setAutoDisabledCount(response.data.auto_disabled_count || 0)
+        setTemporaryDisabledCount(response.data.temporary_disabled_count || 0)
       } else {
         toast.error(response.message || t('Failed to load key status'))
       }
@@ -267,8 +280,8 @@ export function MultiKeyManageDialog({
     }
   }
 
-  const renderStatusBadge = (status: number) => {
-    const config = getMultiKeyStatusConfig(status)
+  const renderStatusBadge = (key: KeyStatus) => {
+    const config = getMultiKeyEffectiveStatusConfig(key)
     return (
       <StatusBadge
         label={t(config.label)}
@@ -282,6 +295,17 @@ export function MultiKeyManageDialog({
   const formatKeyTimestamp = (timestamp?: number) => {
     if (!timestamp) return '-'
     return formatTimestamp(timestamp)
+  }
+
+  const formatDisabledTime = (key: KeyStatus) => {
+    if (key.temporary_disabled && key.disabled_until) {
+      const remainingMinutes = getMultiKeyCooldownMinutes(
+        key.disabled_until,
+        nowSeconds
+      )
+      return t('Recovers in {{count}} minutes', { count: remainingMinutes })
+    }
+    return formatKeyTimestamp(key.disabled_time)
   }
 
   const testActionIndexes = getMultiKeyTestActionIndexes(
@@ -363,7 +387,7 @@ export function MultiKeyManageDialog({
       >
         <div className='flex min-h-0 flex-1 flex-col space-y-4 overflow-hidden'>
           {/* Statistics */}
-          <div className='grid shrink-0 grid-cols-3 gap-3'>
+          <div className='grid shrink-0 grid-cols-2 gap-3 lg:grid-cols-4'>
             <StatisticsCard
               label={t(showTestSummary ? 'Tested' : 'Enabled')}
               count={
@@ -371,6 +395,13 @@ export function MultiKeyManageDialog({
               }
               total={showTestSummary ? keyCount : total}
             />
+            {!showTestSummary && (
+              <StatisticsCard
+                label={t('Temporary Disabled')}
+                count={temporaryDisabledCount}
+                total={total}
+              />
+            )}
             <StatisticsCard
               label={t(showTestSummary ? 'Available' : 'Manual Disabled')}
               count={
@@ -506,7 +537,10 @@ export function MultiKeyManageDialog({
                 <RefreshCw className='h-4 w-4' />
               </Button>
 
-              {manualDisabledCount + autoDisabledCount > 0 && (
+              {manualDisabledCount +
+                autoDisabledCount +
+                temporaryDisabledCount >
+                0 && (
                 <Button
                   variant='default'
                   size='sm'
@@ -575,7 +609,7 @@ export function MultiKeyManageDialog({
                     id: 'status',
                     header: t('Status'),
                     className: 'w-32',
-                    cell: (key) => renderStatusBadge(key.status),
+                    cell: (key) => renderStatusBadge(key),
                   },
                   {
                     id: 'reason',
@@ -589,7 +623,14 @@ export function MultiKeyManageDialog({
                     header: t('Disabled Time'),
                     className: 'w-44',
                     cellClassName: 'text-muted-foreground text-sm',
-                    cell: (key) => formatKeyTimestamp(key.disabled_time),
+                    cell: (key) => formatDisabledTime(key),
+                  },
+                  {
+                    id: 'status-code',
+                    header: t('HTTP Status'),
+                    className: 'w-28',
+                    cellClassName: 'text-muted-foreground text-sm',
+                    cell: (key) => key.last_status_code || '-',
                   },
                   {
                     id: 'test-result',
@@ -635,6 +676,7 @@ export function MultiKeyManageDialog({
                       <MultiKeyTableRowActions
                         keyIndex={key.index}
                         status={key.status}
+                        temporaryDisabled={key.temporary_disabled}
                         canDelete={canEditSensitive}
                         hasTestResult={multiKeyTest.results.has(key.index)}
                         isTesting={multiKeyTest.testingKeys.has(key.index)}

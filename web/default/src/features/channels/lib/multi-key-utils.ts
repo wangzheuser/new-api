@@ -20,7 +20,11 @@ import {
   MULTI_KEY_STATUS_CONFIG,
   MULTI_KEY_CONFIRM_MESSAGES,
 } from '../constants'
-import type { MultiKeyConfirmAction, MultiKeyTestResult } from '../types'
+import type {
+  KeyStatus,
+  MultiKeyConfirmAction,
+  MultiKeyTestResult,
+} from '../types'
 
 /**
  * Get status badge configuration for multi-key status
@@ -32,6 +36,25 @@ export function getMultiKeyStatusConfig(status: number) {
       label: 'Unknown',
     }
   )
+}
+
+/** Resolve the visible status without changing the legacy numeric status contract. */
+export function getMultiKeyEffectiveStatusConfig(key: KeyStatus) {
+  if (key.temporary_disabled) {
+    return {
+      variant: 'warning' as const,
+      label: 'Temporary Disabled',
+    }
+  }
+  return getMultiKeyStatusConfig(key.status)
+}
+
+/** Return the rounded-up remaining cooldown shown by the key status table. */
+export function getMultiKeyCooldownMinutes(
+  disabledUntil: number,
+  nowSeconds: number
+): number {
+  return Math.max(0, Math.ceil((disabledUntil - nowSeconds) / 60))
 }
 
 /**

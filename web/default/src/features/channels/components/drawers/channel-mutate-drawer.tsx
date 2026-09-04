@@ -357,6 +357,7 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.priority ||
     values.weight ||
     !values.auto_disable_use_global ||
+    !values.multi_key_auto_disable_use_global ||
     values.proxy?.trim() ||
     values.force_format ||
     values.thinking_to_content ||
@@ -734,6 +735,34 @@ export function ChannelMutateDrawer({
     }
   }, [systemOptionsData?.data])
 
+  const globalMultiKeyAutoDisableDefaults = useMemo(() => {
+    const options = systemOptionsData?.data || []
+    const temporaryDisableMinutes = Number(
+      options.find(
+        (item) =>
+          item.key ===
+          'multi_key_auto_disable_setting.temporary_disable_minutes'
+      )?.value
+    )
+    return {
+      temporaryStatusCodes:
+        options.find(
+          (item) =>
+            item.key === 'multi_key_auto_disable_setting.temporary_status_codes'
+        )?.value || '429',
+      persistentStatusCodes:
+        options.find(
+          (item) =>
+            item.key ===
+            'multi_key_auto_disable_setting.persistent_status_codes'
+        )?.value || '401',
+      temporaryDisableMinutes:
+        Number.isInteger(temporaryDisableMinutes) && temporaryDisableMinutes > 0
+          ? temporaryDisableMinutes
+          : 10,
+    }
+  }, [systemOptionsData?.data])
+
   // Fetch prefill model groups
   const { data: prefillGroupsData } = useQuery({
     queryKey: ['prefill_groups', 'model'],
@@ -826,6 +855,9 @@ export function ChannelMutateDrawer({
   const currentTestModel = form.watch('test_model')
   const currentAutoBan = form.watch('auto_ban')
   const autoDisableUseGlobal = form.watch('auto_disable_use_global')
+  const multiKeyAutoDisableUseGlobal = form.watch(
+    'multi_key_auto_disable_use_global'
+  )
   const currentTag = form.watch('tag')
   const currentRemark = form.watch('remark')
   const currentStatusCodeMapping = form.watch('status_code_mapping')
@@ -959,6 +991,9 @@ export function ChannelMutateDrawer({
   const showKeyUpdateMode =
     isEditing && (isMultiKeyChannel || isConvertingToMultiKey)
   const showMultiKeyStrategy = !isEditing || isConvertingToMultiKey
+  const showMultiKeyAutoDisable = Boolean(
+    isMultiKeyChannel || (multiKeyMode && multiKeyMode !== 'single')
+  )
   const isChannelDetailLoading = isEditing && isChannelLoading
   const supportsMultiKeyAddMode =
     currentType !== 57 && !(currentType === 41 && vertexKeyType === 'api_key')
@@ -1154,7 +1189,8 @@ export function ChannelMutateDrawer({
     currentTestModel?.trim() ||
     currentModelContextFallbacks?.trim() ||
     (currentAutoBan ?? 1) !== 1 ||
-    !autoDisableUseGlobal
+    !autoDisableUseGlobal ||
+    (showMultiKeyAutoDisable && !multiKeyAutoDisableUseGlobal)
   )
   const internalNotesConfigured = Boolean(
     currentTag?.trim() || currentRemark?.trim()
@@ -1494,6 +1530,33 @@ export function ChannelMutateDrawer({
     globalAutoDisableDefaults.errorRatePercent,
     globalAutoDisableDefaults.minRequests,
     globalAutoDisableDefaults.windowMinutes,
+    open,
+  ])
+
+  useEffect(() => {
+    if (!open || !form.getValues('multi_key_auto_disable_use_global')) return
+    form.setValue(
+      'multi_key_temporary_status_codes',
+      globalMultiKeyAutoDisableDefaults.temporaryStatusCodes,
+      { shouldDirty: false }
+    )
+    form.setValue(
+      'multi_key_persistent_status_codes',
+      globalMultiKeyAutoDisableDefaults.persistentStatusCodes,
+      { shouldDirty: false }
+    )
+    form.setValue(
+      'multi_key_temporary_disable_minutes',
+      globalMultiKeyAutoDisableDefaults.temporaryDisableMinutes,
+      { shouldDirty: false }
+    )
+  }, [
+    channelData?.data,
+    form,
+    globalMultiKeyAutoDisableDefaults.persistentStatusCodes,
+    globalMultiKeyAutoDisableDefaults.temporaryDisableMinutes,
+    globalMultiKeyAutoDisableDefaults.temporaryStatusCodes,
+    multiKeyAutoDisableUseGlobal,
     open,
   ])
 
@@ -4033,6 +4096,141 @@ export function ChannelMutateDrawer({
                                 )}
                               />
                             </div>
+
+                            {showMultiKeyAutoDisable && (
+                              <div className='space-y-4 rounded-lg border p-3'>
+                                <FormField
+                                  control={form.control}
+                                  name='multi_key_auto_disable_use_global'
+                                  render={({ field }) => (
+                                    <FormItem className='flex items-start justify-between gap-4'>
+                                      <div className='space-y-0.5'>
+                                        <FormLabel>
+                                          {t('Use system multi-key rules')}
+                                        </FormLabel>
+                                        <FormDescription>
+                                          {t(
+                                            'Disable this option to override per-key cooldown and persistent-disable rules for this channel.'
+                                          )}
+                                        </FormDescription>
+                                      </div>
+                                      <FormControl>
+                                        <Switch
+                                          className='mt-0.5'
+                                          checked={field.value}
+                                          disabled={currentAutoBan !== 1}
+                                          onCheckedChange={field.onChange}
+                                        />
+                                      </FormControl>
+                                    </FormItem>
+                                  )}
+                                />
+
+                                <div className='grid gap-4 sm:grid-cols-2'>
+                                  <FormField
+                                    control={form.control}
+                                    name='multi_key_temporary_status_codes'
+                                    render={({ field }) => (
+                                      <FormItem>
+                                        <FormLabel>
+                                          {t(
+                                            'Temporary key-disable status codes'
+                                          )}
+                                        </FormLabel>
+                                        <FormControl>
+                                          <Input
+                                            placeholder={
+                                              globalMultiKeyAutoDisableDefaults.temporaryStatusCodes
+                                            }
+                                            disabled={
+                                              currentAutoBan !== 1 ||
+                                              multiKeyAutoDisableUseGlobal
+                                            }
+                                            {...field}
+                                          />
+                                        </FormControl>
+                                        <FormDescription>
+                                          {t(
+                                            'Matching real upstream responses temporarily remove only the selected key from routing.'
+                                          )}
+                                        </FormDescription>
+                                        <FormMessage />
+                                      </FormItem>
+                                    )}
+                                  />
+
+                                  <FormField
+                                    control={form.control}
+                                    name='multi_key_persistent_status_codes'
+                                    render={({ field }) => (
+                                      <FormItem>
+                                        <FormLabel>
+                                          {t(
+                                            'Persistent key-disable status codes'
+                                          )}
+                                        </FormLabel>
+                                        <FormControl>
+                                          <Input
+                                            placeholder={
+                                              globalMultiKeyAutoDisableDefaults.persistentStatusCodes
+                                            }
+                                            disabled={
+                                              currentAutoBan !== 1 ||
+                                              multiKeyAutoDisableUseGlobal
+                                            }
+                                            {...field}
+                                          />
+                                        </FormControl>
+                                        <FormDescription>
+                                          {t(
+                                            'Matching real upstream responses auto-disable only the selected key until recovery succeeds.'
+                                          )}
+                                        </FormDescription>
+                                        <FormMessage />
+                                      </FormItem>
+                                    )}
+                                  />
+
+                                  <FormField
+                                    control={form.control}
+                                    name='multi_key_temporary_disable_minutes'
+                                    render={({ field }) => (
+                                      <FormItem>
+                                        <FormLabel>
+                                          {t(
+                                            'Temporary key cooldown (minutes)'
+                                          )}
+                                        </FormLabel>
+                                        <FormControl>
+                                          <Input
+                                            type='number'
+                                            min={1}
+                                            max={1440}
+                                            step={1}
+                                            disabled={
+                                              currentAutoBan !== 1 ||
+                                              multiKeyAutoDisableUseGlobal
+                                            }
+                                            value={field.value}
+                                            onChange={(event) =>
+                                              field.onChange(
+                                                Number(event.target.value)
+                                              )
+                                            }
+                                          />
+                                        </FormControl>
+                                        <FormDescription>
+                                          {t(
+                                            'A temporarily disabled key automatically returns after this duration.'
+                                          )}
+                                        </FormDescription>
+                                        <FormMessage />
+                                      </FormItem>
+                                    )}
+                                  />
+                                </div>
+                              </div>
+                            )}
                           </div>
 
                           <div className='border-border/60 rounded-lg border p-4'>

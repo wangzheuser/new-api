@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
 
+import { parseHttpStatusCodeRules } from '@/lib/http-status-code-rules'
 import {
   filterModelInputModalitiesForModels,
   modelInputModalitiesSchema,
@@ -260,6 +261,10 @@ export const channelFormSchema = z
     auto_disable_min_requests: z.number().int().min(1).max(100000),
     auto_disable_error_rate_percent: z.number().int().min(1).max(100),
     auto_disable_disable_minutes: z.number().int().min(1).max(1440),
+    multi_key_auto_disable_use_global: z.boolean(),
+    multi_key_temporary_status_codes: z.string(),
+    multi_key_persistent_status_codes: z.string(),
+    multi_key_temporary_disable_minutes: z.number().int().min(1).max(1440),
     status: z.number(),
     status_code_mapping: z
       .string()
@@ -328,6 +333,46 @@ export const channelFormSchema = z
     upstream_model_update_ignored_models: z.string().optional(),
   })
   .superRefine((data, ctx) => {
+    if (!data.multi_key_auto_disable_use_global) {
+      const temporaryRules = parseHttpStatusCodeRules(
+        data.multi_key_temporary_status_codes
+      )
+      const persistentRules = parseHttpStatusCodeRules(
+        data.multi_key_persistent_status_codes
+      )
+      if (!temporaryRules.ok) {
+        addRequiredIssue(
+          ctx,
+          'multi_key_temporary_status_codes',
+          'Invalid HTTP status code rules'
+        )
+      }
+      if (!persistentRules.ok) {
+        addRequiredIssue(
+          ctx,
+          'multi_key_persistent_status_codes',
+          'Invalid HTTP status code rules'
+        )
+      }
+      if (
+        temporaryRules.ok &&
+        persistentRules.ok &&
+        temporaryRules.ranges.some((temporaryRange) =>
+          persistentRules.ranges.some(
+            (persistentRange) =>
+              temporaryRange.start <= persistentRange.end &&
+              persistentRange.start <= temporaryRange.end
+          )
+        )
+      ) {
+        addRequiredIssue(
+          ctx,
+          'multi_key_persistent_status_codes',
+          'Temporary and persistent status code rules cannot overlap'
+        )
+      }
+    }
+
     const modelPrompts = Object.entries(data.model_system_prompts || {})
     if (modelPrompts.length > MAX_MODEL_SYSTEM_PROMPT_ENTRIES) {
       addRequiredIssue(
@@ -547,6 +592,10 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   auto_disable_min_requests: 30,
   auto_disable_error_rate_percent: 80,
   auto_disable_disable_minutes: 10,
+  multi_key_auto_disable_use_global: true,
+  multi_key_temporary_status_codes: '429',
+  multi_key_persistent_status_codes: '401',
+  multi_key_temporary_disable_minutes: 10,
   status: CHANNEL_STATUS.ENABLED,
   status_code_mapping: '',
   tag: '',
@@ -698,6 +747,10 @@ export function transformChannelToFormDefaults(
   let autoDisableMinRequests = 30
   let autoDisableErrorRatePercent = 80
   let autoDisableDisableMinutes = 10
+  let multiKeyAutoDisableUseGlobal = true
+  let multiKeyTemporaryStatusCodes = '429'
+  let multiKeyPersistentStatusCodes = '401'
+  let multiKeyTemporaryDisableMinutes = 10
 
   if (channel.settings) {
     try {
@@ -745,6 +798,23 @@ export function transformChannelToFormDefaults(
           autoDisableOverride.disable_minutes ?? 10
         )
       }
+      const multiKeyAutoDisableOverride = parsed.multi_key_auto_disable_override
+      if (
+        multiKeyAutoDisableOverride &&
+        typeof multiKeyAutoDisableOverride === 'object' &&
+        !Array.isArray(multiKeyAutoDisableOverride)
+      ) {
+        multiKeyAutoDisableUseGlobal = false
+        multiKeyTemporaryStatusCodes = String(
+          multiKeyAutoDisableOverride.temporary_status_codes ?? '429'
+        )
+        multiKeyPersistentStatusCodes = String(
+          multiKeyAutoDisableOverride.persistent_status_codes ?? '401'
+        )
+        multiKeyTemporaryDisableMinutes = Number(
+          multiKeyAutoDisableOverride.temporary_disable_minutes ?? 10
+        )
+      }
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error('Failed to parse channel settings:', error)
@@ -769,6 +839,10 @@ export function transformChannelToFormDefaults(
     auto_disable_min_requests: autoDisableMinRequests,
     auto_disable_error_rate_percent: autoDisableErrorRatePercent,
     auto_disable_disable_minutes: autoDisableDisableMinutes,
+    multi_key_auto_disable_use_global: multiKeyAutoDisableUseGlobal,
+    multi_key_temporary_status_codes: multiKeyTemporaryStatusCodes,
+    multi_key_persistent_status_codes: multiKeyPersistentStatusCodes,
+    multi_key_temporary_disable_minutes: multiKeyTemporaryDisableMinutes,
     status: channel.status,
     status_code_mapping: channel.status_code_mapping || '',
     tag: channel.tag || '',
@@ -874,6 +948,20 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
       min_requests: formData.auto_disable_min_requests,
       error_rate_percent: formData.auto_disable_error_rate_percent,
       disable_minutes: formData.auto_disable_disable_minutes,
+    }
+  }
+
+  if (formData.multi_key_auto_disable_use_global) {
+    delete settingsObj.multi_key_auto_disable_override
+  } else {
+    settingsObj.multi_key_auto_disable_override = {
+      temporary_status_codes: parseHttpStatusCodeRules(
+        formData.multi_key_temporary_status_codes
+      ).normalized,
+      persistent_status_codes: parseHttpStatusCodeRules(
+        formData.multi_key_persistent_status_codes
+      ).normalized,
+      temporary_disable_minutes: formData.multi_key_temporary_disable_minutes,
     }
   }
 

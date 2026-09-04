@@ -200,6 +200,11 @@ func (channel *Channel) GetKeys() []string {
 }
 
 func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
+	return channel.GetNextEnabledKeyExcluding(nil)
+}
+
+// GetNextEnabledKeyExcluding selects one enabled key while skipping request-scoped indexes.
+func (channel *Channel) GetNextEnabledKeyExcluding(excludedIndexes map[int]struct{}) (string, int, *types.NewAPIError) {
 	// If not in multi-key mode, return the original key string directly.
 	if !channel.ChannelInfo.IsMultiKey {
 		return channel.Key, 0, nil
@@ -231,6 +236,9 @@ func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
 	// Collect indexes of enabled keys
 	enabledIdx := make([]int, 0, len(keys))
 	for i := range keys {
+		if _, excluded := excludedIndexes[i]; excluded {
+			continue
+		}
 		if getStatus(i) == common.ChannelStatusEnabled {
 			enabledIdx = append(enabledIdx, i)
 		}
@@ -271,6 +279,9 @@ func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
 		}
 		for i := 0; i < len(keys); i++ {
 			idx := (start + i) % len(keys)
+			if _, excluded := excludedIndexes[idx]; excluded {
+				continue
+			}
 			if getStatus(idx) == common.ChannelStatusEnabled {
 				// update polling index for next call (point to the next position)
 				channel.ChannelInfo.MultiKeyPollingIndex = (idx + 1) % len(keys)
@@ -1106,6 +1117,12 @@ func (channel *Channel) ValidateSettings() error {
 	if channelOtherSettings.AutoDisableOverride != nil {
 		if err := validateChannelAutoDisableOverride(*channelOtherSettings.AutoDisableOverride); err != nil {
 			return err
+		}
+	}
+	if channelOtherSettings.MultiKeyAutoDisableOverride != nil {
+		value := channelOtherSettings.MultiKeyAutoDisableOverride
+		if _, err := operation_setting.ValidateMultiKeyAutoDisableSetting(value.TemporaryStatusCodes, value.PersistentStatusCodes, value.TemporaryDisableMinutes); err != nil {
+			return fmt.Errorf("multi_key_auto_disable_override: %w", err)
 		}
 	}
 	return nil

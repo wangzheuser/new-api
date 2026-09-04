@@ -362,6 +362,65 @@ func TestUpdateChannelConvertsSingleKeyChannel(t *testing.T) {
 	})
 }
 
+func TestUpdateMultiKeyChannelPreservesOrResetsKeyStatus(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+
+	createChannel := func() model.Channel {
+		channel := model.Channel{
+			Type:   1,
+			Key:    "saved-key-a\nsaved-key-b",
+			Name:   "multi-key channel",
+			Models: "gpt-4o-mini",
+			Group:  "default",
+			Status: common.ChannelStatusAutoDisabled,
+			ChannelInfo: model.ChannelInfo{
+				IsMultiKey:             true,
+				MultiKeySize:           2,
+				MultiKeyMode:           constant.MultiKeyModeRandom,
+				MultiKeyStatusList:     map[int]int{0: common.ChannelStatusAutoDisabled, 1: common.ChannelStatusAutoDisabled},
+				MultiKeyDisabledTime:   map[int]int64{0: 10, 1: 20},
+				MultiKeyDisabledReason: map[int]string{0: "first", 1: "second"},
+			},
+		}
+		require.NoError(t, db.Create(&channel).Error)
+		return channel
+	}
+
+	t.Run("append preserves old state and enables the new key", func(t *testing.T) {
+		channel := createChannel()
+		response := updateChannelForTest(t, fmt.Sprintf(
+			`{"id":%d,"key":"new-key","key_mode":"append"}`,
+			channel.Id,
+		))
+		require.True(t, response.Success, response.Message)
+
+		var updated model.Channel
+		require.NoError(t, db.First(&updated, channel.Id).Error)
+		assert.Equal(t, "saved-key-a\nsaved-key-b\nnew-key", updated.Key)
+		assert.Equal(t, common.ChannelStatusEnabled, updated.Status)
+		assert.Equal(t, common.ChannelStatusAutoDisabled, updated.ChannelInfo.MultiKeyStatusList[0])
+		assert.Equal(t, common.ChannelStatusAutoDisabled, updated.ChannelInfo.MultiKeyStatusList[1])
+		assert.NotContains(t, updated.ChannelInfo.MultiKeyStatusList, 2)
+	})
+
+	t.Run("replace clears old state", func(t *testing.T) {
+		channel := createChannel()
+		response := updateChannelForTest(t, fmt.Sprintf(
+			`{"id":%d,"key":"new-key-a\nnew-key-b","key_mode":"replace"}`,
+			channel.Id,
+		))
+		require.True(t, response.Success, response.Message)
+
+		var updated model.Channel
+		require.NoError(t, db.First(&updated, channel.Id).Error)
+		assert.Equal(t, "new-key-a\nnew-key-b", updated.Key)
+		assert.Equal(t, common.ChannelStatusEnabled, updated.Status)
+		assert.Empty(t, updated.ChannelInfo.MultiKeyStatusList)
+		assert.Empty(t, updated.ChannelInfo.MultiKeyDisabledTime)
+		assert.Empty(t, updated.ChannelInfo.MultiKeyDisabledReason)
+	})
+}
+
 func TestChannelStatusValidation(t *testing.T) {
 	assert.True(t, isManageableChannelStatus(common.ChannelStatusEnabled))
 	assert.True(t, isManageableChannelStatus(common.ChannelStatusManuallyDisabled))

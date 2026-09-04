@@ -755,6 +755,7 @@ func DeleteChannel(c *gin.Context) {
 		return
 	}
 	service.ClearChannelTemporaryAutoDisable(id)
+	service.ClearAllMultiKeyTemporaryDisable(id)
 	model.InitChannelCache()
 	recordManageAudit(c, "channel.delete", map[string]interface{}{
 		"id":   id,
@@ -929,6 +930,7 @@ func DeleteChannelBatch(c *gin.Context) {
 	}
 	for _, id := range channelBatch.Ids {
 		service.ClearChannelTemporaryAutoDisable(id)
+		service.ClearAllMultiKeyTemporaryDisable(id)
 	}
 	model.InitChannelCache()
 	recordManageAudit(c, "channel.delete_batch", map[string]interface{}{
@@ -1098,6 +1100,7 @@ func UpdateChannel(c *gin.Context) {
 		return
 	}
 
+	clearMultiKeyTemporaryState := false
 	// 处理多key模式下的密钥追加/覆盖逻辑
 	if channel.KeyMode != nil && channel.ChannelInfo.IsMultiKey {
 		switch *channel.KeyMode {
@@ -1175,8 +1178,14 @@ func UpdateChannel(c *gin.Context) {
 				channel.Key = strings.Join(allKeys, "\n")
 			}
 		case "replace":
-			// 覆盖模式：直接使用新密钥（默认行为，不需要特殊处理）
+			// 覆盖建立新的密钥池，避免旧索引状态误关联到新密钥。
+			channel.ChannelInfo.MultiKeyPollingIndex = 0
+			channel.ChannelInfo.MultiKeyStatusList = nil
+			channel.ChannelInfo.MultiKeyDisabledReason = nil
+			channel.ChannelInfo.MultiKeyDisabledTime = nil
+			clearMultiKeyTemporaryState = true
 		}
+		channel.RecalculateMultiKeyStatus()
 	}
 	err = channel.Update()
 	if err != nil {
@@ -1185,6 +1194,9 @@ func UpdateChannel(c *gin.Context) {
 	}
 	if !channel.GetAutoBan() {
 		service.ClearChannelTemporaryAutoDisable(channel.Id)
+		service.ClearAllMultiKeyTemporaryDisable(channel.Id)
+	} else if clearMultiKeyTemporaryState {
+		service.ClearAllMultiKeyTemporaryDisable(channel.Id)
 	}
 	model.InitChannelCache()
 	service.ResetProxyClientCache()
@@ -1561,17 +1573,22 @@ type MultiKeyStatusResponse struct {
 	PageSize   int         `json:"page_size"`
 	TotalPages int         `json:"total_pages"`
 	// Statistics
-	EnabledCount        int `json:"enabled_count"`
-	ManualDisabledCount int `json:"manual_disabled_count"`
-	AutoDisabledCount   int `json:"auto_disabled_count"`
+	EnabledCount           int `json:"enabled_count"`
+	ManualDisabledCount    int `json:"manual_disabled_count"`
+	AutoDisabledCount      int `json:"auto_disabled_count"`
+	TemporaryDisabledCount int `json:"temporary_disabled_count"`
 }
 
 type KeyStatus struct {
-	Index        int    `json:"index"`
-	Status       int    `json:"status"` // 1: enabled, 2: disabled
-	DisabledTime int64  `json:"disabled_time,omitempty"`
-	Reason       string `json:"reason,omitempty"`
-	KeyPreview   string `json:"key_preview"` // first 10 chars of key for identification
+	Index             int    `json:"index"`
+	Status            int    `json:"status"` // persisted status: 1=enabled, 2=manual disabled, 3=auto disabled
+	EffectiveStatus   string `json:"effective_status"`
+	TemporaryDisabled bool   `json:"temporary_disabled"`
+	DisabledTime      int64  `json:"disabled_time,omitempty"`
+	DisabledUntil     int64  `json:"disabled_until,omitempty"`
+	LastStatusCode    int    `json:"last_status_code,omitempty"`
+	Reason            string `json:"reason,omitempty"`
+	KeyPreview        string `json:"key_preview"` // first 10 chars of key for identification
 }
 
 // ManageMultiKeys handles multi-key management operations
@@ -1634,13 +1651,17 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 
 		// Statistics for all keys (unchanged by filtering)
-		var enabledCount, manualDisabledCount, autoDisabledCount int
+		var enabledCount, manualDisabledCount, autoDisabledCount, temporaryDisabledCount int
+		temporaryStatus := service.LoadMultiKeyTemporaryDisableInfo(channel)
 
 		// Build all key status data first
 		var allKeyStatusList []KeyStatus
 		for i, key := range keys {
 			status := 1 // default enabled
+			effectiveStatus := "enabled"
 			var disabledTime int64
+			var disabledUntil int64
+			var lastStatusCode int
 			var reason string
 
 			if channel.ChannelInfo.MultiKeyStatusList != nil {
@@ -1649,13 +1670,25 @@ func ManageMultiKeys(c *gin.Context) {
 				}
 			}
 
-			// Count for statistics (all keys)
+			if status == common.ChannelStatusEnabled {
+				if info, cooling := temporaryStatus[i]; cooling {
+					effectiveStatus = "temporary_disabled"
+					disabledUntil = info.DisabledUntil
+					lastStatusCode = info.StatusCode
+					reason = info.Reason
+					temporaryDisabledCount++
+				} else {
+					enabledCount++
+				}
+			}
+
+			// Count persisted disabled states for compatibility.
 			switch status {
-			case 1:
-				enabledCount++
-			case 2:
+			case common.ChannelStatusManuallyDisabled:
+				effectiveStatus = "manual_disabled"
 				manualDisabledCount++
-			case 3:
+			case common.ChannelStatusAutoDisabled:
+				effectiveStatus = "auto_disabled"
 				autoDisabledCount++
 			}
 
@@ -1666,6 +1699,9 @@ func ManageMultiKeys(c *gin.Context) {
 				if channel.ChannelInfo.MultiKeyDisabledReason != nil {
 					reason = channel.ChannelInfo.MultiKeyDisabledReason[i]
 				}
+				if status == common.ChannelStatusAutoDisabled {
+					_, _ = fmt.Sscanf(reason, "status_code=%d", &lastStatusCode)
+				}
 			}
 
 			// Create key preview (first 10 chars)
@@ -1675,11 +1711,15 @@ func ManageMultiKeys(c *gin.Context) {
 			}
 
 			allKeyStatusList = append(allKeyStatusList, KeyStatus{
-				Index:        i,
-				Status:       status,
-				DisabledTime: disabledTime,
-				Reason:       reason,
-				KeyPreview:   keyPreview,
+				Index:             i,
+				Status:            status,
+				EffectiveStatus:   effectiveStatus,
+				TemporaryDisabled: effectiveStatus == "temporary_disabled",
+				DisabledTime:      disabledTime,
+				DisabledUntil:     disabledUntil,
+				LastStatusCode:    lastStatusCode,
+				Reason:            reason,
+				KeyPreview:        keyPreview,
 			})
 		}
 
@@ -1722,14 +1762,15 @@ func ManageMultiKeys(c *gin.Context) {
 			"success": true,
 			"message": "",
 			"data": MultiKeyStatusResponse{
-				Keys:                pageKeyStatusList,
-				Total:               filteredTotal, // Total of filtered results
-				Page:                page,
-				PageSize:            pageSize,
-				TotalPages:          totalPages,
-				EnabledCount:        enabledCount,        // Overall statistics
-				ManualDisabledCount: manualDisabledCount, // Overall statistics
-				AutoDisabledCount:   autoDisabledCount,   // Overall statistics
+				Keys:                   pageKeyStatusList,
+				Total:                  filteredTotal, // Total of filtered results
+				Page:                   page,
+				PageSize:               pageSize,
+				TotalPages:             totalPages,
+				EnabledCount:           enabledCount,        // Overall statistics
+				ManualDisabledCount:    manualDisabledCount, // Overall statistics
+				AutoDisabledCount:      autoDisabledCount,   // Overall statistics
+				TemporaryDisabledCount: temporaryDisabledCount,
 			},
 		})
 		return
@@ -1763,6 +1804,8 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 
 		channel.ChannelInfo.MultiKeyStatusList[keyIndex] = common.ChannelStatusManuallyDisabled
+		channel.ChannelInfo.MultiKeyDisabledTime[keyIndex] = common.GetTimestamp()
+		channel.ChannelInfo.MultiKeyDisabledReason[keyIndex] = "manual operation"
 		channel.RecalculateMultiKeyStatus()
 
 		err = channel.Update()
@@ -1772,6 +1815,7 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 
 		model.InitChannelCache()
+		service.ClearMultiKeyTemporaryDisable(channel.Id, channel.GetKeys()[keyIndex])
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"message": "密钥已禁用",
@@ -1815,6 +1859,7 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 
 		model.InitChannelCache()
+		service.ClearMultiKeyTemporaryDisable(channel.Id, channel.GetKeys()[keyIndex])
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"message": "密钥已启用",
@@ -1840,6 +1885,7 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 
 		model.InitChannelCache()
+		service.ClearAllMultiKeyTemporaryDisable(channel.Id)
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"message": fmt.Sprintf("已启用 %d 个密钥", enabledCount),
@@ -1888,6 +1934,7 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 
 		model.InitChannelCache()
+		service.ClearAllMultiKeyTemporaryDisable(channel.Id)
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"message": fmt.Sprintf("已禁用 %d 个密钥", disabledCount),
@@ -1968,6 +2015,7 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 
 		model.InitChannelCache()
+		service.ClearMultiKeyTemporaryDisable(channel.Id, keys[keyIndex])
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"message": "密钥已删除",

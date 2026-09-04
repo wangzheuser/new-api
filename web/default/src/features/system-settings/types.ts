@@ -239,6 +239,9 @@ export type ModelSettings = {
   'channel_auto_disable_setting.min_requests': number
   'channel_auto_disable_setting.error_rate_percent': number
   'channel_auto_disable_setting.disable_minutes': number
+  'multi_key_auto_disable_setting.temporary_status_codes': string
+  'multi_key_auto_disable_setting.persistent_status_codes': string
+  'multi_key_auto_disable_setting.temporary_disable_minutes': number
   AutomaticRetryStatusCodes: string
   'monitor_setting.auto_test_channel_enabled': boolean
   'monitor_setting.auto_test_channel_minutes': number

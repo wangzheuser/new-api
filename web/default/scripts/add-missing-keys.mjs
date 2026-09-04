@@ -2222,6 +2222,145 @@ for (const [key, zh, zhTW, fr, ja, ru, vi] of channelAutoDisableRows) {
   Object.assign(newKeys.vi, { [key]: vi })
 }
 
+const multiKeyAutoDisableRows = [
+  [
+    'Redis is not enabled. Statistical and per-key temporary auto-disable will not run.',
+    'Redis 未启用，统计型和按密钥临时自动禁用不会运行。',
+    'Redis 未啟用，統計型和按金鑰暫時自動停用不會執行。',
+    'Redis n’est pas activé. Les désactivations temporaires statistiques et par clé ne fonctionneront pas.',
+    'Redis が有効ではないため、統計ベースおよびキー別の一時自動無効化は動作しません。',
+    'Redis не включён. Статистическое и поключевое временное автоотключение работать не будет.',
+    'Redis chưa được bật. Tính năng tạm tự động tắt theo thống kê và theo khóa sẽ không hoạt động.',
+  ],
+  [
+    'A temporarily disabled key automatically returns after this duration.',
+    '临时禁用的密钥会在此时长后自动恢复。',
+    '暫時停用的金鑰會在此時長後自動恢復。',
+    'Une clé temporairement désactivée revient automatiquement après cette durée.',
+    '一時的に無効化されたキーは、この時間後に自動復帰します。',
+    'Временно отключённый ключ автоматически вернётся после этого периода.',
+    'Khóa bị tạm tắt sẽ tự động hoạt động lại sau thời gian này.',
+  ],
+  [
+    'Disable this option to override per-key cooldown and persistent-disable rules for this channel.',
+    '关闭此选项可为该渠道单独设置按密钥冷却和长期禁用规则。',
+    '關閉此選項可為該渠道單獨設定按金鑰冷卻和長期停用規則。',
+    'Désactivez cette option pour personnaliser les règles de délai et de désactivation persistante des clés de ce canal.',
+    'このオプションを無効にすると、このチャネルのキー別クールダウンと永続無効化ルールを上書きできます。',
+    'Отключите этот параметр, чтобы переопределить правила паузы и постоянного отключения ключей канала.',
+    'Tắt tùy chọn này để ghi đè quy tắc chờ và tắt lâu dài cho từng khóa của kênh.',
+  ],
+  [
+    'HTTP Status',
+    'HTTP 状态',
+    'HTTP 狀態',
+    'État HTTP',
+    'HTTP ステータス',
+    'Статус HTTP',
+    'Trạng thái HTTP',
+  ],
+  [
+    'Matching real upstream responses auto-disable only the selected key until recovery succeeds.',
+    '匹配真实上游响应时，仅自动禁用当前密钥，直至恢复检测成功。',
+    '符合真實上游回應時，僅自動停用目前金鑰，直到恢復檢測成功。',
+    'Les réponses réelles correspondantes désactivent uniquement la clé sélectionnée jusqu’à sa récupération.',
+    '実際の上流応答が一致すると、復旧確認まで選択中のキーだけを自動無効化します。',
+    'При совпадении реального ответа отключается только выбранный ключ до успешного восстановления.',
+    'Khi phản hồi thực từ thượng nguồn khớp, chỉ khóa đã chọn bị tắt đến khi khôi phục thành công.',
+  ],
+  [
+    'Matching real upstream responses temporarily remove only the selected key from routing.',
+    '匹配真实上游响应时，仅临时将当前密钥移出路由。',
+    '符合真實上游回應時，僅暫時將目前金鑰移出路由。',
+    'Les réponses réelles correspondantes retirent temporairement uniquement la clé sélectionnée du routage.',
+    '実際の上流応答が一致すると、選択中のキーだけを一時的にルーティングから外します。',
+    'При совпадении реального ответа только выбранный ключ временно исключается из маршрутизации.',
+    'Khi phản hồi thực từ thượng nguồn khớp, chỉ khóa đã chọn tạm thời bị loại khỏi định tuyến.',
+  ],
+  [
+    'Multi-key health policy',
+    '多密钥健康策略',
+    '多金鑰健康策略',
+    'Politique de santé multi-clés',
+    'マルチキー健全性ポリシー',
+    'Политика состояния нескольких ключей',
+    'Chính sách trạng thái nhiều khóa',
+  ],
+  [
+    'Persistent key-disable status codes',
+    '长期禁用密钥状态码',
+    '長期停用金鑰狀態碼',
+    'Codes d’état de désactivation persistante des clés',
+    'キーを永続無効化するステータスコード',
+    'Коды постоянного отключения ключей',
+    'Mã trạng thái tắt khóa lâu dài',
+  ],
+  [
+    'Recovers in {{count}} minutes',
+    '{{count}} 分钟后恢复',
+    '{{count}} 分鐘後恢復',
+    'Récupération dans {{count}} minutes',
+    '{{count}} 分後に復帰',
+    'Восстановление через {{count}} мин.',
+    'Khôi phục sau {{count}} phút',
+  ],
+  [
+    'Temporarily cool down rate-limited keys and persistently disable keys with qualifying credential failures.',
+    '对触发限流的密钥执行临时冷却，并长期禁用发生指定凭证错误的密钥。',
+    '對觸發限流的金鑰執行暫時冷卻，並長期停用發生指定憑證錯誤的金鑰。',
+    'Met temporairement en pause les clés limitées et désactive durablement celles ayant des erreurs d’identification ciblées.',
+    'レート制限されたキーを一時停止し、対象の認証エラーが発生したキーを永続的に無効化します。',
+    'Временно приостанавливает ограниченные ключи и надолго отключает ключи с указанными ошибками учётных данных.',
+    'Tạm chờ khóa bị giới hạn và tắt lâu dài khóa gặp lỗi thông tin xác thực phù hợp.',
+  ],
+  [
+    'Temporary Disabled',
+    '临时禁用',
+    '暫時停用',
+    'Temporairement désactivé',
+    '一時無効',
+    'Временно отключён',
+    'Đã tạm tắt',
+  ],
+  [
+    'Temporary key cooldown (minutes)',
+    '密钥临时冷却时长（分钟）',
+    '金鑰暫時冷卻時長（分鐘）',
+    'Délai temporaire des clés (minutes)',
+    'キーの一時クールダウン（分）',
+    'Пауза ключа (минуты)',
+    'Thời gian chờ tạm thời của khóa (phút)',
+  ],
+  [
+    'Temporary key-disable status codes',
+    '临时禁用密钥状态码',
+    '暫時停用金鑰狀態碼',
+    'Codes d’état de désactivation temporaire des clés',
+    'キーを一時無効化するステータスコード',
+    'Коды временного отключения ключей',
+    'Mã trạng thái tạm tắt khóa',
+  ],
+  [
+    'Use system multi-key rules',
+    '使用系统多密钥规则',
+    '使用系統多金鑰規則',
+    'Utiliser les règles multi-clés du système',
+    'システムのマルチキールールを使用',
+    'Использовать системные правила для нескольких ключей',
+    'Dùng quy tắc nhiều khóa của hệ thống',
+  ],
+]
+
+for (const [key, zh, zhTW, fr, ja, ru, vi] of multiKeyAutoDisableRows) {
+  Object.assign(newKeys.en, { [key]: key })
+  Object.assign(newKeys.zh, { [key]: zh })
+  Object.assign(newKeys['zh-TW'], { [key]: zhTW })
+  Object.assign(newKeys.fr, { [key]: fr })
+  Object.assign(newKeys.ja, { [key]: ja })
+  Object.assign(newKeys.ru, { [key]: ru })
+  Object.assign(newKeys.vi, { [key]: vi })
+}
+
 async function main() {
   let totalAdded = 0
 
