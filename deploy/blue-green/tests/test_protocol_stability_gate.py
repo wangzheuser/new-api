@@ -230,11 +230,12 @@ class ProtocolStabilityGateTest(unittest.TestCase):
         result, _ = self.run_gate()
         self.assertEqual(result.returncode, 1, result.stdout)
 
-    def test_small_samples_fail(self):
-        """A single usable response is not enough for a production cohort."""
+    def test_sparse_cohort_is_reported_separately(self):
+        """A sparse cohort is not claimed covered while populated cohorts remain comparable."""
         self.rows.pop()
-        result, _ = self.run_gate()
-        self.assertEqual(result.returncode, 1, result.stdout)
+        result, files = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("insufficient_samples", files["comparison.tsv"])
 
     def test_settlement_deadline_excludes_late_success(self):
         """A final record after the settle allowance cannot repair this window."""
@@ -474,7 +475,7 @@ class ProtocolStabilityGateTest(unittest.TestCase):
         row["other"].pop("upstream_model_name")
         result, files = self.run_gate()
         self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn("missing", files["comparison.tsv"])
+        self.assertIn("legacy_client_model", files["comparison.tsv"])
 
     def test_native_consumption_uses_existing_unmapped_model_contract(self):
         """Successful unmapped logs already identify the actual model by model_name."""
@@ -493,8 +494,8 @@ class ProtocolStabilityGateTest(unittest.TestCase):
             f"[INFO] fixture | {final['request_id']} | relay canceled by client\n"
         )
         result, files = self.run_gate(app_logs=logs)
-        # Only one final sample remains in this cohort, so sample coverage still blocks it.
-        self.assertEqual(result.returncode, 1, result.stdout)
+        # Explicit cancellation leaves a reported coverage gap, not an invented failure.
+        self.assertEqual(result.returncode, 0, result.stdout)
         coverage = list(
             csv.DictReader(
                 io.StringIO(files["final-request-coverage.tsv"]), delimiter="\t"

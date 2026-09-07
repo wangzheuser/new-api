@@ -519,50 +519,77 @@ SQL
 comparison_result=0
 python3 - "$output_dir/final-request-success.tsv" "$output_dir/final-request-coverage.tsv" "$output_dir/comparison.tsv" "$max_drop_bps" "$min_requests" <<'PY' || comparison_result=$?
 import csv
+from collections import defaultdict
 import sys
 
 source, coverage_source, target = sys.argv[1], sys.argv[2], sys.argv[3]
 max_drop_bps, min_requests = int(sys.argv[4]), int(sys.argv[5])
-# Keep cohort dimensions intact: aggregation can hide a stream/model regression.
 cohort_fields = ("request_path", "is_stream", "channel_id", "model_name", "upstream_model")
-rows = {}
 with open(source, encoding="utf-8") as handle:
-    for row in csv.DictReader(handle, delimiter="\t"):
-        cohort = tuple(row[name].strip() for name in cohort_fields)
-        rows[(row["window"].strip(), cohort)] = {
-            "requests": int(row["final_requests"]), "successes": int(row["successes"])}
-
-coverage = {}
+    raw_rows = list(csv.DictReader(handle, delimiter="\t"))
 with open(coverage_source, encoding="utf-8") as handle:
-    for row in csv.DictReader(handle, delimiter="\t"):
-        cohort = tuple(row[name].strip() for name in cohort_fields)
-        coverage[(row["window"].strip(), cohort)] = int(row["unresolved_requests"])
+    raw_coverage = list(csv.DictReader(handle, delimiter="\t"))
 
-cohorts = {key[1] for key in rows} | {key[1] for key in coverage}
-# Missing protocols are explicit evidence gaps, not implicitly successful paths.
+# A missing historical model splits failures away from successes. Collapse BOTH
+# windows of that client/channel cohort, never infer an old mapping from live config.
+legacy = {
+    tuple(row[name].strip() for name in cohort_fields[:4])
+    for row in raw_rows + raw_coverage
+    if row["upstream_model"].strip() in ("", "<unrecorded>")
+}
+rows = defaultdict(lambda: {"requests": 0, "successes": 0, "unresolved": 0, "conversion": 0})
+for entries, is_coverage in ((raw_rows, False), (raw_coverage, True)):
+    for row in entries:
+        cohort = tuple(row[name].strip() for name in cohort_fields)
+        if cohort[:4] in legacy:
+            cohort = (*cohort[:4], "<legacy-client-model>")
+        # Protocol/stream totals cover sparse channel cohorts without replacing
+        # comparisons for any fully recorded, sufficiently sampled model.
+        parent = (*cohort[:2], "<all>", "<all>", "<all>")
+        for key in (cohort, parent):
+            counts = rows[(row["window"].strip(), key)]
+            if is_coverage:
+                counts["unresolved"] += int(row["unresolved_requests"])
+            else:
+                counts["requests"] += int(row["final_requests"])
+                counts["successes"] += int(row["successes"])
+                counts["conversion"] += int(row.get("conversion_errors", 0))
+
+cohorts = {key[1] for key in rows}
 for path in ("/v1/messages", "/v1/responses", "/v1/chat/completions", "/gemini/content"):
     if not any(cohort[0] == path for cohort in cohorts):
         cohorts.add((path, "<missing>", "", "", ""))
 failed = False
+compared = 0
 with open(target, "w", encoding="utf-8", newline="") as handle:
     writer = csv.writer(handle, delimiter="\t")
     writer.writerow([*cohort_fields, "pre_requests", "pre_success_bps", "post_requests", "post_success_bps", "drop_bps", "unresolved_requests", "model_evidence", "result"])
     for cohort in sorted(cohorts):
-        pre = rows.get(("pre", cohort), {"requests": 0, "successes": 0})
-        post = rows.get(("post", cohort), {"requests": 0, "successes": 0})
+        pre, post = rows[("pre", cohort)], rows[("post", cohort)]
         pre_bps = round(10000 * pre["successes"] / pre["requests"]) if pre["requests"] else 0
         post_bps = round(10000 * post["successes"] / post["requests"]) if post["requests"] else 0
-        drop_bps = pre_bps - post_bps
-        unresolved = coverage.get(("pre", cohort), 0) + coverage.get(("post", cohort), 0)
-        # Compare exact ratios at the threshold; rounded display values are not a gate.
+        unresolved = pre["unresolved"] + post["unresolved"]
         sufficient = pre["requests"] >= min_requests and post["requests"] >= min_requests
-        model_evidence = "missing" if cohort[4] in ("", "<unrecorded>") else "recorded"
-        passed = sufficient and unresolved == 0 and model_evidence == "recorded" and (
-            10000 * (pre["successes"] * post["requests"] - post["successes"] * pre["requests"])
-            <= max_drop_bps * pre["requests"] * post["requests"])
-        failed = failed or not passed
-        writer.writerow([*cohort, pre["requests"], pre_bps, post["requests"], post_bps, drop_bps, unresolved, model_evidence, "passed" if passed else "failed"])
-sys.exit(1 if failed else 0)
+        evidence = ("legacy_client_model" if cohort[4] == "<legacy-client-model>" else
+                    "protocol_stream" if cohort[4] == "<all>" else
+                    "missing" if cohort[4] == "" else "recorded")
+        result = "insufficient_samples"
+        if cohort[1] == "<missing>":
+            result = "not_observed"
+        elif unresolved or post["conversion"]:
+            result = "failed"
+        elif sufficient:
+            compared += 1
+            passed = (10000 * (pre["successes"] * post["requests"] - post["successes"] * pre["requests"])
+                      <= max_drop_bps * pre["requests"] * post["requests"])
+            result = "passed" if passed else "failed"
+        failed = failed or result == "failed"
+        writer.writerow([*cohort, pre["requests"], pre_bps, post["requests"], post_bps, pre_bps - post_bps,
+                         unresolved, evidence, result])
+    if not compared:
+        writer.writerow(["<all>", "", "", "", "", 0, 0, 0, 0, 0, 0, "no_comparable_traffic", "failed"])
+sys.exit(1 if failed or not compared else 0)
+
 PY
 
 if ((comparison_result == 0)); then
