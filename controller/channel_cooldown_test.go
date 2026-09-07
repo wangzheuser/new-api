@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/alicebob/miniredis/v2"
@@ -62,5 +63,16 @@ func TestMultiKeyCooldownManagement(t *testing.T) {
 		ManageMultiKeys(c)
 		assert.Equal(t, role != common.RoleRootUser, server.Exists(prefix+service.MultiKeyFingerprint("MODEL_A")), w.Body.String())
 		assert.True(t, server.Exists(prefix+service.MultiKeyFingerprint("MODEL_B")))
+	}
+}
+
+// TestMultiKeyTaskRetryCommitBoundary prevents replay after an uncertain upstream task submission.
+func TestMultiKeyTaskRetryCommitBoundary(t *testing.T) {
+	for _, status := range []int{429, 500} {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+		assert.False(t, shouldRetryTaskRelay(c, 1, &dto.TaskError{StatusCode: status, SkipRetry: true}, 2))
+		c.Writer.WriteHeaderNow()
+		assert.False(t, shouldRetryTaskRelay(c, 1, &dto.TaskError{StatusCode: status}, 2))
 	}
 }

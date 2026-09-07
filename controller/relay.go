@@ -1050,7 +1050,7 @@ func RelayTask(c *gin.Context) {
 			if keyHandled {
 				retryParam.ExcludeChannelKey(channel.Id, usingKey)
 				if common.RetryTimes-retryParam.GetRetry() > 0 && !c.Writer.Written() && c.Request.Context().Err() == nil &&
-					!types.IsSkipRetryError(relayError) && !service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
+					!taskErr.SkipRetry && !types.IsSkipRetryError(relayError) && !service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
 					willRetry = true
 					retryParam.PreferredChannelID = channel.Id
 				}
@@ -1125,7 +1125,7 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError,
 	if (c.Writer != nil && c.Writer.Written()) || (c.Request != nil && c.Request.Context().Err() != nil) {
 		return false
 	}
-	if taskErr == nil {
+	if taskErr == nil || taskErr.SkipRetry {
 		return false
 	}
 	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {

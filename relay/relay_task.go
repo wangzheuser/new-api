@@ -228,7 +228,10 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	// 9. 发送请求
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
-		return nil, service.TaskErrorWrapper(err, "do_request_failed", http.StatusInternalServerError)
+		// 提交结果不确定时不重放，避免上游已经创建任务而重复扣费。
+		taskErr := service.TaskErrorWrapper(err, "do_request_failed", http.StatusInternalServerError)
+		taskErr.SkipRetry = true
+		return nil, taskErr
 	}
 	if resp != nil && resp.StatusCode != http.StatusOK {
 		upstreamError := service.RelayErrorHandler(c.Request.Context(), resp, false)
@@ -246,6 +249,8 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	// 11. 解析响应
 	upstreamTaskID, taskData, taskErr := adaptor.DoResponse(c, resp, info)
 	if taskErr != nil {
+		// 200 响应可能已包含成功创建的任务，解析失败不重新提交。
+		taskErr.SkipRetry = true
 		return nil, taskErr
 	}
 
