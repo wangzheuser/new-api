@@ -706,12 +706,29 @@ func relayRetryGroup(info *relaycommon.RelayInfo) string {
 	return info.TokenGroup
 }
 
+// shouldRetry preserves retry limits while allowing header-only Claude HTTP failures to recover.
 func shouldRetry(c *gin.Context, relayInfo *relaycommon.RelayInfo, openaiErr *types.NewAPIError, retryTimes int) bool {
 	if openaiErr == nil {
 		return false
 	}
 	if retryBlockedByClientCommit(c, relayInfo) {
-		return false
+		// Legacy Claude requests flush SSE headers before receiving the upstream HTTP status.
+		// Only a real HTTP failure before any stream event may bypass that header commit.
+		upstreamStatus, real := openaiErr.GetUpstreamStatusCode()
+		if !real || upstreamStatus < http.StatusBadRequest || upstreamStatus > 599 ||
+			relayInfo == nil || !relayInfo.IsStream || relayInfo.ChannelMeta == nil ||
+			relayInfo.ChannelType != constant.ChannelTypeAnthropic ||
+			relayInfo.ChannelRoutePlan == nil || relayInfo.ChannelRoutePlan.RouteMode != types.ChannelRouteModeLegacy ||
+			(relayInfo.RelayFormat != types.RelayFormatClaude && relayInfo.RelayFormat != types.RelayFormatOpenAI) ||
+			relayInfo.StreamStatus == nil || relayInfo.ReceivedResponseCount != 0 || relayInfo.SendResponseCount != 0 {
+			return false
+		}
+		status := relayInfo.StreamStatus
+		endReason, _ := status.End()
+		if c.Request.Context().Err() != nil || endReason != relaycommon.StreamEndReasonNone ||
+			status.ClientPayloadIsCommitted() || status.ErrorFrameIsWritten() {
+			return false
+		}
 	}
 	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
 		return false
