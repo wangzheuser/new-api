@@ -17,6 +17,7 @@
 ```text
 deploy/blue-green/build-local.sh         本地构建和不可变制品
 deploy/blue-green/release-remote.sh       服务器发布状态机
+deploy/blue-green/protocol-stability-gate.sh 最终业务结果门禁
 deploy/blue-green/docker-compose.slot.yml 应用槽位模板
 Dockerfile                               runtime-local 镜像目标
 ```
@@ -145,7 +146,7 @@ deploy/blue-green/build-local.sh prepare \
 
 - `release.env`；
 - 镜像 `.tar.zst`；
-- `release-remote.sh`；
+- `release-remote.sh` 与同提交的 `protocol-stability-gate.sh`（必须同目录上传）；
 - `docker-compose.slot.yml`；
 - 两套 target-clean-dist 归档。
 
@@ -234,6 +235,26 @@ OOM、Nginx 内部版本、有限公网版本和配置哈希；到达 600 秒后
 “检查次数 × 间隔”代替真实持续时间。观察状态和实际耗时写入固定结果文件。任何检查失败
 都会把观察结果标记为失败并保留旧槽位运行。实际 access log 的样本数和 5xx 应记录在
 发布结果中；共享日志没有 `$host` 时，非零 5xx 只能视为无法归因，不能推断为本应用错误。
+
+观察保留原全量 HTTP 5xx 硬门禁，另调用现有 `protocol-stability-gate.sh`，不得用
+上游错误分类豁免 5xx。业务门禁以两个槽位的访问日志 request_id 限定共享日志库记录，
+比较等长的切流前/后窗口，并额外等待 300 秒结算；等待不计入 600 秒健康观察时长。
+本次主动探测的 request_id 必须逐条写入 `state/synthetic-request-ids.txt`，不用于稀释自然业务。
+
+业务比较保留 Chat、Responses、Messages、Gemini 协议、流式标志、首个渠道及历史模型维度；
+同一请求只归属一个窗口和首个触达渠道，其最终结果可来自重试后的其他渠道。
+仅非中间最终记录参与结果统计；部分流失败消费不是成功，旧版正常 EOF 不强求终止事件。
+取消、429、转换错误、流式错误和原始错误是否留存分别记录；仅有原始错误文本不等于
+已证实上游归因。应用日志中的显式取消不充当消费成功，无取消证据的 HTTP 200 缺少最终
+记录则阻断。任何协议缺失、已观察分组样本少于 10、未结算记录或历史模型证据缺失均不放行。
+未映射的正常消费复用既有 model_name 契约；不根据当前渠道配置推算历史错误的上游模型。
+没有自然样本的能力不得写成生产已覆盖，需延长观察或保持未通过。
+
+修订门禁的本地回归使用专用 PostgreSQL 容器（禁止指向业务数据库）：
+
+```bash
+GATE_TEST_POSTGRES=<隔离测试容器> python3 -m unittest discover -s deploy/blue-green/tests -v
+```
 
 只有当前 release、当前生产容器和当前版本存在成功结果，且请求观察时间与实际耗时均不少
 于 600 秒，`finalize` 才允许继续。取得停止旧槽位确认后：

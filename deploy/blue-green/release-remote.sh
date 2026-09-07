@@ -192,6 +192,7 @@ action_self_check() {
     require_command "$command"
   done
   bash -n "$0"
+  bash -n "$SCRIPT_DIR/protocol-stability-gate.sh"
   load_config
   render_compose blue >/dev/null
   render_compose green >/dev/null
@@ -309,6 +310,8 @@ EOF
 }
 
 action_gate() {
+  # Missing observation code must fail before production cutover.
+  bash -n "$SCRIPT_DIR/protocol-stability-gate.sh"
   load_config
   # shellcheck disable=SC1090
   source "$STATE_DIR/stage.env"
@@ -427,13 +430,18 @@ action_observe() {
   source "$STATE_DIR/role-state.env"
   local baseline_hash start end start_tick deadline now remaining sleep_seconds
   local observation_log baseline_log baseline_start
-  local checks=0 sample_count errors_5xx elapsed_seconds
+  local checks=0 sample_count=0 errors_5xx=0 elapsed_seconds=""
   local baseline_samples baseline_errors_5xx baseline_rate_bps current_rate_bps allowed_rate_bps allowed_errors_5xx
+  # Initialize timing before installing the trap, including failures before the first check.
+  start="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  start_tick="$SECONDS"
   observe_on_error() {
     local rc=$?
     trap - ERR
-    printf 'observation=failed release_id=%s production=%s line=%s command=%s rc=%s\n' \
-      "$RELEASE_ID" "$NEW" "$LINENO" "$BASH_COMMAND" "$rc" |
+    printf 'observation=failed release_id=%s production=%s version=%s requested_seconds=%s elapsed_seconds=%s interval=%s checks=%s start=%s end=%s samples=%s errors_5xx=%s line=%s command=%s rc=%s\n' \
+      "$RELEASE_ID" "$NEW" "$VERSION" "$seconds" "${elapsed_seconds:-$((SECONDS - start_tick))}" \
+      "$interval" "$checks" "$start" "${end:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" \
+      "$sample_count" "$errors_5xx" "$LINENO" "$BASH_COMMAND" "$rc" |
       tee "$STATE_DIR/observation.result" >&2
     exit "$rc"
   }
@@ -467,7 +475,7 @@ action_observe() {
   elapsed_seconds=$(( SECONDS - start_tick ))
   (( elapsed_seconds >= seconds ))
   observation_log="$STATE_DIR/observation-app.log"
-  docker logs --since "$start" "$NEW" > "$observation_log" 2>&1
+  docker logs --since "$start" --until "$(( $(date -d "$start" +%s) + seconds ))" "$NEW" > "$observation_log" 2>&1
   chmod 600 "$observation_log"
   baseline_log="$STATE_DIR/observation-baseline-app.log"
   baseline_start=$(( CUTOVER_EPOCH - seconds ))
@@ -493,7 +501,26 @@ action_observe() {
     "$baseline_samples" "$baseline_errors_5xx" "$baseline_rate_bps" "$sample_count" "$errors_5xx" "$current_rate_bps" "$allowed_rate_bps" "$allowed_errors_5xx" \
     > "$STATE_DIR/observation.metrics"
   chmod 600 "$STATE_DIR/observation.metrics"
-  (( errors_5xx <= allowed_errors_5xx ))
+  # Shared-database business evidence is an additional gate, not proof of slot attribution.
+  # Keep original HTTP failures intact: protocol counters must not waive upstream 5xx.
+  local protocol_result=0 settle_seconds=300 ready_epoch wait_seconds
+  ready_epoch=$(( $(date -d "$start" +%s) + seconds + settle_seconds ))
+  wait_seconds=$(( ready_epoch - $(date +%s) ))
+  if (( wait_seconds > 0 )); then
+    sleep "$wait_seconds"
+  fi
+  local protocol_args=()
+  if [[ -r "$STATE_DIR/synthetic-request-ids.txt" ]]; then
+    protocol_args+=(--exclude-file "$STATE_DIR/synthetic-request-ids.txt")
+  fi
+  SERVER_ENV="$SERVER_ENV" bash "$SCRIPT_DIR/protocol-stability-gate.sh" \
+    --cutover-epoch "$CUTOVER_EPOCH" --seconds "$seconds" \
+    --drain-seconds "$(( $(date -d "$start" +%s) - CUTOVER_EPOCH ))" \
+    --baseline-log "$baseline_log" --observation-log "$observation_log" \
+    --settle-seconds "$settle_seconds" --output-dir "$STATE_DIR/protocol-stability-$(date +%s)" \
+    "${protocol_args[@]}" || protocol_result=$?
+  printf 'protocol_stability_rc=%s\n' "$protocol_result" >> "$STATE_DIR/observation.metrics"
+  (( errors_5xx <= allowed_errors_5xx && protocol_result == 0 ))
   trap - ERR
   printf 'observation=passed release_id=%s production=%s version=%s requested_seconds=%s elapsed_seconds=%s interval=%s checks=%s start=%s end=%s baseline_samples=%s baseline_errors_5xx=%s baseline_rate_bps=%s samples=%s errors_5xx=%s current_rate_bps=%s allowed_rate_bps=%s allowed_errors_5xx=%s\n' \
     "$RELEASE_ID" "$NEW" "$VERSION" "$seconds" "$elapsed_seconds" "$interval" "$checks" "$start" "$end" \
