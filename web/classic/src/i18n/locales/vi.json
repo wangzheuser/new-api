@@ -4332,6 +4332,11 @@
     "无条件最终错误规则必须位于该阶段最后": "Quy tắc lỗi cuối cùng không điều kiện phải nằm cuối giai đoạn này",
     "第 {{line}} 条操作的状态码无效": "Quy tắc {{line}} có mã trạng thái không hợp lệ",
     "响应阶段始终停止内部重试": "Giai đoạn phản hồi luôn dừng thử lại nội bộ",
-    "语义条件仅可用于响应阶段": "Điều kiện ngữ nghĩa chỉ khả dụng trong giai đoạn phản hồi"
+    "语义条件仅可用于响应阶段": "Điều kiện ngữ nghĩa chỉ khả dụng trong giai đoạn phản hồi",
+    "Pending recovery probe": "Đang chờ kiểm tra khôi phục",
+    "Some models restricted": "Một số mô hình bị giới hạn",
+    "Whole key cooldown": "Toàn bộ khóa đang tạm nghỉ",
+    "Clear model cooldown": "Bỏ thời gian chờ của mô hình",
+    "Allow this model to use this key again?": "Cho phép mô hình này sử dụng lại khóa này?"
   }
 }

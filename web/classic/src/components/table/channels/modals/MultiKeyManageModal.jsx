@@ -53,6 +53,7 @@ const { Text } = Typography;
 const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
+  const [canManageCooldowns, setCanManageCooldowns] = useState(false);
   const [keyStatusList, setKeyStatusList] = useState([]);
   const [operationLoading, setOperationLoading] = useState({});
 
@@ -97,6 +98,7 @@ const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
       if (res.data.success) {
         const data = res.data.data;
         setKeyStatusList(data.keys || []);
+        setCanManageCooldowns(data.can_manage_cooldowns === true);
         setTotal(data.total || 0);
         setCurrentPage(data.page || 1);
         setPageSize(data.page_size || 10);
@@ -301,6 +303,15 @@ const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
     }
   }, [visible, channel?.id]);
 
+  // Refresh expired cooldowns into the pending-probe state while the modal is open.
+  useEffect(() => {
+    if (!visible || !channel?.id) return;
+    const timer = window.setInterval(() => {
+      void loadKeyStatus();
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [visible, channel?.id, currentPage, pageSize, statusFilter]);
+
   // Reset pagination when modal closes
   useEffect(() => {
     if (!visible) {
@@ -355,6 +366,26 @@ const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
     }
   };
 
+  // Model recovery changes only the selected key/model pair.
+  const clearModelCooldown = async (keyIndex, model) => {
+    try {
+      const res = await API.post('/api/channel/multi_key/manage', {
+        channel_id: channel.id,
+        key_index: keyIndex,
+        model,
+        action: 'clear_model_cooldown',
+      });
+      if (!res.data.success) {
+        showError(res.data.message);
+        return;
+      }
+      await loadKeyStatus();
+      onRefresh?.();
+    } catch {
+      showError(t('操作失败'));
+    }
+  };
+
   // Table columns definition
   const columns = [
     {
@@ -374,12 +405,60 @@ const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
     {
       title: t('状态'),
       dataIndex: 'status',
-      render: (status) => renderStatusTag(status),
+      render: (status, record) => {
+        if (status !== 1) return renderStatusTag(status);
+        if (
+          record.cooldowns?.some(
+            (item) => item.scope === 'key' && item.state === 'pending_probe',
+          )
+        )
+          return <Tag color='orange'>{t('Pending recovery probe')}</Tag>;
+        if (record.temporary_disabled)
+          return <Tag color='orange'>{t('Whole key cooldown')}</Tag>;
+        if (record.cooldowns?.some((item) => item.scope === 'model'))
+          return <Tag color='orange'>{t('Some models restricted')}</Tag>;
+        return renderStatusTag(status);
+      },
     },
     {
       title: t('禁用原因'),
       dataIndex: 'reason',
       render: (reason, record) => {
+        if (record.cooldowns?.length) {
+          return (
+            <Space vertical align='start'>
+              {record.cooldowns.map((item) => (
+                <div key={item.scope + ':' + (item.model || '')}>
+                  <Text>
+                    {item.scope === 'model'
+                      ? item.model
+                      : t('Whole key cooldown')}
+                  </Text>
+                  <div>
+                    {item.state === 'pending_probe'
+                      ? t('Pending recovery probe')
+                      : timestamp2string(item.disabled_until)}
+                  </div>
+                  <div>{item.reason}</div>
+                  {item.scope === 'model' &&
+                    item.model &&
+                    canManageCooldowns && (
+                      <Popconfirm
+                        title={t('Allow this model to use this key again?')}
+                        onConfirm={() =>
+                          clearModelCooldown(record.index, item.model)
+                        }
+                      >
+                        <Button size='small'>
+                          {t('Clear model cooldown')}
+                        </Button>
+                      </Popconfirm>
+                    )}
+                </div>
+              ))}
+            </Space>
+          );
+        }
         if (record.status === 1 || !reason) {
           return <Text type='quaternary'>-</Text>;
         }

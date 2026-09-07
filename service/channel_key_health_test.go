@@ -134,7 +134,7 @@ func TestTemporaryMultiKeyDisableSkipsKeyAndExpires(t *testing.T) {
 	_, handled = HandleMultiKeyFailure(channel, 0, "KEY_A", upstreamStatusError(http.StatusTooManyRequests, "quota exceeded"))
 	assert.True(t, handled)
 
-	server.FastForward(10 * time.Minute)
+	server.FastForward(25 * time.Hour)
 	assert.Empty(t, LoadMultiKeyTemporaryDisableInfo(channel))
 }
 
@@ -165,7 +165,7 @@ func TestAllCoolingKeysBlockPoolUntilEarliestExpiry(t *testing.T) {
 	assert.True(t, handled)
 	assert.True(t, IsMultiKeyPoolTemporarilyDisabled(channel.Id))
 
-	server.FastForward(10*time.Minute + 2*time.Second)
+	server.FastForward(server.TTL(multiKeyPoolBlockedKey(channel.Id)) + time.Second)
 	assert.False(t, IsMultiKeyPoolTemporarilyDisabled(channel.Id))
 }
 

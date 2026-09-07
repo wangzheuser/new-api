@@ -85,6 +85,7 @@ import type {
   MultiKeyTestResult,
 } from '../../types'
 import { useChannels } from '../channels-provider'
+import { MultiKeyCooldowns } from './multi-key-cooldowns'
 import { StatisticsCard } from './multi-key-statistics-card'
 import { MultiKeyTableRowActions } from './multi-key-table-row-actions'
 import { MultiKeyTestDetailsDialog } from './multi-key-test-details-dialog'
@@ -147,12 +148,14 @@ export function MultiKeyManageDialog({
   }, [open, currentRow?.id])
 
   useEffect(() => {
-    if (!open || temporaryDisabledCount === 0) return
+    if (!open) return
     const timer = window.setInterval(() => {
       setNowSeconds(Date.now() / 1000)
+      void loadKeyStatus()
     }, 30_000)
     return () => window.clearInterval(timer)
-  }, [open, temporaryDisabledCount])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, currentRow?.id, currentPage, pageSize, statusFilter])
 
   const loadKeyStatus = async (
     page: number = currentPage,
@@ -615,8 +618,24 @@ export function MultiKeyManageDialog({
                     id: 'reason',
                     header: t('Disabled Reason'),
                     className: 'min-w-[200px]',
-                    cellClassName: 'max-w-xs truncate text-sm',
-                    cell: (key) => key.reason || '-',
+                    cellClassName: 'max-w-xs text-sm',
+                    cell: (key) =>
+                      key.cooldowns?.length ? (
+                        <MultiKeyCooldowns
+                          channelId={currentRow.id}
+                          keyIndex={key.index}
+                          cooldowns={key.cooldowns}
+                          canEdit={canEditSensitive}
+                          onChange={() => {
+                            void loadKeyStatus()
+                            queryClient.invalidateQueries({
+                              queryKey: channelsQueryKeys.lists(),
+                            })
+                          }}
+                        />
+                      ) : (
+                        key.reason || '-'
+                      ),
                   },
                   {
                     id: 'disabled-time',

@@ -40,6 +40,20 @@ export function getMultiKeyStatusConfig(status: number) {
 
 /** Resolve the visible status without changing the legacy numeric status contract. */
 export function getMultiKeyEffectiveStatusConfig(key: KeyStatus) {
+  if (key.status !== 1) return getMultiKeyStatusConfig(key.status)
+  if (
+    key.cooldowns?.some(
+      (item) => item.scope === 'key' && item.state === 'pending_probe'
+    )
+  ) {
+    return { variant: 'warning' as const, label: 'Pending recovery probe' }
+  }
+  if (
+    !key.temporary_disabled &&
+    key.cooldowns?.some((item) => item.scope === 'model')
+  ) {
+    return { variant: 'warning' as const, label: 'Some models restricted' }
+  }
   if (key.temporary_disabled) {
     return {
       variant: 'warning' as const,

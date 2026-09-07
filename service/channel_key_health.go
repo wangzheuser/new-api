@@ -31,32 +31,43 @@ func MultiKeyFingerprint(key string) string {
 
 // ClassifyMultiKeyFailure applies the effective channel policy to one real upstream response.
 func ClassifyMultiKeyFailure(channel *model.Channel, err *types.NewAPIError) (MultiKeyFailureAction, int) {
-	if channel == nil || err == nil || !channel.ChannelInfo.IsMultiKey || !common.AutomaticDisableChannelEnabled || !channel.GetAutoBan() {
-		return MultiKeyFailureNone, 0
-	}
-	statusCode, ok := err.GetUpstreamStatusCode()
-	if !ok {
-		return MultiKeyFailureNone, 0
-	}
-	setting := effectiveMultiKeyAutoDisableConfig(channel)
-	if operation_setting.MatchMultiKeyStatusCode(setting.PersistentStatusCodes, statusCode) {
-		return MultiKeyFailurePersistent, statusCode
-	}
-	if operation_setting.MatchMultiKeyStatusCode(setting.TemporaryStatusCodes, statusCode) {
-		return MultiKeyFailureTemporary, statusCode
-	}
-	return MultiKeyFailureNone, statusCode
+	d := DecideMultiKeyFailure(channel, "", err, time.Now())
+	return d.Action, d.StatusCode
 }
 
 // HandleMultiKeyFailure records one classified key failure and reports whether generic channel handling must stop.
-func HandleMultiKeyFailure(channel *model.Channel, keyIndex int, usingKey string, err *types.NewAPIError) (MultiKeyFailureAction, bool) {
-	action, statusCode := ClassifyMultiKeyFailure(channel, err)
+func HandleMultiKeyFailure(channel *model.Channel, keyIndex int, usingKey string, err *types.NewAPIError, upstreamModels ...string) (MultiKeyFailureAction, bool) {
+	upstreamModel := ""
+	if len(upstreamModels) > 0 {
+		upstreamModel = upstreamModels[0]
+	}
+	decision := DecideMultiKeyFailure(channel, upstreamModel, err, time.Now())
+	action, statusCode := decision.Action, decision.StatusCode
 	if action == MultiKeyFailureNone {
 		return action, false
 	}
-	keys := channel.GetKeys()
+	// A request must not resurrect a deleted channel or overwrite a later manual decision.
+	if model.DB == nil {
+		return action, true
+	}
+	latest, loadErr := model.GetChannelById(channel.Id, true)
+	if loadErr != nil || latest == nil || !latest.ChannelInfo.IsMultiKey || latest.Status == common.ChannelStatusManuallyDisabled {
+		return action, true
+	}
+	keys := latest.GetKeys()
+	keyIndex = -1
+	for index, key := range keys {
+		if key == usingKey {
+			keyIndex = index
+			break
+		}
+	}
 	if usingKey == "" || keyIndex < 0 || keyIndex >= len(keys) || keys[keyIndex] != usingKey {
 		common.SysLog(fmt.Sprintf("skip stale multi-key failure update: channel_id=%d, key_index=%d", channel.Id, keyIndex))
+		return action, true
+	}
+
+	if latest.ChannelInfo.MultiKeyStatusList[keyIndex] == common.ChannelStatusManuallyDisabled {
 		return action, true
 	}
 
@@ -79,27 +90,7 @@ func HandleMultiKeyFailure(channel *model.Channel, keyIndex int, usingKey string
 			}
 		}
 	case MultiKeyFailureTemporary:
-		setting := effectiveMultiKeyAutoDisableConfig(channel)
-		if common.RedisEnabled && common.RDB != nil {
-			info := dto.MultiKeyTemporaryDisableInfo{
-				DisabledUntil: time.Now().Add(time.Duration(setting.TemporaryDisableMinutes) * time.Minute).Unix(),
-				StatusCode:    statusCode,
-				Reason:        reason,
-			}
-			value, marshalErr := common.Marshal(info)
-			if marshalErr != nil {
-				common.SysLog(fmt.Sprintf("failed to encode multi-key temporary disable: channel_id=%d, error=%v", channel.Id, marshalErr))
-				break
-			}
-			if setErr := common.RDB.Set(
-				context.Background(),
-				multiKeyTemporaryDisableKey(channel.Id, usingKey),
-				value,
-				time.Duration(setting.TemporaryDisableMinutes)*time.Minute,
-			).Err(); setErr != nil {
-				logChannelAutoDisableRedisError(setErr)
-			}
-		}
+		writeMultiKeyCooldown(channel, usingKey, decision, reason)
 	}
 	refreshMultiKeyPoolBlock(channel.Id)
 	return action, true
@@ -171,10 +162,30 @@ func ClearMultiKeyTemporaryDisable(channelId int, key string) bool {
 	if channelId <= 0 || key == "" || !common.RedisEnabled || common.RDB == nil {
 		return false
 	}
-	removed, err := common.RDB.Del(context.Background(), multiKeyTemporaryDisableKey(channelId, key), multiKeyPoolBlockedKey(channelId)).Result()
+	var cursor uint64
+	removed := int64(0)
+	for {
+		names, next, err := common.RDB.Scan(context.Background(), cursor, multiKeyTemporaryDisableKey(channelId, key)+"*", 100).Result()
+		if err != nil {
+			logChannelAutoDisableRedisError(err)
+			return false
+		}
+		if len(names) > 0 {
+			count, err := common.RDB.Del(context.Background(), names...).Result()
+			if err != nil {
+				logChannelAutoDisableRedisError(err)
+				return false
+			}
+			removed += count
+		}
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
+	_, err := common.RDB.Del(context.Background(), multiKeyPoolBlockedKey(channelId)).Result()
 	if err != nil {
 		logChannelAutoDisableRedisError(err)
-		return false
 	}
 	return removed > 0
 }

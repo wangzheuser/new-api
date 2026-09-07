@@ -3799,6 +3799,11 @@
     "无条件最终错误规则必须位于该阶段最后": "La règle d'erreur finale sans condition doit être la dernière de cette phase",
     "第 {{line}} 条操作的状态码无效": "La règle {{line}} contient un code d'état non valide",
     "响应阶段始终停止内部重试": "La phase de réponse arrête toujours les nouvelles tentatives internes",
-    "语义条件仅可用于响应阶段": "Les conditions sémantiques sont uniquement disponibles pendant la phase de réponse"
+    "语义条件仅可用于响应阶段": "Les conditions sémantiques sont uniquement disponibles pendant la phase de réponse",
+    "Pending recovery probe": "En attente de vérification",
+    "Some models restricted": "Certains modèles sont limités",
+    "Whole key cooldown": "Clé entière en attente",
+    "Clear model cooldown": "Lever le délai du modèle",
+    "Allow this model to use this key again?": "Autoriser ce modèle à réutiliser cette clé ?"
   }
 }

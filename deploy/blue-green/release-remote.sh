@@ -267,11 +267,7 @@ action_backup() {
   done < "$exclusion_manifest"
   (cd "$backup_dir" && sha256sum -c postgresql.dump.sha256 >/dev/null)
   find "$backup_dir" -type f -exec chmod 600 {} +
-  # Keep only the newest verified backup, as required by the current retention policy.
-  while IFS= read -r old; do
-    [[ "$old" == "$backup_dir" ]] || rm -rf -- "$old"
-  done < <(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%T@|%p\n' | sort -t'|' -k1,1nr | cut -d'|' -f2-)
-  [[ "$(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 1 ]]
+  # Prior verified backups are rollback assets, not disposable files from this release.
   printf 'backup=passed directory=%s bytes=%s\n' "$backup_dir" "$(stat -c %s "$dump")"
 }
 
@@ -563,10 +559,9 @@ action_finalize() {
     [[ "$(public_version)" == "$VERSION" ]]
     [[ "$i" -eq 5 ]] || sleep 5
   done
-  # Only prune disposable Docker data; the stopped slot and its tagged image remain rollback-ready.
-  docker image prune --force >/dev/null
-  docker builder prune --force >/dev/null
-  printf 'finalize=passed production=%s old=%s old_state=exited old_restart_policy=unless-stopped version=%s docker_cleanup=passed\n' \
+  # Deployment cleanup is manifest-scoped; never prune another service's build cache.
+  # Keep both slot images and let the deployment runner remove its registered uploads.
+  printf 'finalize=passed production=%s old=%s old_state=exited old_restart_policy=unless-stopped version=%s docker_cleanup=manifest_required\n' \
     "$NEW" "$OLD" "$VERSION" | tee "$STATE_DIR/final.result"
 }
 

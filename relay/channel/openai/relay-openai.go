@@ -163,7 +163,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			var upstreamResponse dto.SimpleResponse
 			if common.UnmarshalJsonStr(data, &upstreamResponse) == nil {
 				if upstreamError := upstreamResponse.GetOpenAIError(); upstreamError != nil {
-					streamErr = types.WithOpenAIError(*upstreamError, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+					streamErr = types.WithOpenAIError(*upstreamError, http.StatusBadGateway, types.ErrOptionWithSkipRetry(), types.ErrOptionWithUpstreamStatusCode(resp.StatusCode), types.ErrOptionWithUpstreamRetryAfter(resp.Header.Get("Retry-After")))
 					sr.StopWithTerminal("error", "failed", streamErr)
 					return
 				}
@@ -309,7 +309,7 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	}
 
 	if oaiError := simpleResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
-		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
+		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode, types.ErrOptionWithUpstreamStatusCode(resp.StatusCode), types.ErrOptionWithUpstreamRetryAfter(resp.Header.Get("Retry-After")))
 	}
 	info.MergeResponseSemantics(types.RelayFormatOpenAI, responseBody)
 

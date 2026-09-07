@@ -3,12 +3,14 @@ package service
 import (
 	"errors"
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
@@ -235,7 +237,22 @@ func CacheGetRandomSatisfiedChannelWithRoute(param *RetryParam) (*model.Channel,
 			}
 			return temporaryFallback, plan, temporaryFallbackGroup, nil
 		}
-		if channel.GetAutoBan() && (IsChannelTemporarilyDisabled(channel.Id) || IsMultiKeyPoolTemporarilyDisabled(channel.Id)) {
+		mappingModel := param.ModelName
+		if strings.HasSuffix(param.RequestPath, "/responses/compact") {
+			mappingModel = strings.TrimSuffix(mappingModel, ratio_setting.CompactModelSuffix)
+		}
+		healthModel, mappingErr := common.ResolveMappedModel(channel.GetModelMapping(), mappingModel)
+		if mappingErr != nil {
+			return nil, nil, selectGroup, mappingErr
+		}
+		if IsMultiKeyModelPoolBlocked(channel, healthModel) || (channel.GetAutoBan() && IsMultiKeyPoolTemporarilyDisabled(channel.Id)) {
+			if param.ExcludedChannelIDs == nil {
+				param.ExcludedChannelIDs = make(map[int]struct{})
+			}
+			param.ExcludedChannelIDs[channel.Id] = struct{}{}
+			continue
+		}
+		if channel.GetAutoBan() && IsChannelTemporarilyDisabled(channel.Id) {
 			if temporaryFallback == nil {
 				temporaryFallback = channel
 				temporaryFallbackGroup = selectGroup

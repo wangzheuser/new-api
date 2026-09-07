@@ -3792,6 +3792,11 @@
     "无条件最终错误规则必须位于该阶段最后": "無條件最終錯誤規則必須位於該階段最後",
     "第 {{line}} 条操作的状态码无效": "第 {{line}} 條操作的狀態碼無效",
     "响应阶段始终停止内部重试": "回應階段一律停止內部重試",
-    "语义条件仅可用于响应阶段": "語意條件僅可用於回應階段"
+    "语义条件仅可用于响应阶段": "語意條件僅可用於回應階段",
+    "Pending recovery probe": "等待恢復探測",
+    "Some models restricted": "部分模型受限",
+    "Whole key cooldown": "整把金鑰冷卻",
+    "Clear model cooldown": "解除模型冷卻",
+    "Allow this model to use this key again?": "允許此模型再次使用該金鑰？"
   }
 }

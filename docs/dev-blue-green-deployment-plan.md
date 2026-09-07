@@ -170,7 +170,7 @@ deploy/blue-green/build-local.sh prepare \
 `public.conversation_logs` 的表结构、索引及约束，但通过 `--exclude-table-data` 排除这两张
 高容量日志表的行数据；恢复后这两张表为空，其余表的结构和数据正常恢复。排除清单随备份
 保存并与 restore list 交叉校验，清单变化时不得复用同一 release 的旧备份。新备份校验成功
-前不得删除旧备份；校验成功后按当前策略只保留最近一份。备份清理不进入切流关键路径。
+前不得删除旧备份；发布过程保留已有受限备份，不自动清理其他 release 的恢复资产。备份保留期清理由独立确认的维护任务处理。
 
 ## 7. 候选槽位与门禁
 
@@ -245,9 +245,9 @@ CONFIRM_FINALIZE=<release-id> ./release-remote.sh finalize --execute
 `finalize` 首先把旧槽位重启策略校正为 `unless-stopped`，再停止旧槽位容器，立即释放其
 CPU 和内存占用，并确保 Docker daemon 重启后不会意外拉起；容器元数据、可写层和旧镜像
 继续保留用于快速回滚。停止后连续验证新槽位健康、零重启、未 OOM、Nginx 内部版本和
-公网版本。验证通过后，`finalize` 自动执行 `docker image prune --force` 和
-`docker builder prune --force`，清理 dangling 镜像与构建缓存。该清理不使用 `-a`，不会
-移除仍由容器引用或带标签的回滚镜像，也不会清理卷、网络和运行中的容器。
+公网版本。验证通过后，`finalize` 保留两个槽位镜像，不执行全局 image/builder prune。
+部署执行端按本次 manifest 精确清理上传归档、本地镜像标签和专用 Builder，保留生产镜像、
+回滚镜像与受限备份；不得清理其他服务的 dangling 镜像或共享构建缓存。
 
 ## 10. 回滚
 

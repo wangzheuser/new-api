@@ -342,6 +342,13 @@ type MultiKeyTemporaryDisableInfo struct {
 	DisabledUntil int64  `json:"disabled_until"`
 	StatusCode    int    `json:"last_status_code"`
 	Reason        string `json:"reason,omitempty"`
+	Scope         string `json:"scope,omitempty"`
+	Model         string `json:"model,omitempty"`
+	Category      string `json:"category,omitempty"`
+	Source        string `json:"source,omitempty"`
+	State         string `json:"state,omitempty"`
+	Failures      int    `json:"failures,omitempty"`
+	Version       string `json:"version,omitempty"`
 }
 
 // TemporaryAutoDisableInfo describes one Redis-backed temporary channel disable decision.

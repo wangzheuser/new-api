@@ -23,6 +23,7 @@ import type { MultiKeyTestResult } from '../types'
 import {
   getMultiKeyCooldownMinutes,
   getMultiKeyEffectiveStatusConfig,
+  getMultiKeyStatusConfig,
   getMultiKeyTestActionIndexes,
 } from './multi-key-utils'
 
@@ -130,5 +131,47 @@ describe('multi-key effective health status', () => {
     assert.equal(getMultiKeyCooldownMinutes(1_600, 1_541), 1)
     assert.equal(getMultiKeyCooldownMinutes(1_600, 1_481), 2)
     assert.equal(getMultiKeyCooldownMinutes(1_600, 1_601), 0)
+  })
+})
+
+describe('model-scoped key cooldowns', () => {
+  it('keeps a partially restricted key enabled and identifies half-open recovery', () => {
+    const key = {
+      index: 0,
+      status: 1,
+      effective_status: 'enabled' as const,
+      temporary_disabled: false,
+      cooldowns: [
+        {
+          scope: 'model' as const,
+          model: 'MODEL_A',
+          disabled_until: 123,
+          state: 'cooling' as const,
+        },
+      ],
+    }
+    assert.equal(
+      getMultiKeyEffectiveStatusConfig(key).label,
+      'Some models restricted'
+    )
+    assert.equal(key.status, 1)
+    const recovering = {
+      ...key,
+      cooldowns: [
+        {
+          scope: 'key' as const,
+          disabled_until: 1,
+          state: 'pending_probe' as const,
+        },
+      ],
+    }
+    assert.equal(
+      getMultiKeyEffectiveStatusConfig(recovering).label,
+      'Pending recovery probe'
+    )
+    assert.equal(
+      getMultiKeyEffectiveStatusConfig({ ...recovering, status: 2 }).label,
+      getMultiKeyStatusConfig(2).label
+    )
   })
 })

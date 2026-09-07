@@ -184,6 +184,7 @@ func Distribute() func(c *gin.Context) {
 			}
 		}
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
+		defer service.FinishChannelKeyProbe(c, false)
 		if setupErr := SetupContextForSelectedChannel(c, channel, modelRequest.Model); setupErr != nil {
 			abortWithOpenAiMessage(c, http.StatusServiceUnavailable, setupErr.Error(), types.ErrorCodeModelNotFound)
 			return
@@ -529,6 +530,7 @@ func setupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	if channel == nil {
 		return types.NewError(errors.New("channel is nil"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
+	common.SetContextKey(c, constant.ContextKeyChannelSnapshot, channel.Snapshot())
 	common.SetContextKey(c, constant.ContextKeyChannelRoutePlan, nil)
 	plan, err := service.PlanChannelProtocolRoute(channel, modelName, c.Request.URL.Path, common.GetContextKeyBool(c, constant.ContextKeyIsStream))
 	if err != nil {
@@ -562,10 +564,20 @@ func setupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	common.SetContextKey(c, constant.ContextKeyChannelModelMapping, channel.GetModelMapping())
 	common.SetContextKey(c, constant.ContextKeyChannelStatusCodeMapping, channel.GetStatusCodeMapping())
 
+	mappingModel := modelName
+	if strings.HasSuffix(c.Request.URL.Path, "/responses/compact") {
+		mappingModel = strings.TrimSuffix(mappingModel, ratio_setting.CompactModelSuffix)
+	}
+	healthModel, mappingErr := common.ResolveMappedModel(channel.GetModelMapping(), mappingModel)
+	if mappingErr != nil {
+		return types.NewError(mappingErr, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+	}
+	common.SetContextKey(c, constant.ContextKeyChannelHealthModel, healthModel)
 	key := ""
 	index := 0
 	if keyIndex == nil {
-		selectedKey, selectedIndex, newAPIError := service.SelectNextEnabledChannelKey(channel, excludedFingerprints)
+
+		selectedKey, selectedIndex, newAPIError := service.SelectChannelKeyForRequest(c, channel, healthModel, excludedFingerprints)
 		if newAPIError != nil {
 			return newAPIError
 		}

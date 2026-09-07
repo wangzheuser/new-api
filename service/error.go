@@ -84,6 +84,11 @@ func ClaudeErrorWrapperLocal(err error, code string, statusCode int) *dto.Claude
 }
 
 func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFail bool) (newApiErr *types.NewAPIError) {
+	defer func() {
+		if newApiErr != nil {
+			types.ErrOptionWithUpstreamRetryAfter(resp.Header.Get("Retry-After"))(newApiErr)
+		}
+	}()
 	upstreamStatusOption := types.ErrOptionWithUpstreamStatusCode(resp.StatusCode)
 	newApiErr = types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, resp.StatusCode, upstreamStatusOption)
 
@@ -205,6 +210,10 @@ func TaskErrorWrapper(err error, code string, statusCode int) *dto.TaskError {
 		Message:    text,
 		StatusCode: statusCode,
 		Error:      err,
+	}
+	var upstream *types.NewAPIError
+	if errors.As(err, &upstream) {
+		taskError.UpstreamError = upstream
 	}
 
 	return taskError

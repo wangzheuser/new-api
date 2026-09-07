@@ -99,6 +99,7 @@ type NewAPIError struct {
 	errorCode          ErrorCode
 	StatusCode         int
 	upstreamStatusCode int
+	upstreamRetryAfter string
 	Metadata           json.RawMessage
 }
 
@@ -130,6 +131,19 @@ func (e *NewAPIError) GetUpstreamStatusCode() (int, bool) {
 		return 0, false
 	}
 	return e.upstreamStatusCode, true
+}
+
+// GetUpstreamRetryAfter returns the original recovery hint, not a public error override.
+func (e *NewAPIError) GetUpstreamRetryAfter() string {
+	if e == nil {
+		return ""
+	}
+	return e.upstreamRetryAfter
+}
+
+// ErrOptionWithUpstreamRetryAfter preserves the upstream response header through wrapping.
+func ErrOptionWithUpstreamRetryAfter(value string) NewAPIErrorOptions {
+	return func(e *NewAPIError) { e.upstreamRetryAfter = value }
 }
 
 func (e *NewAPIError) Error() string {

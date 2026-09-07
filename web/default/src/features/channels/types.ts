@@ -348,7 +348,16 @@ export interface CopyChannelResponse {
 // Multi-Key Management Types
 // ============================================================================
 
+export interface MultiKeyCooldown {
+  scope: 'key' | 'model'
+  model?: string
+  category?: string
+  reason?: string
+  disabled_until: number
+  state: 'cooling' | 'pending_probe'
+}
 export interface KeyStatus {
+  cooldowns?: MultiKeyCooldown[]
   index: number
   status: number // 1: enabled, 2: manual disabled, 3: auto disabled
   effective_status:
@@ -466,9 +475,11 @@ export interface CopyChannelParams {
 }
 
 export interface MultiKeyManageParams {
+  model?: string
   channel_id: number
   action:
     | 'get_key_status'
+    | 'clear_model_cooldown'
     | 'disable_key'
     | 'enable_key'
     | 'enable_all_keys'

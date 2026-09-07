@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math/rand"
 	"strings"
 	"sync"
@@ -70,6 +71,19 @@ type ChannelInfo struct {
 	MultiKeyDisabledTime   map[int]int64         `json:"multi_key_disabled_time,omitempty"`   // key禁用时间列表，key index -> time
 	MultiKeyPollingIndex   int                   `json:"multi_key_polling_index"`             // 多Key模式下轮询的key索引
 	MultiKeyMode           constant.MultiKeyMode `json:"multi_key_mode"`
+}
+
+// Snapshot keeps request metadata independent from concurrent cache status updates.
+func (channel *Channel) Snapshot() *Channel {
+	lock := GetChannelPollingLock(channel.Id)
+	lock.Lock()
+	defer lock.Unlock()
+	copy := *channel
+	copy.Keys = append([]string(nil), channel.GetKeys()...)
+	copy.ChannelInfo.MultiKeyStatusList = maps.Clone(channel.ChannelInfo.MultiKeyStatusList)
+	copy.ChannelInfo.MultiKeyDisabledReason = maps.Clone(channel.ChannelInfo.MultiKeyDisabledReason)
+	copy.ChannelInfo.MultiKeyDisabledTime = maps.Clone(channel.ChannelInfo.MultiKeyDisabledTime)
+	return &copy
 }
 
 type ChannelSortOptions struct {
@@ -749,6 +763,9 @@ func handlerMultiKeyUpdate(channel *Channel, usingKey string, status int, reason
 	if !exists {
 		currentStatus = common.ChannelStatusEnabled
 	}
+	if currentStatus == common.ChannelStatusManuallyDisabled && status == common.ChannelStatusAutoDisabled {
+		return false
+	}
 	if currentStatus == status {
 		return false
 	}
@@ -772,93 +789,56 @@ func handlerMultiKeyUpdate(channel *Channel, usingKey string, status int, reason
 	return true
 }
 
+// UpdateChannelStatus resolves the current key and persists health plus routing ability atomically.
 func UpdateChannelStatus(channelId int, usingKey string, status int, reason string) bool {
-	if common.MemoryCacheEnabled {
-		channelStatusLock.Lock()
-		defer channelStatusLock.Unlock()
-
-		channelCache, _ := CacheGetChannel(channelId)
-		if channelCache == nil {
-			return false
+	// SQLite 不支持行锁；进程内串行化也避免关闭内存缓存时丢失密钥状态更新。
+	channelStatusLock.Lock()
+	defer channelStatusLock.Unlock()
+	changed := false
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var channel Channel
+		if err := lockForUpdate(tx).First(&channel, channelId).Error; err != nil {
+			return err
 		}
-		if channelCache.ChannelInfo.IsMultiKey {
-			// Use per-channel lock to prevent concurrent map read/write with GetNextEnabledKey
-			beforeStatus := channelCache.Status
-			pollingLock := GetChannelPollingLock(channelId)
-			pollingLock.Lock()
-			// 如果是多Key模式，更新缓存中的状态
-			handlerMultiKeyUpdate(channelCache, usingKey, status, reason)
-			pollingLock.Unlock()
-			if beforeStatus != channelCache.Status {
-				CacheUpdateChannelStatus(channelId, channelCache.Status)
-			}
-			//CacheUpdateChannel(channelCache)
-			//return true
-		} else {
-			// 如果缓存渠道存在，且状态已是目标状态，直接返回
-			if channelCache.Status == status {
-				return false
-			}
-			CacheUpdateChannelStatus(channelId, status)
-		}
-	}
-
-	shouldUpdateAbilities := false
-	abilityEnabled := false
-	shouldRefreshCache := false
-	channel, err := GetChannelById(channelId, true)
-	if err != nil {
-		return false
-	} else {
-		if !channel.ChannelInfo.IsMultiKey && channel.Status == status {
-			return false
-		}
-
+		beforeStatus := channel.Status
 		if channel.ChannelInfo.IsMultiKey {
-			beforeStatus := channel.Status
-			// Protect map writes with the same per-channel lock used by readers
-			pollingLock := GetChannelPollingLock(channelId)
-			pollingLock.Lock()
-			keyStatusChanged := handlerMultiKeyUpdate(channel, usingKey, status, reason)
-			pollingLock.Unlock()
-			if !keyStatusChanged {
-				return false
+			if channel.Status == common.ChannelStatusManuallyDisabled && status == common.ChannelStatusAutoDisabled {
+				return nil
 			}
-			if beforeStatus != channel.Status {
-				shouldUpdateAbilities = true
-				abilityEnabled = channel.Status == common.ChannelStatusEnabled
-				shouldRefreshCache = common.MemoryCacheEnabled && abilityEnabled
+			// 从锁定的最新记录按密钥内容定位，不能复用请求开始时的下标。
+			if !handlerMultiKeyUpdate(&channel, usingKey, status, reason) {
+				return nil
 			}
 		} else {
+			if channel.Status == status {
+				return nil
+			}
 			info := channel.GetOtherInfo()
 			info["status_reason"] = reason
 			info["status_time"] = common.GetTimestamp()
 			channel.SetOtherInfo(info)
 			channel.Status = status
-			shouldUpdateAbilities = true
-			abilityEnabled = status == common.ChannelStatusEnabled
-			shouldRefreshCache = common.MemoryCacheEnabled && abilityEnabled
 		}
-		err = channel.SaveWithoutKey()
-		if err != nil {
-			common.SysLog(fmt.Sprintf("failed to update channel status: channel_id=%d, status=%d, error=%v", channel.Id, status, err))
-			if common.MemoryCacheEnabled {
-				// Restore the cache from the authoritative database after a failed write.
-				InitChannelCache()
+		if err := tx.Model(&channel).Select("status", "channel_info", "other_info").Updates(&channel).Error; err != nil {
+			return err
+		}
+		if beforeStatus != channel.Status {
+			if err := tx.Model(&Ability{}).Where("channel_id = ?", channelId).Update("enabled", channel.Status == common.ChannelStatusEnabled).Error; err != nil {
+				return err
 			}
-			return false
 		}
+		changed = true
+		return nil
+	})
+	if err != nil {
+		common.SysLog(fmt.Sprintf("failed to update channel status: channel_id=%d, status=%d, error=%v", channelId, status, err))
+		return false
 	}
-	if shouldUpdateAbilities {
-		err = UpdateAbilityStatus(channelId, abilityEnabled)
-		if err != nil {
-			common.SysLog(fmt.Sprintf("failed to update ability status: channel_id=%d, error=%v", channelId, err))
-		}
-	}
-	if shouldRefreshCache {
+	if changed {
+		// 数据库提交成功后才发布新缓存，失败写入不会提前改变选路。
 		InitChannelCache()
 	}
-	return true
+	return changed
 }
 
 func EnableChannelByTag(tag string) error {

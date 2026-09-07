@@ -5862,6 +5862,11 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Pending recovery probe": "Pending recovery probe",
+    "Some models restricted": "Some models restricted",
+    "Whole key cooldown": "Whole key cooldown",
+    "Clear model cooldown": "Clear model cooldown",
+    "Allow this model to use this key again?": "Allow this model to use this key again?"
   }
 }

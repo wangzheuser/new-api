@@ -1557,6 +1557,7 @@ func CopyChannel(c *gin.Context) {
 
 // MultiKeyManageRequest represents the request for multi-key management operations
 type MultiKeyManageRequest struct {
+	Model     string `json:"model,omitempty"`
 	ChannelId int    `json:"channel_id"`
 	Action    string `json:"action"`              // "disable_key", "enable_key", "delete_key", "delete_disabled_keys", "get_key_status"
 	KeyIndex  *int   `json:"key_index,omitempty"` // for disable_key, enable_key, and delete_key actions
@@ -1567,11 +1568,12 @@ type MultiKeyManageRequest struct {
 
 // MultiKeyStatusResponse represents the response for key status query
 type MultiKeyStatusResponse struct {
-	Keys       []KeyStatus `json:"keys"`
-	Total      int         `json:"total"`
-	Page       int         `json:"page"`
-	PageSize   int         `json:"page_size"`
-	TotalPages int         `json:"total_pages"`
+	CanManageCooldowns bool        `json:"can_manage_cooldowns"`
+	Keys               []KeyStatus `json:"keys"`
+	Total              int         `json:"total"`
+	Page               int         `json:"page"`
+	PageSize           int         `json:"page_size"`
+	TotalPages         int         `json:"total_pages"`
 	// Statistics
 	EnabledCount           int `json:"enabled_count"`
 	ManualDisabledCount    int `json:"manual_disabled_count"`
@@ -1580,15 +1582,16 @@ type MultiKeyStatusResponse struct {
 }
 
 type KeyStatus struct {
-	Index             int    `json:"index"`
-	Status            int    `json:"status"` // persisted status: 1=enabled, 2=manual disabled, 3=auto disabled
-	EffectiveStatus   string `json:"effective_status"`
-	TemporaryDisabled bool   `json:"temporary_disabled"`
-	DisabledTime      int64  `json:"disabled_time,omitempty"`
-	DisabledUntil     int64  `json:"disabled_until,omitempty"`
-	LastStatusCode    int    `json:"last_status_code,omitempty"`
-	Reason            string `json:"reason,omitempty"`
-	KeyPreview        string `json:"key_preview"` // first 10 chars of key for identification
+	Cooldowns         []dto.MultiKeyTemporaryDisableInfo `json:"cooldowns,omitempty"`
+	Index             int                                `json:"index"`
+	Status            int                                `json:"status"` // persisted status: 1=enabled, 2=manual disabled, 3=auto disabled
+	EffectiveStatus   string                             `json:"effective_status"`
+	TemporaryDisabled bool                               `json:"temporary_disabled"`
+	DisabledTime      int64                              `json:"disabled_time,omitempty"`
+	DisabledUntil     int64                              `json:"disabled_until,omitempty"`
+	LastStatusCode    int                                `json:"last_status_code,omitempty"`
+	Reason            string                             `json:"reason,omitempty"`
+	KeyPreview        string                             `json:"key_preview"` // first 10 chars of key for identification
 }
 
 // ManageMultiKeys handles multi-key management operations
@@ -1637,6 +1640,17 @@ func ManageMultiKeys(c *gin.Context) {
 	defer lock.Unlock()
 
 	switch request.Action {
+	case "clear_model_cooldown":
+		if request.KeyIndex == nil || *request.KeyIndex < 0 || *request.KeyIndex >= len(channel.GetKeys()) || strings.TrimSpace(request.Model) == "" {
+			common.ApiError(c, fmt.Errorf("invalid key index or model"))
+			return
+		}
+		if err := service.ClearMultiKeyModelCooldown(channel.Id, channel.GetKeys()[*request.KeyIndex], request.Model); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
+		return
 	case "get_key_status":
 		keys := channel.GetKeys()
 
@@ -1712,6 +1726,7 @@ func ManageMultiKeys(c *gin.Context) {
 
 			allKeyStatusList = append(allKeyStatusList, KeyStatus{
 				Index:             i,
+				Cooldowns:         service.LoadMultiKeyCooldowns(channel.Id, key),
 				Status:            status,
 				EffectiveStatus:   effectiveStatus,
 				TemporaryDisabled: effectiveStatus == "temporary_disabled",
@@ -1763,6 +1778,7 @@ func ManageMultiKeys(c *gin.Context) {
 			"message": "",
 			"data": MultiKeyStatusResponse{
 				Keys:                   pageKeyStatusList,
+				CanManageCooldowns:     authz.Can(c.GetInt("id"), c.GetInt("role"), authz.ChannelSensitiveWrite),
 				Total:                  filteredTotal, // Total of filtered results
 				Page:                   page,
 				PageSize:               pageSize,
@@ -2101,7 +2117,7 @@ func ManageMultiKeys(c *gin.Context) {
 }
 
 func multiKeyActionRequiresSensitiveWrite(action string) bool {
-	return action == "delete_key" || action == "delete_disabled_keys"
+	return action == "delete_key" || action == "delete_disabled_keys" || action == "clear_model_cooldown"
 }
 
 // OllamaPullModel 拉取 Ollama 模型

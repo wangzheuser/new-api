@@ -5862,6 +5862,11 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Pending recovery probe": "等待恢复探测",
+    "Some models restricted": "部分模型受限",
+    "Whole key cooldown": "整把密钥冷却",
+    "Clear model cooldown": "解除模型冷却",
+    "Allow this model to use this key again?": "允许此模型再次使用该密钥？"
   }
 }

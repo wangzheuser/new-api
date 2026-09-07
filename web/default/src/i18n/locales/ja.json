@@ -5862,6 +5862,11 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Pending recovery probe": "復旧確認待ち",
+    "Some models restricted": "一部のモデルが制限されています",
+    "Whole key cooldown": "キー全体の待機",
+    "Clear model cooldown": "モデルの待機を解除",
+    "Allow this model to use this key again?": "このモデルでこのキーを再度使用しますか？"
   }
 }

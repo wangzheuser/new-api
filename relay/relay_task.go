@@ -90,7 +90,12 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 	info.LockedChannel = ch
 
 	if originTask.ChannelId != info.ChannelId {
-		key, keyIndex, newAPIError := service.SelectNextEnabledChannelKey(ch, nil)
+		healthModel, mappingErr := common.ResolveMappedModel(ch.GetModelMapping(), info.GetRoutingModelName())
+		if mappingErr != nil {
+			return service.TaskErrorWrapperLocal(mappingErr, "model_mapping_failed", http.StatusBadRequest)
+		}
+		common.SetContextKey(c, constant.ContextKeyChannelHealthModel, healthModel)
+		key, keyIndex, newAPIError := service.SelectChannelKeyForRequest(c, ch, healthModel, nil)
 		if newAPIError != nil {
 			return service.TaskErrorWrapper(newAPIError, "channel_no_available_key", newAPIError.StatusCode)
 		}
@@ -100,6 +105,8 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 		common.SetContextKey(c, constant.ContextKeyChannelId, originTask.ChannelId)
 		common.SetContextKey(c, constant.ContextKeyChannelIsMultiKey, ch.ChannelInfo.IsMultiKey)
 		common.SetContextKey(c, constant.ContextKeyChannelMultiKeyIndex, keyIndex)
+		common.SetContextKey(c, constant.ContextKeyChannelModelMapping, ch.GetModelMapping())
+		common.SetContextKey(c, constant.ContextKeyChannelSnapshot, ch.Snapshot())
 
 		info.ChannelBaseUrl = ch.GetBaseURL()
 		info.ChannelId = originTask.ChannelId
@@ -224,8 +231,8 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		return nil, service.TaskErrorWrapper(err, "do_request_failed", http.StatusInternalServerError)
 	}
 	if resp != nil && resp.StatusCode != http.StatusOK {
-		responseBody, _ := io.ReadAll(resp.Body)
-		return nil, service.TaskErrorWrapper(fmt.Errorf("%s", string(responseBody)), "fail_to_fetch_task", resp.StatusCode)
+		upstreamError := service.RelayErrorHandler(c.Request.Context(), resp, false)
+		return nil, service.TaskErrorWrapper(upstreamError, "fail_to_fetch_task", resp.StatusCode)
 	}
 
 	// 10. 返回 OtherRatios 给下游（header 必须在 DoResponse 写 body 之前设置）

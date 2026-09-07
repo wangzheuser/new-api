@@ -5862,6 +5862,11 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Pending recovery probe": "En attente de vérification",
+    "Some models restricted": "Certains modèles sont limités",
+    "Whole key cooldown": "Clé entière en attente",
+    "Clear model cooldown": "Lever le délai du modèle",
+    "Allow this model to use this key again?": "Autoriser ce modèle à réutiliser cette clé ?"
   }
 }

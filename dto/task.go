@@ -2,15 +2,17 @@ package dto
 
 import (
 	"encoding/json"
+	"github.com/QuantumNous/new-api/types"
 )
 
 type TaskError struct {
-	Code       string `json:"code"`
-	Message    string `json:"message"`
-	Data       any    `json:"data"`
-	StatusCode int    `json:"-"`
-	LocalError bool   `json:"-"`
-	Error      error  `json:"-"`
+	Code          string             `json:"code"`
+	Message       string             `json:"message"`
+	Data          any                `json:"data"`
+	StatusCode    int                `json:"-"`
+	LocalError    bool               `json:"-"`
+	Error         error              `json:"-"`
+	UpstreamError *types.NewAPIError `json:"-"`
 }
 
 type TaskData interface {

@@ -2636,6 +2636,11 @@
     "仅首次注册新账户时需要": "仅首次注册新账户时需要",
     "取较晚有效期": "取较晚有效期",
     "取较晚有效期并叠加额度": "取较晚有效期并叠加额度",
-    "延长有效期并重置额度": "延长有效期并重置额度"
+    "延长有效期并重置额度": "延长有效期并重置额度",
+    "Pending recovery probe": "等待恢复探测",
+    "Some models restricted": "部分模型受限",
+    "Whole key cooldown": "整把密钥冷却",
+    "Clear model cooldown": "解除模型冷却",
+    "Allow this model to use this key again?": "允许此模型再次使用该密钥？"
   }
 }

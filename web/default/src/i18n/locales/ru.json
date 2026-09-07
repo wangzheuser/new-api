@@ -5862,6 +5862,11 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Pending recovery probe": "Ожидание проверки восстановления",
+    "Some models restricted": "Некоторые модели ограничены",
+    "Whole key cooldown": "Ожидание для всего ключа",
+    "Clear model cooldown": "Снять ограничение модели",
+    "Allow this model to use this key again?": "Разрешить модели снова использовать этот ключ?"
   }
 }

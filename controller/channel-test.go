@@ -213,7 +213,7 @@ func resolveChannelTestUserID(c *gin.Context) (int, error) {
 	return rootUser.Id, nil
 }
 
-func testChannel(ctx context.Context, channel *model.Channel, testUserID int, options channelTestOptions) testResult {
+func testChannel(ctx context.Context, channel *model.Channel, testUserID int, options channelTestOptions) (returnedTest testResult) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -235,6 +235,9 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, op
 	}
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
+	defer func() {
+		service.FinishChannelKeyProbe(c, returnedTest.localErr == nil && returnedTest.newAPIError == nil)
+	}()
 
 	testModel := strings.TrimSpace(options.model)
 	if testModel == "" {
@@ -2032,6 +2035,10 @@ func performChannelTests(ctx context.Context, targets []channelTestTarget, testU
 		// request error disables the channel
 		if newAPIError != nil {
 			shouldBanChannel = service.ShouldDisableChannel(result.newAPIError)
+			if channel.ChannelInfo.IsMultiKey {
+				decision := service.DecideMultiKeyFailure(channel, common.GetContextKeyString(result.context, constant.ContextKeyChannelHealthModel), newAPIError, time.Now())
+				shouldBanChannel = decision.Action != service.MultiKeyFailureNone
+			}
 		}
 
 		// 当错误检查通过，才检查响应时间
@@ -2062,7 +2069,11 @@ func performChannelTests(ctx context.Context, targets []channelTestTarget, testU
 
 		// disable channel
 		if allowDisable && isChannelEnabled && shouldBanChannel && channel.GetAutoBan() {
-			processChannelError(result.context, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+			if channel.ChannelInfo.IsMultiKey {
+				service.HandleMultiKeyFailure(channel, common.GetContextKeyInt(result.context, constant.ContextKeyChannelMultiKeyIndex), common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), newAPIError, common.GetContextKeyString(result.context, constant.ContextKeyChannelHealthModel))
+			} else {
+				processChannelError(result.context, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+			}
 			recordRelayErrorLog(result.context, nil, newAPIError, "", nil, false)
 			summary.Disabled++
 		}

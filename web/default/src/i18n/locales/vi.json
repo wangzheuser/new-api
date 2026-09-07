@@ -5862,6 +5862,11 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Pending recovery probe": "Đang chờ kiểm tra khôi phục",
+    "Some models restricted": "Một số mô hình bị giới hạn",
+    "Whole key cooldown": "Toàn bộ khóa đang tạm nghỉ",
+    "Clear model cooldown": "Bỏ thời gian chờ của mô hình",
+    "Allow this model to use this key again?": "Cho phép mô hình này sử dụng lại khóa này?"
   }
 }
