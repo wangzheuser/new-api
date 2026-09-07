@@ -17,6 +17,7 @@ Options:
   --settle-seconds N   Wait allowance for final request logs, default 300.
   --max-drop-bps N     Maximum success-rate drop in basis points, default 200.
   --min-requests N     Minimum final requests required per protocol/stream/model/channel cohort, default 10.
+  --verified-upstream-503-file FILE  Reviewed request IDs and external-cause evidence (JSON).
   --exclude-file FILE  File containing one synthetic request ID per line; repeatable.
 
 The gate counts one globally final, non-intermediate log per request ID. It also
@@ -42,6 +43,7 @@ settle_seconds=300
 max_drop_bps=200
 min_requests=10
 exclude_files=()
+upstream_evidence=""
 baseline_log=""
 observation_log=""
 
@@ -90,6 +92,11 @@ while [[ $# -gt 0 ]]; do
   --min-requests)
     require_value "$@"
     min_requests="$2"
+    shift 2
+    ;;
+  --verified-upstream-503-file)
+    require_value "$@"
+    upstream_evidence="$2"
     shift 2
     ;;
   --exclude-file)
@@ -182,8 +189,10 @@ run_psql() {
 
 # Bind shared database records to the observed slot request IDs when supplied.
 app_filter_sql="true"
-app_requests_sql="app_requests(period, request_id, request_path, status_code, client_canceled) AS
-  (SELECT ''::text, ''::text, ''::text, 0, false WHERE false),"
+touch_time_sql="l.created_at >= w.start_epoch AND l.created_at < w.end_epoch"
+final_start_sql="l.created_at >= t.start_epoch"
+app_requests_sql="app_requests(period, request_id, request_path, status_code, client_canceled, pre_upstream_rejected) AS
+  (SELECT ''::text, ''::text, ''::text, 0, false, false WHERE false),"
 if [[ -n "$baseline_log" || -n "$observation_log" ]]; then
   [[ -r "$baseline_log" && -r "$observation_log" ]]
   python3 - "$baseline_log" "$observation_log" "$output_dir" "${exclude_files[@]}" <<'PYAPP'
@@ -200,10 +209,15 @@ summary = {}
 for window, filename in (("pre", baseline), ("post", observation)):
     lines = Path(filename).read_text().splitlines()
     canceled = set()
+    rejected = set()
     for line in lines:
         parts = line.split("|", 2)
         if line.startswith("[INFO]") and len(parts) == 3 and parts[2].strip() == "relay canceled by client":
             canceled.add(parts[1].strip())
+        if line.startswith("[ERR]") and len(parts) == 3 and re.fullmatch(
+            r"user \d+ \| No available channel for model [^\r\n]+ under group [^\r\n]+ \(distributor\)", parts[2].strip()
+        ):
+            rejected.add(parts[1].strip())
     counts = collections.Counter()
     requests = {}
     for line in lines:
@@ -226,20 +240,90 @@ for window, filename in (("pre", baseline), ("post", observation)):
         requests[request_id] = (path, status)
     for request_id, (path, status) in requests.items():
         is_canceled = request_id in canceled
-        values.append(f"('{window}','{request_id}','{path}',{status},{str(is_canceled).lower()})")
+        is_rejected = status == 503 and request_id in rejected
+        values.append(f"('{window}','{request_id}','{path}',{status},{str(is_canceled).lower()},{str(is_rejected).lower()})")
         counts[f"{path}:http_{status}"] += 1
+        if is_rejected:
+            counts[f"{path}:pre_upstream_rejected"] += 1
         if is_canceled:
             counts[f"{path}:client_canceled"] += 1
     summary[window] = dict(counts)
 if values:
-    sql = "app_requests(period, request_id, request_path, status_code, client_canceled) AS (VALUES " + ",".join(values) + "),"
+    sql = "app_requests(period, request_id, request_path, status_code, client_canceled, pre_upstream_rejected) AS (VALUES " + ",".join(values) + "),"
 else:
-    sql = "app_requests(period, request_id, request_path, status_code, client_canceled) AS (SELECT ''::text, ''::text, ''::text, 0, false WHERE false),"
+    sql = "app_requests(period, request_id, request_path, status_code, client_canceled, pre_upstream_rejected) AS (SELECT ''::text, ''::text, ''::text, 0, false, false WHERE false),"
 Path(target, "http-observations.sql").write_text(sql)
 Path(target, "http-observations.json").write_text(json.dumps(summary, indent=2) + "\n")
 PYAPP
   app_requests_sql="$(cat "$output_dir/http-observations.sql")"
+  touch_time_sql="l.request_id IN (SELECT request_id FROM app_requests a WHERE a.period = w.name)"
+  final_start_sql="true"
   app_filter_sql="EXISTS (SELECT 1 FROM app_requests a WHERE a.period = w.name AND a.request_id = l.request_id)"
+fi
+
+# Exceptions require reviewed per-request evidence, never a status or keyword alone.
+# Validate against the globally final database record and keep all raw HTTP counters.
+if [[ -n "$upstream_evidence" ]]; then
+  [[ -r "$baseline_log" && -r "$observation_log" && -r "$upstream_evidence" ]]
+  python3 - "$upstream_evidence" "$output_dir" <<'PYEVIDENCE'
+import json
+from pathlib import Path
+import re
+import sys
+
+source, target = map(Path, sys.argv[1:])
+records = json.loads(source.read_text())
+if not isinstance(records, list):
+    raise ValueError("upstream evidence must be a list")
+ids = []
+for record in records:
+    request_id = record["request_id"]
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", request_id):
+        raise ValueError("invalid evidence request ID")
+    if not isinstance(record.get("evidence"), str) or not record["evidence"].strip():
+        raise ValueError("external-cause evidence is required")
+    if request_id in ids:
+        raise ValueError("duplicate evidence request ID")
+    ids.append(request_id)
+(target / "verified-upstream-evidence.json").write_text(json.dumps(records, indent=2) + "\n")
+(target / "verified-upstream-ids.sql").write_text(
+    "ARRAY[" + ",".join("'" + value + "'" for value in ids) + "]::text[]"
+)
+PYEVIDENCE
+  reviewed_sql="$(cat "$output_dir/verified-upstream-ids.sql")"
+  run_psql >"$output_dir/verified-upstream-503.tsv" <<SQL
+WITH $app_requests_sql reviewed AS (
+ SELECT a.*, f.type, f.created_at, f.other::jsonb AS details
+ FROM app_requests a
+ JOIN LATERAL (SELECT type,created_at,other FROM logs l WHERE l.request_id=a.request_id
+   AND l.type IN (2,5) AND NOT COALESCE(l.is_intermediate,false)
+   ORDER BY l.created_at DESC,l.id DESC LIMIT 1) f ON true
+ WHERE a.request_id = ANY ($reviewed_sql)
+)
+SELECT period,request_id FROM reviewed
+WHERE status_code=503 AND type=5
+ AND created_at < (CASE WHEN period='pre' THEN $pre_end ELSE $post_end END) + $settle_seconds
+ AND details#>>'{admin_info,upstream_status_code}'='503'
+ AND details->>'error_code' IS DISTINCT FROM 'convert_request_failed'
+ AND COALESCE(details#>>'{stream_status,client_payload_committed}','false')='false'
+ AND COALESCE(details#>>'{stream_status,billing_finalization}','') <> 'settled_partial';
+SQL
+  python3 - "$output_dir" <<'PYCHECK'
+import csv
+import json
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+expected = {r["request_id"] for r in json.loads((root / "verified-upstream-evidence.json").read_text())}
+rows = list(csv.DictReader((root / "verified-upstream-503.tsv").open(), delimiter="\t"))
+if {r["request_id"] for r in rows} != expected or len(rows) != len(expected):
+    raise ValueError("reviewed exception lacks matching final upstream HTTP 503 evidence")
+(root / "verified-upstream-counts.txt").write_text(
+    str(sum(r["period"] == "pre" for r in rows)) + " " +
+    str(sum(r["period"] == "post" for r in rows)) + "\n"
+)
+PYCHECK
+  excluded_sql="($excluded_sql || $reviewed_sql)"
 fi
 
 cat >"$output_dir/context.txt" <<EOF
@@ -285,7 +369,7 @@ WITH $app_requests_sql windows(name, start_epoch, end_epoch) AS (
     l.model_name,
     $upstream_model_sql AS upstream_model
   FROM windows w
-  JOIN logs l ON l.created_at >= w.start_epoch AND l.created_at < w.end_epoch
+  JOIN logs l ON $touch_time_sql
   WHERE (0 = $channel_id OR l.channel_id = $channel_id)
     AND l.request_id <> ''
     AND l.request_id <> ALL ($excluded_sql)
@@ -309,7 +393,7 @@ WITH $app_requests_sql windows(name, start_epoch, end_epoch) AS (
   FROM touched t
   JOIN logs l ON l.request_id = t.request_id
   WHERE COALESCE(l.is_intermediate, false) = false
-    AND l.created_at >= t.start_epoch
+    AND $final_start_sql
     AND l.created_at < t.end_epoch + $settle_seconds
     AND l.type IN (2, 5)
 )
@@ -384,7 +468,7 @@ WITH $app_requests_sql windows(name, start_epoch, end_epoch) AS (
     l.model_name,
     $upstream_model_sql AS upstream_model
   FROM windows w
-  JOIN logs l ON l.created_at >= w.start_epoch AND l.created_at < w.end_epoch
+  JOIN logs l ON $touch_time_sql
   WHERE (0 = $channel_id OR l.channel_id = $channel_id)
     AND l.request_id <> ''
     AND l.request_id <> ALL ($excluded_sql)
@@ -396,7 +480,7 @@ WITH $app_requests_sql windows(name, start_epoch, end_epoch) AS (
   FROM touched t
   JOIN logs l ON l.request_id = t.request_id
   WHERE COALESCE(l.is_intermediate, false) = false
-    AND l.created_at >= t.start_epoch
+    AND $final_start_sql
     AND l.created_at < t.end_epoch + $settle_seconds
     AND l.type IN (2, 5)
 )
@@ -424,7 +508,8 @@ UNION ALL
 SELECT a.period, a.request_path, NULL::boolean, 0, '<unrecorded>', '<unrecorded>',
   count(*), 0::bigint, count(*)
 FROM app_requests a
-WHERE NOT a.client_canceled
+WHERE NOT a.client_canceled AND NOT a.pre_upstream_rejected
+  AND a.request_id <> ALL ($excluded_sql)
   AND (a.status_code BETWEEN 200 AND 299 OR a.status_code >= 500)
   AND NOT EXISTS (SELECT 1 FROM touched t WHERE t.name = a.period AND t.request_id = a.request_id)
 GROUP BY a.period, a.request_path

@@ -853,6 +853,17 @@ func recordRelayErrorLog(c *gin.Context, relayInfo *relaycommon.RelayInfo, err *
 	service.AppendResponseOverrideAdminInfo(relayInfo, adminInfo)
 	service.AppendRelayProtocolInfo(relayInfo, other, adminInfo)
 	service.AppendStreamStatus(relayInfo, other)
+	// Preserve the selected attempt, not a later channel mapping or public status override.
+	if relayInfo != nil && relayInfo.ChannelMeta != nil && !relayInfo.IsContextFallbackActive() {
+		other["upstream_model_name"] = relayInfo.UpstreamModelName
+	}
+	origin := err
+	if rawError != nil {
+		origin = rawError
+	}
+	if status, received := origin.GetUpstreamStatusCode(); received {
+		adminInfo["upstream_status_code"] = status
+	}
 	if rawError != nil {
 		adminInfo["upstream_error"] = common.LocalLogPreview(rawError.MaskSensitiveErrorWithStatusCode())
 	}

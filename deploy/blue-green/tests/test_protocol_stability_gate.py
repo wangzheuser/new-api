@@ -101,7 +101,7 @@ class ProtocolStabilityGateTest(unittest.TestCase):
             check=True,
         ).stdout
 
-    def run_gate(self, app_logs=None, **options):
+    def run_gate(self, app_logs=None, upstream_evidence=None, **options):
         """Insert explicit records and execute the public gate CLI."""
         values = []
         for row in self.rows:
@@ -147,6 +147,10 @@ class ProtocolStabilityGateTest(unittest.TestCase):
                     log = Path(temp) / (window + ".log")
                     log.write_text(app_logs[window])
                     args += [flag, str(log)]
+            if upstream_evidence is not None:
+                evidence = Path(temp) / "upstream-evidence.json"
+                evidence.write_text(json.dumps(upstream_evidence))
+                args += ["--verified-upstream-503-file", str(evidence)]
             for key, value in options.items():
                 args += ["--" + key.replace("_", "-"), str(value)]
             result = subprocess.run(
@@ -340,6 +344,90 @@ class ProtocolStabilityGateTest(unittest.TestCase):
         self.rows.append({**self.rows[-1], "request_id": "not-in-slot-log", "type": 5})
         result, _ = self.run_gate(app_logs=logs)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_access_window_keeps_final_record_before_database_boundary(self):
+        """The observed request ID, not DB write timing, owns the window."""
+        logs = self.app_logs()
+        self.rows[0]["created_at"] = 899
+        result, files = self.run_gate(app_logs=logs)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("<unrecorded>", files["final-request-coverage.tsv"])
+
+    def test_distributor_rejection_is_not_pending_settlement(self):
+        """A known pre-upstream failure stays visible without inventing consumption."""
+        logs = self.app_logs()
+        logs["post"] += (
+            "[ERR] fixture | invalid-model | user 1 | No available channel for model bad-model under group test (distributor)\n"
+            "[GIN] fixture | relay | invalid-model | 503 | 1ms | 127.0.0.1 | POST /v1/messages\n"
+        )
+        result, files = self.run_gate(app_logs=logs)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(files["http-observations.json"])
+        self.assertEqual(report["post"]["/v1/messages:pre_upstream_rejected"], 1)
+
+    def test_only_reviewed_transport_503_is_excluded(self):
+        """External cause review and actual transport evidence are both mandatory."""
+        source = dict(self.rows[-1])
+        source.update(request_id="external-503", type=5, is_stream=False)
+        source["other"] = {
+            "request_path": "/v1/messages", "status_code": 503,
+            "upstream_model_name": "fixture-upstream",
+            "admin_info": {"upstream_status_code": 503},
+        }
+        self.rows.append(source)
+        logs = self.app_logs()
+        logs["post"] = logs["post"].replace("external-503 | 200", "external-503 | 503")
+        evidence = [{"request_id": "external-503", "evidence": "fixture provider outage independently confirmed"}]
+        result, files = self.run_gate(app_logs=logs, upstream_evidence=evidence)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(files["verified-upstream-counts.txt"], "0 1\n")
+        self.assertEqual(json.loads(files["http-observations.json"])["post"]["/v1/messages:http_503"], 1)
+
+    def test_public_503_without_transport_proof_is_not_exempt(self):
+        """An error mapping to 503 is not evidence that upstream caused the failure."""
+        row = self.rows[-1]
+        row.update(type=5, is_stream=False)
+        row["other"].update(status_code=503)
+        logs = self.app_logs()
+        logs["post"] = logs["post"].replace(row["request_id"] + " | 200", row["request_id"] + " | 503")
+        result, _ = self.run_gate(app_logs=logs, upstream_evidence=[{
+            "request_id": row["request_id"], "evidence": "unverified claim",
+        }])
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_distributor_message_cannot_hide_unknown_500(self):
+        """A routing message does not excuse an unrelated internal HTTP failure."""
+        logs = self.app_logs()
+        logs["post"] += (
+            "[ERR] fixture | invalid | user 1 | No available channel for model bad under group test (distributor)\n"
+            "[GIN] fixture | relay | invalid | 500 | 1ms | 127.0.0.1 | POST /v1/messages\n"
+        )
+        result, _ = self.run_gate(app_logs=logs)
+        self.assertEqual(result.returncode, 1)
+
+    def test_upstream_receipt_cannot_exempt_partial_or_local_failures(self):
+        """Transport evidence cannot waive a committed stream, conversion error or late final record."""
+        for change in (
+            {"stream_status": {"client_payload_committed": True}},
+            {"stream_status": {"billing_finalization": "settled_partial"}},
+            {"error_code": "convert_request_failed"},
+            {"created_at": 9999},
+        ):
+            with self.subTest(change=change):
+                self.setUp()
+                row = self.rows[-1]
+                row.update(type=5, is_stream=False)
+                row["other"].update(status_code=503, admin_info={"upstream_status_code": 503})
+                logs = self.app_logs()
+                logs["post"] = logs["post"].replace(row["request_id"] + " | 200", row["request_id"] + " | 503")
+                if "created_at" in change:
+                    row["created_at"] = change["created_at"]
+                else:
+                    row["other"].update(change)
+                result, _ = self.run_gate(app_logs=logs, upstream_evidence=[{
+                    "request_id": row["request_id"], "evidence": "fixture reviewed upstream outage",
+                }])
+                self.assertNotEqual(result.returncode, 0)
 
     def test_http_200_without_final_record_is_not_success(self):
         """Access logs expose silent record gaps that database-only coverage misses."""

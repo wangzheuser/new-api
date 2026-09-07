@@ -502,14 +502,18 @@ action_observe() {
     > "$STATE_DIR/observation.metrics"
   chmod 600 "$STATE_DIR/observation.metrics"
   # Shared-database business evidence is an additional gate, not proof of slot attribution.
-  # Keep original HTTP failures intact: protocol counters must not waive upstream 5xx.
+  # Keep original HTTP failures intact; only separately reviewed exceptions affect regression counts.
   local protocol_result=0 settle_seconds=300 ready_epoch wait_seconds
   ready_epoch=$(( $(date -d "$start" +%s) + seconds + settle_seconds ))
   wait_seconds=$(( ready_epoch - $(date +%s) ))
   if (( wait_seconds > 0 )); then
     sleep "$wait_seconds"
   fi
-  local protocol_args=()
+  local protocol_args=() protocol_dir="$STATE_DIR/protocol-stability-$(date +%s)"
+  local verified_pre=0 verified_post=0 actionable_errors actionable_baseline_errors
+  if [[ -r "$STATE_DIR/verified-upstream-503.json" ]]; then
+    protocol_args+=(--verified-upstream-503-file "$STATE_DIR/verified-upstream-503.json")
+  fi
   if [[ -r "$STATE_DIR/synthetic-request-ids.txt" ]]; then
     protocol_args+=(--exclude-file "$STATE_DIR/synthetic-request-ids.txt")
   fi
@@ -517,10 +521,24 @@ action_observe() {
     --cutover-epoch "$CUTOVER_EPOCH" --seconds "$seconds" \
     --drain-seconds "$(( $(date -d "$start" +%s) - CUTOVER_EPOCH ))" \
     --baseline-log "$baseline_log" --observation-log "$observation_log" \
-    --settle-seconds "$settle_seconds" --output-dir "$STATE_DIR/protocol-stability-$(date +%s)" \
+    --settle-seconds "$settle_seconds" --output-dir "$protocol_dir" \
     "${protocol_args[@]}" || protocol_result=$?
   printf 'protocol_stability_rc=%s\n' "$protocol_result" >> "$STATE_DIR/observation.metrics"
-  (( errors_5xx <= allowed_errors_5xx && protocol_result == 0 ))
+  # Only reviewed, request-correlated external 503s are removed from regression counts.
+  # Raw HTTP metrics and unsuccessful business outcomes remain available for audit.
+  if [[ -r "$protocol_dir/verified-upstream-counts.txt" ]]; then
+    read -r verified_pre verified_post < "$protocol_dir/verified-upstream-counts.txt"
+    [[ "$verified_pre" =~ ^[0-9]+$ && "$verified_post" =~ ^[0-9]+$ ]]
+  fi
+  (( verified_pre <= baseline_errors_5xx && verified_post <= errors_5xx ))
+  actionable_errors=$(( errors_5xx - verified_post ))
+  actionable_baseline_errors=$(( baseline_errors_5xx - verified_pre ))
+  (( baseline_samples > verified_pre && sample_count > verified_post ))
+  local actionable_allowed_errors_5xx
+  actionable_allowed_errors_5xx=$(( ((sample_count - verified_post) * (actionable_baseline_errors * 10000 / (baseline_samples - verified_pre) + 200) + 9999) / 10000 ))
+  printf 'verified_upstream_503_pre=%s verified_upstream_503_post=%s actionable_errors_5xx=%s actionable_allowed_errors_5xx=%s\n' \
+    "$verified_pre" "$verified_post" "$actionable_errors" "$actionable_allowed_errors_5xx" >> "$STATE_DIR/observation.metrics"
+  (( actionable_errors <= actionable_allowed_errors_5xx && protocol_result == 0 ))
   trap - ERR
   printf 'observation=passed release_id=%s production=%s version=%s requested_seconds=%s elapsed_seconds=%s interval=%s checks=%s start=%s end=%s baseline_samples=%s baseline_errors_5xx=%s baseline_rate_bps=%s samples=%s errors_5xx=%s current_rate_bps=%s allowed_rate_bps=%s allowed_errors_5xx=%s\n' \
     "$RELEASE_ID" "$NEW" "$VERSION" "$seconds" "$elapsed_seconds" "$interval" "$checks" "$start" "$end" \

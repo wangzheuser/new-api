@@ -87,6 +87,39 @@ func TestRecordRelayErrorLogPersistsIntermediateState(t *testing.T) {
 	require.False(t, logs[1].IsIntermediate)
 }
 
+// TestRecordRelayErrorLogKeepsAttemptIdentity preserves transport evidence across public mapping.
+func TestRecordRelayErrorLogKeepsAttemptIdentity(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Log{}))
+	previous := constant.ErrorLogEnabled
+	constant.ErrorLogEnabled = true
+	t.Cleanup(func() { constant.ErrorLogEnabled = previous })
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	ctx.Set("id", 1)
+	ctx.Set("original_model", "client-alias")
+	ctx.Set(common.RequestIdKey, "transport-evidence")
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "actual-model"}}
+	raw := types.NewErrorWithStatusCode(errors.New("upstream unavailable"), types.ErrorCodeBadResponseStatusCode, 503, types.ErrOptionWithUpstreamStatusCode(503))
+	public := types.NewErrorWithStatusCode(errors.New("mapped error"), "public_error", 502)
+	recordRelayErrorLog(ctx, info, public, "", raw, false)
+	var entry model.Log
+	require.NoError(t, db.First(&entry).Error)
+	var other map[string]interface{}
+	require.NoError(t, common.UnmarshalJsonStr(entry.Other, &other))
+	assert.Equal(t, "actual-model", other["upstream_model_name"])
+	admin := other["admin_info"].(map[string]interface{})
+	assert.Equal(t, float64(503), admin["upstream_status_code"])
+	assert.Equal(t, float64(502), other["status_code"])
+	ctx.Set(common.RequestIdKey, "local-public-503")
+	recordRelayErrorLog(ctx, nil, types.NewErrorWithStatusCode(errors.New("local failure"), types.ErrorCodeDoRequestFailed, 503), "", nil, false)
+	var local model.Log
+	require.NoError(t, db.Where("request_id = ?", "local-public-503").First(&local).Error)
+	var localOther map[string]interface{}
+	require.NoError(t, common.UnmarshalJsonStr(local.Other, &localOther))
+	assert.NotContains(t, localOther["admin_info"], "upstream_status_code")
+}
+
 // TestRecordRelayErrorLogPreservesDiscardedResponseOverrideAttempt verifies a
 // failed attempt keeps its response-stage skip reason before retry state resets.
 func TestRecordRelayErrorLogPreservesDiscardedResponseOverrideAttempt(t *testing.T) {

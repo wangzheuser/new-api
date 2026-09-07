@@ -16,7 +16,7 @@ SCRIPT = Path(
 class ReleaseObserveTest(unittest.TestCase):
     """Protect failure evidence and independent business/HTTP gates."""
 
-    def run_observe(self, protocol_rc=0, http_code=200, unhealthy=False):
+    def run_observe(self, protocol_rc=0, http_code=200, unhealthy=False, verified=0):
         """Run the real function; replace only Docker, configuration, time and child gate."""
         with tempfile.TemporaryDirectory(prefix="new-api-observe-test-") as temp:
             root = Path(temp)
@@ -32,7 +32,9 @@ class ReleaseObserveTest(unittest.TestCase):
             definitions = SCRIPT.read_text().split('ACTION="${1:-}"')[0]
             (root / "release-definitions.sh").write_text(definitions)
             (root / "protocol-stability-gate.sh").write_text(
-                f'printf "%s\\n" "$@" > "{root}/protocol-args"\nexit {protocol_rc}\n'
+                f'printf "%s\\n" "$@" > "{root}/protocol-args"\n'
+                'while [[ $# -gt 0 ]]; do if [[ "$1" == --output-dir ]]; then out="$2"; break; fi; shift; done\n'
+                f'mkdir -p "$out"; printf "0 {verified}\\n" > "$out/verified-upstream-counts.txt"\nexit {protocol_rc}\n'
             )
             harness = r"""source "$1/release-definitions.sh"
 STATE_DIR="$1/state"
@@ -59,9 +61,10 @@ docker() {
     esac
   elif [[ "$1" == logs ]]; then
     local code=200
-    [[ "$*" == *candidate ]] && code="$TEST_HTTP_CODE"
     local index
     for index in {1..10}; do
+      code=200
+      [[ "$*" == *candidate && "$index" -le 2 ]] && code="$TEST_HTTP_CODE"
       printf '[GIN] fixture | relay | fixture-%s | %s | 1ms | 127.0.0.1 | POST /v1/messages\n' "$index" "$code"
     done
   fi
@@ -96,7 +99,7 @@ action_observe --seconds 600 --interval 30
             "requested_seconds=600",
             "elapsed_seconds=600",
             "checks=21",
-            "errors_5xx=10",
+            "errors_5xx=2",
             "start=",
             "end=",
         ):
@@ -124,6 +127,13 @@ action_observe --seconds 600 --interval 30
         self.assertIn("elapsed_seconds=600", evidence)
         self.assertIn("--seconds\n600", args)
         self.assertIn("--cutover-epoch\n1000", args)
+
+    def test_verified_external_503_does_not_trigger_rollback_gate(self):
+        """Reviewed external failures remain raw errors but not regression failures."""
+        result, evidence, _ = self.run_observe(http_code=503, verified=2)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("observation=passed", evidence)
+        self.assertIn("errors_5xx=2", evidence)
 
 
 if __name__ == "__main__":
