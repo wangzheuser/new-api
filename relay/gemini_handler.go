@@ -95,7 +95,7 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 
 	adaptor.Init(info)
 
-	passThroughRequest := model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled
+	passThroughRequest := (model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled) && textRouteAllowsPassThrough(info)
 	if !passThroughRequest {
 		before := request.GetTokenCountMeta()
 		if applyGeminiSystemPrompt(c, request, systemPrompt, prependSystemPrompt) {

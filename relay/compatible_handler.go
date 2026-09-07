@@ -71,7 +71,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 	adaptor.Init(info)
 
 	passThroughGlobal := model_setting.GetGlobalSettings().PassThroughRequestEnabled
-	passThroughRequest := passThroughGlobal || info.ChannelSetting.PassThroughBodyEnabled
+	passThroughRequest := (passThroughGlobal || info.ChannelSetting.PassThroughBodyEnabled) && textRouteAllowsPassThrough(info)
 	if !passThroughRequest && info.RelayMode == relayconstant.RelayModeChatCompletions {
 		systemPrompt, prepend := resolveSystemPrompt(info)
 		before := request.GetTokenCountMeta()

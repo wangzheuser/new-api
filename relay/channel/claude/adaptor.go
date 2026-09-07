@@ -20,9 +20,13 @@ import (
 type Adaptor struct {
 }
 
-func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dto.GeminiChatRequest) (any, error) {
-	//TODO implement me
-	return nil, errors.New("not implemented")
+// ConvertGeminiRequest reuses the registered Gemini-to-Messages conversion.
+func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error) {
+	result, err := relayconvert.ConvertRequest(c, info, types.RelayFormatClaude, request)
+	if err != nil {
+		return nil, err
+	}
+	return result.Value, nil
 }
 
 func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ClaudeRequest) (any, error) {
@@ -112,9 +116,13 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 	return nil, errors.New("not implemented")
 }
 
+// ConvertOpenAIResponsesRequest preserves the client format while converting the upstream body.
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
-	// TODO implement me
-	return nil, errors.New("not implemented")
+	result, err := relayconvert.ConvertRequest(c, info, types.RelayFormatClaude, &request)
+	if err != nil {
+		return nil, err
+	}
+	return result.Value, nil
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {

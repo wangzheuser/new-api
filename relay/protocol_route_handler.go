@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/channel"
@@ -856,4 +857,26 @@ func ensureConvertedUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dt
 		return usage
 	}
 	return service.ResponseText2Usage(c, text, info.UpstreamModelName, info.GetEstimatePromptTokens())
+}
+
+// textRouteAllowsPassThrough keeps client bytes only when no wire conversion is required.
+func textRouteAllowsPassThrough(info *relaycommon.RelayInfo) bool {
+	if info == nil {
+		return false
+	}
+	if isConvertedProtocolRoute(info) || isNormalizedProtocolRoute(info) {
+		return false
+	}
+	if isUnconvertedProtocolRoute(info) {
+		return true
+	}
+	// Fixed-protocol adaptors cannot accept another protocol's original JSON body.
+	switch info.ApiType {
+	case constant.APITypeAnthropic:
+		return info.RelayFormat == types.RelayFormatClaude
+	case constant.APITypeGemini:
+		return info.RelayFormat == types.RelayFormatGemini
+	default:
+		return true
+	}
 }

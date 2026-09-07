@@ -752,6 +752,17 @@ func retryBlockedByClientCommit(c *gin.Context, relayInfo *relaycommon.RelayInfo
 
 // resolveConfiguredFinalRelayError applies channel and system final_error rules after retries finish.
 func resolveConfiguredFinalRelayError(c *gin.Context, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
+	// Local conversion failures must not be presented as upstream congestion.
+	if relayInfo != nil && relayInfo.LastError != nil &&
+		relayInfo.LastError.GetErrorCode() == types.ErrorCodeConvertRequestFailed {
+		return types.NewErrorWithStatusCode(
+			errors.New("request protocol conversion failed; verify the request fields and channel protocol compatibility"),
+			types.ErrorCodeConvertRequestFailed,
+			relayInfo.LastError.StatusCode,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+
 	if relayInfo != nil && relayInfo.LastError != nil &&
 		relayInfo.LastError.GetErrorCode() == types.ErrorCodeUnsupportedInputModality {
 		return relayInfo.LastError

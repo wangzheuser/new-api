@@ -83,7 +83,7 @@ func FormatClaudeResponseInfo(claudeResponse *dto.ClaudeResponse, oaiResponse *d
 	return relayconvert.FormatClaudeResponseInfo(claudeResponse, oaiResponse, claudeInfo)
 }
 
-func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo, data string) *types.NewAPIError {
+func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo, data string, conversion ...*relayconvert.ResponseStreamState) *types.NewAPIError {
 	var claudeResponse dto.ClaudeResponse
 	err := common.UnmarshalJsonStr(data, &claudeResponse)
 	if err != nil {
@@ -152,6 +152,18 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			)
 		}
 	}
+	if len(conversion) > 0 && conversion[0] != nil {
+		response := StreamResponseClaude2OpenAI(&claudeResponse)
+		if FormatClaudeResponseInfo(&claudeResponse, response, claudeInfo) {
+			results, convertErr := relayconvert.ConvertStreamResponseChunk(c, info, conversion[0], response)
+			if convertErr != nil {
+				return types.NewError(convertErr, types.ErrorCodeBadResponse)
+			}
+			if sendErr := writeClaudeConvertedEvents(c, info, results); sendErr != nil {
+				return sendErr
+			}
+		}
+	}
 	if info.StreamStatus != nil && claudeInfo.Usage != nil {
 		info.StreamStatus.ObservePartialUsage(claudeInfo.Usage, claudeResponse.Usage != nil, claudeResponse.Usage == nil)
 	}
@@ -207,12 +219,22 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		ResponseText: strings.Builder{},
 		Usage:        &dto.Usage{},
 	}
+	var conversion *relayconvert.ResponseStreamState
+	if info.RelayFormat == types.RelayFormatOpenAIResponses || info.RelayFormat == types.RelayFormatGemini {
+		var convertErr error
+		conversion, convertErr = relayconvert.NewResponseStreamState(types.RelayFormatOpenAI, info.RelayFormat, relayconvert.ResponseStreamOptions{
+			ID: claudeInfo.ResponseId, Model: info.UpstreamModelName, Created: claudeInfo.Created,
+		})
+		if convertErr != nil {
+			return nil, types.NewError(convertErr, types.ErrorCodeBadResponse)
+		}
+	}
 	var err *types.NewAPIError
 	helper.StreamScannerHandlerWithOptions(c, resp, info, helper.StreamScannerOptions{
 		RequireExplicitTerminal: true,
 		RequiredTerminalEvent:   "message_stop",
 	}, func(data string, sr *helper.StreamResult) {
-		err = HandleStreamResponseData(c, info, claudeInfo, data)
+		err = HandleStreamResponseData(c, info, claudeInfo, data, conversion)
 		if err != nil {
 			sr.Stop(err)
 			return
@@ -256,6 +278,25 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 	}
 
 	HandleStreamFinalResponse(c, info, claudeInfo)
+	if conversion != nil {
+		// Only finalize after the scanner has verified the upstream terminal event.
+		usage := buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage)
+		chunk := helper.GenerateFinalUsageResponse(claudeInfo.ResponseId, claudeInfo.Created, info.UpstreamModelName, usage)
+		results, convertErr := relayconvert.ConvertStreamResponseChunk(c, info, conversion, chunk)
+		if convertErr != nil {
+			return claudeInfo.Usage, types.NewError(convertErr, types.ErrorCodeBadResponse)
+		}
+		if sendErr := writeClaudeConvertedEvents(c, info, results); sendErr != nil {
+			return claudeInfo.Usage, sendErr
+		}
+		results, convertErr = relayconvert.FinalizeStreamResponse(c, info, conversion)
+		if convertErr != nil {
+			return claudeInfo.Usage, types.NewError(convertErr, types.ErrorCodeBadResponse)
+		}
+		if sendErr := writeClaudeConvertedEvents(c, info, results); sendErr != nil {
+			return claudeInfo.Usage, sendErr
+		}
+	}
 	return claudeInfo.Usage, nil
 }
 
@@ -295,6 +336,15 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		}
 	case types.RelayFormatClaude:
 		responseData = data
+	case types.RelayFormatOpenAIResponses, types.RelayFormatGemini:
+		converted, convertErr := relayconvert.ConvertResponse(c, info, info.RelayFormat, &claudeResponse)
+		if convertErr != nil {
+			return types.NewError(convertErr, types.ErrorCodeBadResponseBody)
+		}
+		responseData, err = common.Marshal(converted.Value)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeBadResponseBody)
+		}
 	}
 
 	if claudeResponse.Usage != nil && claudeResponse.Usage.ServerToolUse != nil && claudeResponse.Usage.ServerToolUse.WebSearchRequests > 0 {
@@ -325,4 +375,34 @@ func ClaudeHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayI
 		return nil, handleErr
 	}
 	return claudeInfo.Usage, nil
+}
+
+// writeClaudeConvertedEvents writes registered conversion results using the client wire format.
+func writeClaudeConvertedEvents(c *gin.Context, info *relaycommon.RelayInfo, results []relayconvert.ResponseResult) *types.NewAPIError {
+	for _, result := range results {
+		var data []byte
+		var err error
+		if event, ok := result.Value.(relayconvert.ChatToResponsesStreamEvent); ok {
+			data, err = common.Marshal(event.Payload)
+			if err == nil {
+				helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: event.Type}, string(data))
+			}
+		} else {
+			data, err = common.Marshal(result.Value)
+			if err == nil {
+				err = helper.ObjectData(c, result.Value)
+			}
+		}
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeBadResponse)
+		}
+		if info.StreamStatus != nil {
+			observation := helper.ObserveStreamDataPayload(string(data), info.RelayFormat)
+			if observation.Meaningful {
+				info.StreamStatus.MarkClientPayloadCommitted()
+			}
+			info.StreamStatus.ObserveToolPayloadBytes(observation.ToolNameBytes, observation.ToolArgumentBytes)
+		}
+	}
+	return nil
 }

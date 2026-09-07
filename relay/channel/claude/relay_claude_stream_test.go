@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -104,4 +105,43 @@ func TestClaudeStreamHandlerConvertedOutputTracksCommittedPayloadWithoutPolicyHe
 	assert.True(t, info.StreamStatus.ClientPayloadIsCommitted())
 	assert.Contains(t, recorder.Body.String(), "partial")
 	assert.Empty(t, info.StreamStatus.StreamPolicyVersion())
+}
+
+// TestClaudeConvertedStreamRequiresTerminal covers both newly connected client formats.
+func TestClaudeConvertedStreamRequiresTerminal(t *testing.T) {
+	old := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = old })
+	for _, format := range []types.RelayFormat{types.RelayFormatOpenAIResponses, types.RelayFormatGemini} {
+		for _, complete := range []bool{false, true} {
+			t.Run(string(format)+fmt.Sprint(complete), func(t *testing.T) {
+				body := strings.Join([]string{
+					`data: {"type":"message_start","message":{"id":"msg_1","type":"message","model":"MODEL_X","usage":{"input_tokens":2,"output_tokens":0}}}`,
+					`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`,
+					`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
+				}, "\n") + "\n"
+				if complete {
+					body += `data: {"type":"message_stop"}` + "\n"
+				}
+				ctx, recorder, info, response := newClaudeStreamFixture(body)
+				info.RelayFormat = format
+				usage, relayErr := ClaudeStreamHandler(ctx, response, info)
+				require.NotNil(t, usage)
+				assert.Contains(t, recorder.Body.String(), "hello")
+				if complete {
+					require.Nil(t, relayErr)
+					assert.Equal(t, 3, usage.TotalTokens)
+				} else {
+					require.NotNil(t, relayErr)
+				}
+				if format == types.RelayFormatOpenAIResponses {
+					if complete {
+						assert.Contains(t, recorder.Body.String(), "response.completed")
+					} else {
+						assert.NotContains(t, recorder.Body.String(), "response.completed")
+					}
+				}
+			})
+		}
+	}
 }

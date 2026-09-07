@@ -107,10 +107,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		info.UpstreamModelName = request.Model
 	}
 
-	passThroughRequest := model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled
-	if isNormalizedProtocolRoute(info) {
-		passThroughRequest = false
-	}
+	passThroughRequest := (model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled) && textRouteAllowsPassThrough(info)
 	if !passThroughRequest {
 		before := request.GetTokenCountMeta()
 		if applyClaudeSystemPrompt(c, request, systemPrompt, prependSystemPrompt) {
