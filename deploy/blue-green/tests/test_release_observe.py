@@ -135,6 +135,19 @@ action_observe --seconds 600 --interval 30
         self.assertIn("observation=passed", evidence)
         self.assertIn("errors_5xx=2", evidence)
 
+    def test_protocol_uncertainty_preserves_distinct_exit(self):
+        """Insufficient evidence neither finalizes nor claims a candidate fault."""
+        result, evidence, _ = self.run_observe(protocol_rc=3)
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("observation=inconclusive", evidence)
+        self.assertIn("elapsed_seconds=600", evidence)
+
+    def test_http_failure_is_not_waived_by_protocol_uncertainty(self):
+        """A hard HTTP regression takes precedence over a protocol hold."""
+        result, evidence, _ = self.run_observe(protocol_rc=3, http_code=503)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("observation=failed", evidence)
+
 
 if __name__ == "__main__":
     unittest.main()

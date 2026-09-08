@@ -520,6 +520,8 @@ comparison_result=0
 python3 - "$output_dir/final-request-success.tsv" "$output_dir/final-request-coverage.tsv" "$output_dir/comparison.tsv" "$max_drop_bps" "$min_requests" <<'PY' || comparison_result=$?
 import csv
 from collections import defaultdict
+import math
+from statistics import NormalDist
 import sys
 
 source, coverage_source, target = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -559,11 +561,26 @@ cohorts = {key[1] for key in rows}
 for path in ("/v1/messages", "/v1/responses", "/v1/chat/completions", "/gemini/content"):
     if not any(cohort[0] == path for cohort in cohorts):
         cohorts.add((path, "<missing>", "", "", ""))
+# One planned comparison across all cohorts. Bonferroni accounts for both
+# proportion intervals in each cohort; correlated traffic still needs attribution.
+z = NormalDist().inv_cdf(1 - 0.05 / (4 * max(1, len(cohorts))))
+
+
+def wilson(successes, requests):
+    """Return bounded score intervals, including zero/all-success cohorts."""
+    rate = successes / requests
+    scale = 1 + z*z / requests
+    center = (rate + z*z / (2*requests)) / scale
+    radius = z * math.sqrt(rate*(1-rate)/requests + z*z/(4*requests*requests)) / scale
+    return max(0, center-radius), min(1, center+radius)
+
+
 failed = False
+inconclusive = False
 compared = 0
 with open(target, "w", encoding="utf-8", newline="") as handle:
     writer = csv.writer(handle, delimiter="\t")
-    writer.writerow([*cohort_fields, "pre_requests", "pre_success_bps", "post_requests", "post_success_bps", "drop_bps", "unresolved_requests", "model_evidence", "result"])
+    writer.writerow([*cohort_fields, "pre_requests", "pre_success_bps", "post_requests", "post_success_bps", "drop_bps", "unresolved_requests", "model_evidence", "result", "reason"])
     for cohort in sorted(cohorts):
         pre, post = rows[("pre", cohort)], rows[("post", cohort)]
         pre_bps = round(10000 * pre["successes"] / pre["requests"]) if pre["requests"] else 0
@@ -574,26 +591,39 @@ with open(target, "w", encoding="utf-8", newline="") as handle:
                     "protocol_stream" if cohort[4] == "<all>" else
                     "missing" if cohort[4] == "" else "recorded")
         result = "insufficient_samples"
+        reason = "coverage_gap"
         if cohort[1] == "<missing>":
             result = "not_observed"
-        elif unresolved or post["conversion"]:
-            result = "failed"
+        elif post["unresolved"] or post["conversion"]:
+            result, reason = "failed", "candidate_integrity_error"
+        elif pre["unresolved"]:
+            result, reason = "inconclusive", "baseline_incomplete"
         elif sufficient:
             compared += 1
             passed = (10000 * (pre["successes"] * post["requests"] - post["successes"] * pre["requests"])
                       <= max_drop_bps * pre["requests"] * post["requests"])
-            result = "passed" if passed else "failed"
+            if passed:
+                result, reason = "passed", "within_observed_margin"
+            else:
+                lower_pre, _ = wilson(pre["successes"], pre["requests"])
+                _, upper_post = wilson(post["successes"], post["requests"])
+                confirmed = lower_pre - upper_post > max_drop_bps / 10000
+                result = "failed" if confirmed else "inconclusive"
+                reason = "supported_rate_drop" if confirmed else "uncertain_rate_drop"
         failed = failed or result == "failed"
+        inconclusive = inconclusive or result == "inconclusive"
         writer.writerow([*cohort, pre["requests"], pre_bps, post["requests"], post_bps, pre_bps - post_bps,
-                         unresolved, evidence, result])
+                         unresolved, evidence, result, reason])
     if not compared:
-        writer.writerow(["<all>", "", "", "", "", 0, 0, 0, 0, 0, 0, "no_comparable_traffic", "failed"])
-sys.exit(1 if failed or not compared else 0)
+        writer.writerow(["<all>", "", "", "", "", 0, 0, 0, 0, 0, 0, "no_comparable_traffic", "inconclusive", "coverage_gap"])
+sys.exit(1 if failed else 3 if inconclusive or not compared else 0)
 
 PY
 
 if ((comparison_result == 0)); then
   printf 'result=passed gate=protocol_stability channel_id=%s cutover_epoch=%s\n' "$channel_id" "$cutover_epoch" >"$output_dir/gate.result"
+elif ((comparison_result == 3)); then
+  printf 'result=inconclusive gate=protocol_stability channel_id=%s cutover_epoch=%s\n' "$channel_id" "$cutover_epoch" >"$output_dir/gate.result"
 else
   printf 'result=failed gate=protocol_stability channel_id=%s cutover_epoch=%s\n' "$channel_id" "$cutover_epoch" >"$output_dir/gate.result"
 fi

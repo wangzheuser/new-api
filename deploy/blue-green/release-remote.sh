@@ -538,6 +538,13 @@ action_observe() {
   actionable_allowed_errors_5xx=$(( ((sample_count - verified_post) * (actionable_baseline_errors * 10000 / (baseline_samples - verified_pre) + 200) + 9999) / 10000 ))
   printf 'verified_upstream_503_pre=%s verified_upstream_503_post=%s actionable_errors_5xx=%s actionable_allowed_errors_5xx=%s\n' \
     "$verified_pre" "$verified_post" "$actionable_errors" "$actionable_allowed_errors_5xx" >> "$STATE_DIR/observation.metrics"
+  if (( actionable_errors <= actionable_allowed_errors_5xx && protocol_result == 3 )); then
+    # Evidence gaps are not candidate faults; callers must not finalize this state.
+    trap - ERR
+    printf 'observation=inconclusive release_id=%s production=%s version=%s requested_seconds=%s elapsed_seconds=%s checks=%s start=%s end=%s reason=protocol_evidence\n' \
+      "$RELEASE_ID" "$NEW" "$VERSION" "$seconds" "$elapsed_seconds" "$checks" "$start" "$end" | tee "$STATE_DIR/observation.result"
+    exit 3
+  fi
   (( actionable_errors <= actionable_allowed_errors_5xx && protocol_result == 0 ))
   trap - ERR
   printf 'observation=passed release_id=%s production=%s version=%s requested_seconds=%s elapsed_seconds=%s interval=%s checks=%s start=%s end=%s baseline_samples=%s baseline_errors_5xx=%s baseline_rate_bps=%s samples=%s errors_5xx=%s current_rate_bps=%s allowed_rate_bps=%s allowed_errors_5xx=%s\n' \

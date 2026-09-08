@@ -12,7 +12,7 @@ SCRIPT = Path(os.environ.get("GATE_SCRIPT", Path(__file__).resolve().parents[1] 
 class GateComparisonTest(unittest.TestCase):
     """Protect comparable history and distinguish absent coverage from failures."""
 
-    def compare(self, rows, unresolved=0):
+    def compare(self, rows, unresolved=0, gap_window="post"):
         """Run the production comparison stage without Docker or production data."""
         code = SCRIPT.read_text().split("<<'PY' || comparison_result=$?\n", 1)[1].split("\nPY\n", 1)[0]
         fields = ["window", "request_path", "is_stream", "channel_id", "model_name", "upstream_model", "final_requests", "successes", "conversion_errors"]
@@ -26,7 +26,7 @@ class GateComparisonTest(unittest.TestCase):
                 w = csv.writer(f, delimiter="\t")
                 w.writerow(fields[:6] + ["unresolved_requests"])
                 for row in rows:
-                    w.writerow(row[:6] + [unresolved if row[0] == "post" else 0])
+                    w.writerow(row[:6] + [unresolved if row[0] == gap_window else 0])
             result = subprocess.run(["python3", "-", str(root / "final.tsv"), str(root / "coverage.tsv"), str(root / "out.tsv"), "200", "10"], input=code, text=True, capture_output=True)
             output = (root / "out.tsv").read_text()
         return result, output
@@ -58,10 +58,29 @@ class GateComparisonTest(unittest.TestCase):
 
     def test_no_comparable_traffic_does_not_pass(self):
         rows = [self.row("pre", requests=1, successes=1), self.row("post", requests=1, successes=1)]
-        self.assertEqual(self.compare(rows)[0].returncode, 1)
+        self.assertEqual(self.compare(rows)[0].returncode, 3)
 
     def test_unresolved_or_local_conversion_still_blocks(self):
         rows = [self.row("pre"), self.row("post")]
         self.assertEqual(self.compare(rows, unresolved=1)[0].returncode, 1)
         rows.append(self.row("post", channel=2, requests=1, successes=0, conversion=1))
         self.assertEqual(self.compare(rows)[0].returncode, 1)
+
+    def test_single_success_difference_is_inconclusive(self):
+        """The observed 3/25 to 2/24 change does not establish a regression."""
+        result, report = self.compare([self.row("pre", requests=25, successes=3), self.row("post", requests=24, successes=2)])
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("uncertain_rate_drop", report)
+
+    def test_baseline_only_gap_is_inconclusive(self):
+        """Missing old-version evidence is not a candidate integrity failure."""
+        rows = [self.row("pre"), self.row("post")]
+        result, report = self.compare(rows, unresolved=1, gap_window="pre")
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("baseline_incomplete", report)
+
+    def test_large_drop_remains_failure(self):
+        """Strong regression evidence cannot be hidden as sampling noise."""
+        result, report = self.compare([self.row("pre", requests=1000, successes=1000), self.row("post", requests=1000, successes=0)])
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("supported_rate_drop", report)

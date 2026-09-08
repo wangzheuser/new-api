@@ -183,7 +183,8 @@ class ProtocolStabilityGateTest(unittest.TestCase):
                 }
                 row["is_stream"] = True
         result, _ = self.run_gate()
-        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(result.returncode, 3, result.stdout)
+        # Two-request cohorts retain the failure signal but do not establish a rate regression.
 
     def test_nonstream_success_does_not_hide_stream_regression(self):
         """A protocol's total rate cannot mask its streaming cohort dropping."""
@@ -195,7 +196,8 @@ class ProtocolStabilityGateTest(unittest.TestCase):
             ):
                 row["type"] = 5
         result, _ = self.run_gate()
-        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(result.returncode, 3, result.stdout)
+        # Two-request cohorts retain the failure signal but do not establish a rate regression.
 
     def test_chat_failure_is_not_omitted(self):
         """Chat failures are part of the four-protocol release surface."""
@@ -206,7 +208,8 @@ class ProtocolStabilityGateTest(unittest.TestCase):
             ):
                 row["type"] = 5
         result, _ = self.run_gate()
-        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(result.returncode, 3, result.stdout)
+        # Two-request cohorts retain the failure signal but do not establish a rate regression.
 
     def test_retry_then_success_is_one_final_request(self):
         """Intermediate failures and a later channel success do not double count."""
@@ -249,10 +252,11 @@ class ProtocolStabilityGateTest(unittest.TestCase):
         """A charged stream without a recorded terminal status is not verified success."""
         self.rows[-1]["other"].pop("stream_status")
         result, _ = self.run_gate()
-        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(result.returncode, 3, result.stdout)
+        # Two-request cohorts retain the failure signal but do not establish a rate regression.
 
     def test_cancellation_and_rate_limit_are_reported_not_waived(self):
-        """Cancellation/429 counters remain visible while the regression still fails."""
+        """Cancellation/429 counters remain visible and cannot pass a sparse comparison."""
         row = self.rows[-1]
         row["type"] = 5
         row["other"].update(
@@ -260,7 +264,8 @@ class ProtocolStabilityGateTest(unittest.TestCase):
             stream_status={"status": "error", "end_reason": "client_gone"},
         )
         result, files = self.run_gate()
-        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(result.returncode, 3, result.stdout)
+        # Two-request cohorts retain the failure signal but do not establish a rate regression.
         counts = list(
             csv.DictReader(
                 io.StringIO(files["final-request-success.tsv"]), delimiter="\t"
@@ -294,7 +299,8 @@ class ProtocolStabilityGateTest(unittest.TestCase):
                 additions.append(other)
         self.rows.extend(additions)
         result, _ = self.run_gate()
-        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(result.returncode, 3, result.stdout)
+        # Two-request cohorts retain the failure signal but do not establish a rate regression.
 
     def test_cross_window_retry_is_not_counted_twice(self):
         """The first observed attempt assigns a request to one measurement window."""
@@ -474,7 +480,8 @@ class ProtocolStabilityGateTest(unittest.TestCase):
         row["type"] = 5
         row["other"].pop("upstream_model_name")
         result, files = self.run_gate()
-        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(result.returncode, 3, result.stdout)
+        # Two-request cohorts retain the failure signal but do not establish a rate regression.
         self.assertIn("legacy_client_model", files["comparison.tsv"])
 
     def test_native_consumption_uses_existing_unmapped_model_contract(self):
