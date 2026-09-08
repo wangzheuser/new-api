@@ -193,6 +193,7 @@ action_self_check() {
   done
   bash -n "$0"
   bash -n "$SCRIPT_DIR/protocol-stability-gate.sh"
+  python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SCRIPT_DIR/low-traffic-evidence.py"
   load_config
   render_compose blue >/dev/null
   render_compose green >/dev/null
@@ -312,6 +313,7 @@ EOF
 action_gate() {
   # Missing observation code must fail before production cutover.
   bash -n "$SCRIPT_DIR/protocol-stability-gate.sh"
+  python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SCRIPT_DIR/low-traffic-evidence.py"
   load_config
   # shellcheck disable=SC1090
   source "$STATE_DIR/stage.env"
@@ -486,13 +488,13 @@ action_observe() {
   # application requests from the new slot with the immediately preceding
   # rollback-baseline window; tolerate at most a two-percentage-point increase.
   sample_count="$(grep -Ec '^\[GIN\].*\|[[:space:]]+[0-9]{3}[[:space:]]+\|' "$observation_log" || true)"
-  (( sample_count > 0 ))
+  # Empty natural traffic is handled by the explicit low-traffic evidence path below.
   errors_5xx="$(grep -Ec '^\[GIN\].*\|[[:space:]]+5[0-9][0-9][[:space:]]+\|' "$observation_log" || true)"
   baseline_samples="$(grep -Ec '^\[GIN\].*\|[[:space:]]+[0-9]{3}[[:space:]]+\|' "$baseline_log" || true)"
-  (( baseline_samples > 0 ))
+  # Preserve a zero baseline; it is not a measured zero-percent error rate.
   baseline_errors_5xx="$(grep -Ec '^\[GIN\].*\|[[:space:]]+5[0-9][0-9][[:space:]]+\|' "$baseline_log" || true)"
-  baseline_rate_bps=$(( baseline_errors_5xx * 10000 / baseline_samples ))
-  current_rate_bps=$(( errors_5xx * 10000 / sample_count ))
+  baseline_rate_bps=$(( baseline_errors_5xx * 10000 / (baseline_samples > 0 ? baseline_samples : 1) ))
+  current_rate_bps=$(( errors_5xx * 10000 / (sample_count > 0 ? sample_count : 1) ))
   allowed_rate_bps=$(( baseline_rate_bps + 200 ))
   # A finite request window cannot realize every basis-point rate exactly. Round
   # the allowed error count up so the fractional boundary does not reject one request.
@@ -533,11 +535,26 @@ action_observe() {
   (( verified_pre <= baseline_errors_5xx && verified_post <= errors_5xx ))
   actionable_errors=$(( errors_5xx - verified_post ))
   actionable_baseline_errors=$(( baseline_errors_5xx - verified_pre ))
-  (( baseline_samples > verified_pre && sample_count > verified_post ))
+  (( baseline_samples >= verified_pre && sample_count >= verified_post ))
   local actionable_allowed_errors_5xx
-  actionable_allowed_errors_5xx=$(( ((sample_count - verified_post) * (actionable_baseline_errors * 10000 / (baseline_samples - verified_pre) + 200) + 9999) / 10000 ))
+  actionable_allowed_errors_5xx=0
+  if (( baseline_samples > verified_pre )); then
+    actionable_allowed_errors_5xx=$(( ((sample_count - verified_post) * (actionable_baseline_errors * 10000 / (baseline_samples - verified_pre) + 200) + 9999) / 10000 ))
+  fi
   printf 'verified_upstream_503_pre=%s verified_upstream_503_post=%s actionable_errors_5xx=%s actionable_allowed_errors_5xx=%s\n' \
     "$verified_pre" "$verified_post" "$actionable_errors" "$actionable_allowed_errors_5xx" >> "$STATE_DIR/observation.metrics"
+  local evidence_mode=natural_comparison
+  if [[ "${ALLOW_LOW_TRAFFIC_RELEASE:-0}" == 1 ]] && (( protocol_result == 3 && errors_5xx == 0 )); then
+    # This is delivery evidence, not a claim of statistical noninferiority.
+    docker logs --since "$CUTOVER_AT" "$NEW" > "$STATE_DIR/candidate-probe-app.log" 2>&1
+    chmod 600 "$STATE_DIR/candidate-probe-app.log"
+    if python3 "$SCRIPT_DIR/low-traffic-evidence.py" "$STATE_DIR/public-business.json" \
+      "$STATE_DIR/candidate-probe-app.log" "$protocol_dir" > "$STATE_DIR/low-traffic.result" 2>&1; then
+      evidence_mode=verified_low_traffic
+      protocol_result=0
+    fi
+  fi
+  printf 'release_evidence=%s\n' "$evidence_mode" >> "$STATE_DIR/observation.metrics"
   if (( actionable_errors <= actionable_allowed_errors_5xx && protocol_result == 3 )); then
     # Evidence gaps are not candidate faults; callers must not finalize this state.
     trap - ERR
@@ -547,8 +564,8 @@ action_observe() {
   fi
   (( actionable_errors <= actionable_allowed_errors_5xx && protocol_result == 0 ))
   trap - ERR
-  printf 'observation=passed release_id=%s production=%s version=%s requested_seconds=%s elapsed_seconds=%s interval=%s checks=%s start=%s end=%s baseline_samples=%s baseline_errors_5xx=%s baseline_rate_bps=%s samples=%s errors_5xx=%s current_rate_bps=%s allowed_rate_bps=%s allowed_errors_5xx=%s\n' \
-    "$RELEASE_ID" "$NEW" "$VERSION" "$seconds" "$elapsed_seconds" "$interval" "$checks" "$start" "$end" \
+  printf 'observation=passed evidence_mode=%s release_id=%s production=%s version=%s requested_seconds=%s elapsed_seconds=%s interval=%s checks=%s start=%s end=%s baseline_samples=%s baseline_errors_5xx=%s baseline_rate_bps=%s samples=%s errors_5xx=%s current_rate_bps=%s allowed_rate_bps=%s allowed_errors_5xx=%s\n' \
+    "$evidence_mode" "$RELEASE_ID" "$NEW" "$VERSION" "$seconds" "$elapsed_seconds" "$interval" "$checks" "$start" "$end" \
     "$baseline_samples" "$baseline_errors_5xx" "$baseline_rate_bps" "$sample_count" "$errors_5xx" "$current_rate_bps" "$allowed_rate_bps" "$allowed_errors_5xx" |
     tee "$STATE_DIR/observation.result"
 }

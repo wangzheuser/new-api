@@ -146,7 +146,7 @@ deploy/blue-green/build-local.sh prepare \
 
 - `release.env`；
 - 镜像 `.tar.zst`；
-- `release-remote.sh` 与同提交的 `protocol-stability-gate.sh`（必须同目录上传）；
+- `release-remote.sh`、`protocol-stability-gate.sh`、`low-traffic-evidence.py`（必须同提交、同目录上传）；
 - `docker-compose.slot.yml`；
 - 两套 target-clean-dist 归档。
 
@@ -329,3 +329,22 @@ CONFIRM_ROLLBACK=<release-id> ./release-remote.sh rollback --execute
 失败后先执行 `status`，从最近已验证阶段继续。禁止重新执行已经验证的数据库备份、镜像
 导入或生产切流。发布脚本、Compose 模板、`release.env`、阶段结果和 SHA 都作为本次制品
 保留，服务器终端不得临时拼接另一套发布逻辑。
+
+### 低流量交付证据（显式启用，2026-09-08）
+
+没有生产样本不等于代码故障，也不等于成功率已验证。默认仍保持 strict/inconclusive。
+本次发布需要低流量交付时，可仅在该 release 的 `server.env` 设置
+`ALLOW_LOW_TRAFFIC_RELEASE=1`，不修改应用运行配置。必须提前选定观察时长，不能循环检验直到通过。
+
+只有协议门禁明确 `no_comparable_traffic`，且不存在分组成功率下降待判定、未结算、
+本地转换错误、候选自然业务失败或任何观察期 HTTP 5xx，才校验交付证据：
+Chat/Responses各流式与非流式四项真实探测均有非空输出、完成标记、唯一成功消费记录；
+流式状态ok且settled。每项request_id与切流后当前候选容器的同路径HTTP200访问记录对应。
+缺失文件、旧槽位探测、重复请求、部分结算、错误或覆盖不全均不接受。
+
+通过后记录 `observation=passed evidence_mode=verified_low_traffic`，原业务统计仍保留
+inconclusive/not_observed，不能宣称自然流量成功率无回归。健康、版本、账务、授权、浏览器、
+至少十分钟真实观察和回滚资产要求不变；没有基线时不允许任何HTTP5xx。
+
+执行端上传浏览器完成标记时先写 `public-browser.exit.pending`，成功后在服务器同目录
+原子rename为`public-browser.exit`；读取端只接受非空完整标记，避免SFTP创建空文件的竞争。

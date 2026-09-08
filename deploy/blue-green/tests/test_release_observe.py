@@ -16,7 +16,7 @@ SCRIPT = Path(
 class ReleaseObserveTest(unittest.TestCase):
     """Protect failure evidence and independent business/HTTP gates."""
 
-    def run_observe(self, protocol_rc=0, http_code=200, unhealthy=False, verified=0):
+    def run_observe(self, protocol_rc=0, http_code=200, unhealthy=False, verified=0, allow=False, valid=True, baseline_empty=False):
         """Run the real function; replace only Docker, configuration, time and child gate."""
         with tempfile.TemporaryDirectory(prefix="new-api-observe-test-") as temp:
             root = Path(temp)
@@ -36,6 +36,7 @@ class ReleaseObserveTest(unittest.TestCase):
                 'while [[ $# -gt 0 ]]; do if [[ "$1" == --output-dir ]]; then out="$2"; break; fi; shift; done\n'
                 f'mkdir -p "$out"; printf "0 {verified}\\n" > "$out/verified-upstream-counts.txt"\nexit {protocol_rc}\n'
             )
+            (root / "low-traffic-evidence.py").write_text("raise SystemExit(" + ("0" if valid else "1") + ")\n")
             harness = r"""source "$1/release-definitions.sh"
 STATE_DIR="$1/state"
 BACKUP_ROOT="$1/backup"
@@ -60,6 +61,7 @@ docker() {
       *OOMKilled*) echo false ;;
     esac
   elif [[ "$1" == logs ]]; then
+    [[ "$TEST_BASELINE_EMPTY" == 1 && "$*" == *production ]] && return 0
     local code=200
     local index
     for index in {1..10}; do
@@ -76,6 +78,8 @@ action_observe --seconds 600 --interval 30
                 env={
                     **os.environ,
                     "TEST_HTTP_CODE": str(http_code),
+                    "ALLOW_LOW_TRAFFIC_RELEASE": "1" if allow else "0",
+                    "TEST_BASELINE_EMPTY": "1" if baseline_empty else "0",
                     "TEST_HEALTH": "unhealthy" if unhealthy else "healthy",
                 },
                 text=True,
@@ -147,6 +151,16 @@ action_observe --seconds 600 --interval 30
         result, evidence, _ = self.run_observe(protocol_rc=3, http_code=503)
         self.assertEqual(result.returncode, 1)
         self.assertIn("observation=failed", evidence)
+
+    def test_empty_baseline_needs_explicit_delivery_evidence(self):
+        self.assertEqual(self.run_observe(protocol_rc=3, baseline_empty=True)[0].returncode, 3)
+        result, evidence, _ = self.run_observe(protocol_rc=3, baseline_empty=True, allow=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("evidence_mode=verified_low_traffic", evidence)
+
+    def test_low_traffic_mode_cannot_hide_errors_or_missing_probes(self):
+        for kwargs in ({"protocol_rc":1}, {"protocol_rc":3,"http_code":503}, {"protocol_rc":3,"valid":False}):
+            self.assertNotEqual(self.run_observe(allow=True, **kwargs)[0].returncode, 0)
 
 
 if __name__ == "__main__":
