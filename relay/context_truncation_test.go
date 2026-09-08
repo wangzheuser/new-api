@@ -29,7 +29,7 @@ func TestInputPolicyPreSendGates(t *testing.T) {
 	oldCount := constant.CountToken
 	constant.CountToken = false
 	t.Cleanup(func() { constant.CountToken = oldCount })
-	for _, scenario := range []string{"trim", "missing-output", "protected", "override", "balance", "final-growth", "pass-through", "multimodal"} {
+	for _, scenario := range []string{"trim", "missing-output", "protected", "override", "balance", "final-growth", "pass-through", "unsupported-media"} {
 		t.Run(scenario, func(t *testing.T) {
 			calls := 0
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.WriteHeader(200) }))
@@ -56,16 +56,16 @@ func TestInputPolicyPreSendGates(t *testing.T) {
 			if scenario == "balance" {
 				info.Billing = &rejectedPolicyReserve{}
 			}
-			if scenario == "multimodal" {
-				request.Messages[2].Content = []map[string]string{{"type": "image_url", "image_url": "https://example.invalid/image"}}
+			if scenario == "unsupported-media" {
+				request.Messages[2].Content = []map[string]string{{"type": "input_audio", "data": "audio"}}
 			}
 			err := prepareTextInputPolicies(c, info, request, scenario == "pass-through")
 			switch scenario {
-			case "missing-output", "protected", "override", "balance":
+			case "missing-output", "protected", "override", "balance", "unsupported-media":
 				require.NotNil(t, err)
 				assert.Equal(t, 0, calls)
 				assert.Len(t, request.Messages, map[bool]int{true: 1, false: 3}[scenario == "protected"])
-			case "pass-through", "multimodal":
+			case "pass-through":
 				require.Nil(t, err)
 				assert.False(t, info.ContextTruncation.Applied)
 				assert.Nil(t, info.ValidateInputPolicyBody)

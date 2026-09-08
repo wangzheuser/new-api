@@ -769,6 +769,15 @@ func retryBlockedByClientCommit(c *gin.Context, relayInfo *relaycommon.RelayInfo
 
 // resolveConfiguredFinalRelayError applies channel and system final_error rules after retries finish.
 func resolveConfiguredFinalRelayError(c *gin.Context, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
+	// Pre-send truncation failures are local request errors, not an upstream outage.
+	if relayInfo != nil && relayInfo.LastError != nil && relayInfo.ContextTruncation != nil && relayInfo.ContextTruncation.Enabled {
+		code := string(relayInfo.LastError.GetErrorCode())
+		_, upstream := relayInfo.LastError.GetUpstreamStatusCode()
+		if !upstream && relayInfo.LastError.StatusCode == http.StatusBadRequest &&
+			(code == "context_length_exceeded" || strings.HasPrefix(code, "context_truncation_")) {
+			return relayInfo.LastError
+		}
+	}
 	// Local conversion failures must not be presented as upstream congestion.
 	if relayInfo != nil && relayInfo.LastError != nil &&
 		relayInfo.LastError.GetErrorCode() == types.ErrorCodeConvertRequestFailed {

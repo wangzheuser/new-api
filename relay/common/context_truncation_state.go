@@ -4,6 +4,7 @@ import "github.com/QuantumNous/new-api/dto"
 
 // ContextTruncationState belongs to one upstream attempt, never the original request.
 type ContextTruncationState struct {
+	Enabled         bool                      `json:"enabled"`
 	Rule            dto.ContextTruncationRule `json:"-"`
 	Source          string                    `json:"source"`
 	Model           string                    `json:"model"`

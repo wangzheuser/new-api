@@ -18,8 +18,16 @@ import (
 // prepareTextInputPolicies operates only on the handler's attempt-local request copy.
 func prepareTextInputPolicies(c *gin.Context, info *relaycommon.RelayInfo, request dto.Request, passThrough bool) *types.NewAPIError {
 	rule, source, enabled := model_setting.ResolveContextTruncation(info.ChannelOtherSettings.ContextTruncation, info.GetAttemptModelName())
-	if !enabled && info.CacheUsageSimulation == nil {
-		return nil
+	state := &relaycommon.ContextTruncationState{Rule: rule, Source: source, Model: info.GetAttemptModelName(), Enabled: enabled}
+	info.ContextTruncation = state
+	if !enabled {
+		state.Reason = "rule_disabled"
+		if source == "disabled" {
+			state.Reason = "rule_not_matched"
+		}
+		if info.CacheUsageSimulation == nil {
+			return nil
+		}
 	}
 	body, err := common.Marshal(request)
 	if err != nil {
@@ -32,15 +40,17 @@ func prepareTextInputPolicies(c *gin.Context, info *relaycommon.RelayInfo, reque
 	if !enabled {
 		return reserveInputPolicy(c, info, request, info.GetEstimatePromptTokens())
 	}
-	state := &relaycommon.ContextTruncationState{Rule: rule, Source: source, Model: info.GetAttemptModelName()}
-	info.ContextTruncation = state
 	if passThrough {
 		state.Reason = "pass_through"
 		return reserveInputPolicy(c, info, request, info.GetEstimatePromptTokens())
 	}
+	_, reason = contexttruncate.TruncationShape(body)
 	if reason != "" {
 		state.Reason = reason
-		return reserveInputPolicy(c, info, request, info.GetEstimatePromptTokens())
+		if reason == "provider_state_reference" {
+			return reserveInputPolicy(c, info, request, info.GetEstimatePromptTokens())
+		}
+		return inputPolicyError(fmt.Errorf("context_truncation_unsupported_content: %s", reason))
 	}
 	if info.ApiType != constant.APITypeOpenAI && info.ApiType != constant.APITypeAnthropic && info.ApiType != constant.APITypeGemini {
 		state.Reason = "context_truncation_unsupported_conversion"
@@ -65,7 +75,11 @@ func prepareTextInputPolicies(c *gin.Context, info *relaycommon.RelayInfo, reque
 		if err = common.Unmarshal(b, copy); err != nil {
 			return 0, err
 		}
-		return service.CountRequestToken(c, copy.GetTokenCountMeta(), info)
+		meta, err := contextImageTokenMeta(copy)
+		if err != nil {
+			return 0, err
+		}
+		return service.CountRequestToken(c, meta, info)
 	}
 	trimmed, result, err := contexttruncate.Trim(c.Request.Context(), body, budget, rule.Keep(), count)
 	state.Before = result.Before
@@ -100,7 +114,7 @@ func prepareTextInputPolicies(c *gin.Context, info *relaycommon.RelayInfo, reque
 		default:
 			return inputPolicyError(fmt.Errorf("context_truncation_unsupported_conversion"))
 		}
-		if _, reason := contexttruncate.Shape(final); reason != "" {
+		if _, reason := contexttruncate.TruncationShape(final); reason != "" {
 			return inputPolicyError(fmt.Errorf("context_truncation_unsupported_conversion"))
 		}
 		if err := common.Unmarshal(final, outgoing); err != nil {
@@ -110,7 +124,11 @@ func prepareTextInputPolicies(c *gin.Context, info *relaycommon.RelayInfo, reque
 		if err != nil {
 			return inputPolicyError(err)
 		}
-		tokens, err := service.CountRequestToken(c, outgoing.GetTokenCountMeta(), info)
+		meta, err := contextImageTokenMeta(outgoing)
+		if err != nil {
+			return inputPolicyError(err)
+		}
+		tokens, err := service.CountRequestToken(c, meta, info)
 		if err != nil {
 			return inputPolicyError(err)
 		}

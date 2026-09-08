@@ -22,6 +22,11 @@ type Result struct {
 
 // Shape identifies the message array and excludes incomplete or multimodal histories.
 func Shape(body []byte) (field, reason string) {
+	return shape(body, false)
+}
+
+// shape keeps cache eligibility text-only while allowing independently validated image histories.
+func shape(body []byte, images bool) (field, reason string) {
 	root := gjson.ParseBytes(body)
 	for _, path := range []string{"modalities", "generationConfig.responseModalities", "generation_config.response_modalities"} {
 		for _, modality := range root.Get(path).Array() {
@@ -63,6 +68,12 @@ func Shape(body []byte) (field, reason string) {
 		if field == "contents" {
 			blocks = m.Get("parts")
 		}
+		if images {
+			if reason := imageHistoryBlocks(blocks, field == "contents"); reason != "" {
+				return "", reason
+			}
+			continue
+		}
 		for _, b := range blocks.Array() {
 			t := b.Get("type").String()
 			if t == "image" || t == "image_url" || t == "input_image" || t == "input_audio" || t == "audio" || t == "file" || t == "document" || t == "input_file" || b.Get("inlineData").Exists() || b.Get("fileData").Exists() || b.Get("inline_data").Exists() || b.Get("file_data").Exists() {
@@ -90,9 +101,12 @@ func Shape(body []byte) (field, reason string) {
 // Trim removes oldest dependency-connected turn groups. Count measures the complete candidate body.
 func Trim(ctx context.Context, body []byte, budget, keep int, count func([]byte) (int, error)) ([]byte, Result, error) {
 	result := Result{}
-	field, reason := Shape(body)
+	field, reason := TruncationShape(body)
 	if reason != "" {
 		result.BypassReason = reason
+		if reason != "provider_state_reference" {
+			return nil, result, fmt.Errorf("context_truncation_unsupported_content: %s", reason)
+		}
 		return body, result, nil
 	}
 	if budget <= 0 || keep < 1 {

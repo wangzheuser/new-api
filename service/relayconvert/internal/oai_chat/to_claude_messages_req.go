@@ -240,6 +240,10 @@ func OpenAIChatRequestToClaudeMessages(c *gin.Context, textRequest dto.GeneralOp
 			ToolCalls:        message.ToolCalls,
 			ToolCallId:       message.ToolCallId,
 		}
+		// Chained converters may carry typed media slices rather than decoded JSON arrays.
+		if !message.IsStringContent() && message.Content != nil {
+			fmtMessage.SetMediaContent(message.ParseContent())
+		}
 
 		if len(formatMessages) > 0 && formatMessages[len(formatMessages)-1].Role == fmtMessage.Role && fmtMessage.Role != "tool" {
 			previous := &formatMessages[len(formatMessages)-1]
