@@ -113,6 +113,22 @@ export interface LogOtherData {
   input_tokens_total?: number
 
   admin_info?: {
+    context_truncation?: {
+      enabled: boolean
+      applied: boolean
+      source: string
+      model: string
+      before: number
+      after: number
+      budget: number
+      removed_turns: number
+      removed_messages: number
+      reason?: string
+      upstream?: number
+      billed?: number
+      reported?: number
+      client_usage_reason?: string
+    }
     is_multi_key?: boolean
     multi_key_index?: number
     use_channel?: number[]

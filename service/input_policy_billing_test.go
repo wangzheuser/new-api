@@ -26,7 +26,7 @@ func inputPolicyBillingInfo() *relaycommon.RelayInfo {
 	}
 }
 
-// TestInputPolicyBillingSemanticMatrix verifies normalized billing and unchanged client usage.
+// TestInputPolicyBillingSemanticMatrix verifies normalized billing and immutable raw upstream usage.
 func TestInputPolicyBillingSemanticMatrix(t *testing.T) {
 	ctx := newEntitlementBillingContext()
 	for _, semantic := range []string{"openai", "anthropic", "gemini"} {

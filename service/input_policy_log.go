@@ -15,6 +15,9 @@ func AppendInputPolicyLog(other map[string]interface{}, info *relaycommon.RelayI
 	if s := info.ContextTruncation; s != nil {
 		admin["context_truncation"] = s
 		if s.Applied {
+			if s.ClientUsageReason == "" {
+				s.ClientUsageReason = "usage_missing"
+			}
 			other["context_truncated"] = true
 			other["input_tokens_total"] = s.Billed
 		}

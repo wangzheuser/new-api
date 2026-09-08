@@ -10,7 +10,7 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// requestedModelResponseWriter exposes only the client-requested model in HTTP and SSE responses.
+// requestedModelResponseWriter applies final client model and logical usage projection to HTTP/SSE.
 type requestedModelResponseWriter struct {
 	gin.ResponseWriter
 	info        *relaycommon.RelayInfo
@@ -58,7 +58,7 @@ func (w *requestedModelResponseWriter) FinishResponseWriter(commit bool) error {
 		_, err := w.ResponseWriter.Write(rewritten)
 		return err
 	}
-	rewritten, changed := relaycommon.RewriteClientModelJSON(pendingJSON, w.info, w.responseStatusCode())
+	rewritten, changed := rewriteClientResponseJSON(pendingJSON, w.info, w.responseStatusCode())
 	w.commitHeader(changed)
 	_, err := w.ResponseWriter.Write(rewritten)
 	return err
@@ -149,7 +149,7 @@ func (w *requestedModelResponseWriter) writeJSON(data []byte) (int, error) {
 	if !gjson.ValidBytes(bytes.TrimSpace(w.pendingJSON)) {
 		return len(data), nil
 	}
-	rewritten, changed := relaycommon.RewriteClientModelJSON(w.pendingJSON, w.info, w.responseStatusCode())
+	rewritten, changed := rewriteClientResponseJSON(w.pendingJSON, w.info, w.responseStatusCode())
 	w.pendingJSON = nil
 	w.commitHeader(changed)
 	if _, err := w.ResponseWriter.Write(rewritten); err != nil {
@@ -221,11 +221,11 @@ func (w *requestedModelResponseWriter) commitHeader(transformed bool) {
 
 // rewriteRequestedModelResponse rewrites a JSON body or JSON payloads on SSE data lines.
 func rewriteRequestedModelResponse(data []byte, info *relaycommon.RelayInfo, statusCode int) ([]byte, bool) {
-	if len(data) == 0 || info == nil || strings.TrimSpace(info.GetRequestedModelName()) == "" {
+	if len(data) == 0 || info == nil {
 		return data, false
 	}
 	if gjson.ValidBytes(bytes.TrimSpace(data)) {
-		return relaycommon.RewriteClientModelJSON(data, info, statusCode)
+		return rewriteClientResponseJSON(data, info, statusCode)
 	}
 
 	lines := bytes.SplitAfter(data, []byte("\n"))
@@ -249,7 +249,7 @@ func rewriteRequestedModelResponse(data []byte, info *relaycommon.RelayInfo, sta
 		if !gjson.ValidBytes(payload) {
 			continue
 		}
-		rewritten, payloadChanged := relaycommon.RewriteClientModelJSON(payload, info, statusCode)
+		rewritten, payloadChanged := rewriteClientResponseJSON(payload, info, statusCode)
 		if !payloadChanged {
 			continue
 		}
@@ -280,7 +280,7 @@ func splitSSELineEnding(line []byte) ([]byte, []byte) {
 
 // installRequestedModelResponseWriter registers the per-attempt final client response writer.
 func installRequestedModelResponseWriter(c *gin.Context, info *relaycommon.RelayInfo) {
-	if c == nil || c.Writer == nil || info == nil || strings.TrimSpace(info.GetRequestedModelName()) == "" {
+	if c == nil || c.Writer == nil || info == nil {
 		return
 	}
 	wrap := func(writer gin.ResponseWriter) relaycommon.FinalResponseWriter {
@@ -290,4 +290,14 @@ func installRequestedModelResponseWriter(c *gin.Context, info *relaycommon.Relay
 		}
 	}
 	relaycommon.SetFinalResponseWriterFactory(c, wrap)
+}
+
+// rewriteClientResponseJSON composes independent projections after provider decoding and before client output.
+func rewriteClientResponseJSON(data []byte, info *relaycommon.RelayInfo, statusCode int) ([]byte, bool) {
+	if info == nil {
+		return data, false
+	}
+	result, modelChanged := relaycommon.RewriteClientModelJSON(data, info, statusCode)
+	result, usageChanged := relaycommon.RewriteClientContextUsageJSON(result, info.RelayFormat, info.ContextTruncation, statusCode)
+	return result, modelChanged || usageChanged
 }

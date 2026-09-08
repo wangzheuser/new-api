@@ -317,6 +317,17 @@ func ConvertStreamResponseChunk(c *gin.Context, info *relaycommon.RelayInfo, sta
 		return responseStreamResults(state, streamValuesFromAny(response), usage), nil
 	}
 
+	if from == types.RelayFormatClaude {
+		// A sparse output-only delta must not replace the initial input/cache billing snapshot.
+		merged := state.nativeClaudeStreamUsage(response)
+		chunk, _ := asClaudeResponse(response)
+		if chunk.Type == "message_delta" && chunk.Usage != nil && merged != nil {
+			copy := *chunk
+			copy.Usage = BuildMessageDeltaPatchUsage(chunk, state.nativeClaudeUsage)
+			copy.Usage.BillingUsage = dto.CloneBillingUsage(merged.BillingUsage)
+			response = &copy
+		}
+	}
 	values, usage, err := executeResponseStreamSteps(c, info, state, []any{response}, 0)
 	if err != nil {
 		return nil, err

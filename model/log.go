@@ -156,6 +156,7 @@ func formatUserLogs(logs []*Log, startIdx int) {
 				"po",
 				"is_system_prompt_overwritten",
 				"admin_info",
+				"context_truncated",
 				"audit_info",
 				"stream_status",
 			} {
