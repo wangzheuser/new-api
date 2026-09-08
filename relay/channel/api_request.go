@@ -1,6 +1,7 @@
 package channel
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -302,6 +303,17 @@ func applyHeaderOverrideToRequest(req *http.Request, headerOverride map[string]s
 }
 
 func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
+	if info != nil && info.ValidateInputPolicyBody != nil {
+		body, err := io.ReadAll(requestBody)
+		if err != nil {
+			return nil, err
+		}
+		if err = info.ValidateInputPolicyBody(body); err != nil {
+			return nil, err
+		}
+		requestBody = bytes.NewReader(body)
+	}
+
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
 		return nil, fmt.Errorf("get request url failed: %w", err)

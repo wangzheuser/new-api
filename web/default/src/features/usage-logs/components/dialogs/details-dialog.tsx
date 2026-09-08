@@ -1030,6 +1030,13 @@ export function DetailsDialog(props: DetailsDialogProps) {
           </DetailSection>
         )}
 
+         {(other?.context_truncated || other?.cache_usage_simulated) && (
+          <DetailSection label={t('Input policies')}>
+            {other.context_truncated && <DetailRow label={t('Context truncation')} value={t('Billed before truncation')} />}
+            {other.cache_usage_simulated && <DetailRow label={t('Cache usage simulation')} value={t('Simulated accounting, not upstream cache')} />}
+            <DetailRow label={t('Total billed input tokens')} value={formatTokens(other.input_tokens_total ?? 0)} mono />
+          </DetailSection>
+        )}
         {/* Audio/WebSocket token breakdown */}
         {hasAudioTokens && other && (
           <DetailSection

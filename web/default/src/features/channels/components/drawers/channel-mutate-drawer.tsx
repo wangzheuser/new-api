@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { ChannelInputPolicies } from '@/features/input-policies/channel-input-policies'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -348,6 +349,8 @@ function hasConfiguredOverrideValue(value: unknown): boolean {
 
 function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
   return Boolean(
+    parseSettingsRecord(values.settings).context_truncation ||
+    parseSettingsRecord(values.settings).cache_usage_simulation ||
     hasConfiguredOverrideValue(values.param_override) ||
     hasConfiguredOverrideValue(values.header_override) ||
     values.advanced_custom?.trim() ||
@@ -1201,6 +1204,8 @@ export function ChannelMutateDrawer({
     hasConfiguredOverrideValue(currentHeaderOverride)
   )
   const extraSettingsConfigured = Boolean(
+    parseSettingsRecord(currentSettings).context_truncation ||
+    parseSettingsRecord(currentSettings).cache_usage_simulation ||
     currentForceFormat ||
     currentThinkingToContent ||
     currentPassThroughBodyEnabled ||
@@ -4296,6 +4301,11 @@ export function ChannelMutateDrawer({
                         onOpenChange={handleAdvancedSettingsOpenChange}
                         summary={advancedSummary}
                       >
+                        <ChannelInputPolicies
+                          key={`${channelId ?? 'new'}:${open}`}
+                          value={currentSettings || '{}'}
+                          onChange={(value) => form.setValue('settings', value, { shouldDirty: true, shouldValidate: true })}
+                        />
                         {/* ── Routing & Overrides ── */}
                         <div className={sideDrawerSectionClassName()}>
                           <CardHeading

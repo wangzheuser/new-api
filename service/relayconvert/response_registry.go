@@ -81,9 +81,10 @@ type ResponseStreamState struct {
 	Quality   ResponseConverterQuality
 	Steps     []ResponseStep
 
-	specs      []ResponseConverterSpec
-	stepStates []any
-	usage      *dto.Usage
+	specs             []ResponseConverterSpec
+	stepStates        []any
+	usage             *dto.Usage
+	nativeClaudeUsage *ClaudeResponseInfo
 }
 
 const (
@@ -309,6 +310,9 @@ func ConvertStreamResponseChunk(c *gin.Context, info *relaycommon.RelayInfo, sta
 	}
 	if state.From == state.To {
 		usage := canonicalUsageFromResponse(response)
+		if state.From == types.RelayFormatClaude {
+			usage = state.nativeClaudeStreamUsage(response)
+		}
 		state.rememberUsage(usage)
 		return responseStreamResults(state, streamValuesFromAny(response), usage), nil
 	}

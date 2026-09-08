@@ -221,6 +221,7 @@ type CompletionsStreamResponse struct {
 }
 
 type Usage struct {
+	InputPolicyAdjusted  bool          `json:"-"`
 	PromptTokens         int           `json:"prompt_tokens"`
 	CompletionTokens     int           `json:"completion_tokens"`
 	TotalTokens          int           `json:"total_tokens"`

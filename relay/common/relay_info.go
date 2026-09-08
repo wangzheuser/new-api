@@ -150,6 +150,9 @@ type streamLifecycleState struct {
 var streamLifecycleInitMu sync.Mutex
 
 type RelayInfo struct {
+	ContextTruncation        *ContextTruncationState
+	CacheUsageSimulation     *CacheUsageState
+	CacheUsageSamples        *[2]int
 	TokenId                  int
 	TokenKey                 string
 	TokenGroup               string
@@ -254,6 +257,9 @@ type RelayInfo struct {
 	ContextFallback       *ContextFallbackDecision
 
 	Request dto.Request
+
+	// ValidateInputPolicyBody verifies the final serialized request before network I/O.
+	ValidateInputPolicyBody func([]byte) error
 
 	// RequestConversionChain records request format conversions in order, e.g.
 	// ["openai", "openai_responses"] or ["openai", "claude"].
@@ -506,6 +512,7 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	}
 
 	info.ChannelMeta = channelMeta
+	info.InitInputPolicyState()
 	StartConversationCapture(c, info)
 	StartResponseOverrideBuffer(c, info)
 	ApplyFinalResponseWriter(c)

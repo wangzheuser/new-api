@@ -95,6 +95,9 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 			}
 		}
 	}
+	if policyErr := prepareTextInputPolicies(c, info, request, passThroughRequest); policyErr != nil {
+		return policyErr
+	}
 	if isUnconvertedProtocolRoute(info) {
 		nativeRequest := any(request)
 		if !passThroughRequest {

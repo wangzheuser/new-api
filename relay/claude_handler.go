@@ -116,6 +116,9 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 			}
 		}
 	}
+	if policyErr := prepareTextInputPolicies(c, info, request, passThroughRequest); policyErr != nil {
+		return policyErr
+	}
 	if isUnconvertedProtocolRoute(info) {
 		usage, nativeErr := executeNativeTextRoute(c, info, adaptor, request, passThroughRequest)
 		if nativeErr != nil {

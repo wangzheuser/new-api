@@ -362,6 +362,8 @@ type TemporaryAutoDisableInfo struct {
 }
 
 type ChannelOtherSettings struct {
+	ContextTruncation                     *ContextTruncationPolicy     `json:"context_truncation,omitempty"`
+	CacheUsageSimulation                  *CacheUsageSimulationPolicy  `json:"cache_usage_simulation,omitempty"`
 	AzureResponsesVersion                 string                       `json:"azure_responses_version,omitempty"`
 	VertexKeyType                         VertexKeyType                `json:"vertex_key_type,omitempty"` // "json" or "api_key"
 	OpenRouterEnterprise                  *bool                        `json:"openrouter_enterprise,omitempty"`

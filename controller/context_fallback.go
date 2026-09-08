@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/relay"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relay/contexttruncate"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -158,7 +159,14 @@ func prepareContextFallbackTarget(c *gin.Context, info *relaycommon.RelayInfo, r
 	decision.TargetOutputReserveTokens = targetPreview.OutputReserveTokens
 	decision.TargetDemandTokens = targetDemand
 	decision.TargetChannelID = common.GetContextKeyInt(c, constant.ContextKeyChannelId)
-	if targetDemand > decision.FallbackContextWindowTokens {
+	otherSettings, _ := common.GetContextKeyType[dto.ChannelOtherSettings](c, constant.ContextKeyChannelOtherSetting)
+	_, _, canTruncate := model_setting.ResolveContextTruncation(otherSettings.ContextTruncation, decision.FallbackModel)
+	if canTruncate {
+		body, marshalErr := common.Marshal(request)
+		_, reason := contexttruncate.Shape(body)
+		canTruncate = marshalErr == nil && reason == "" && !targetSettings.PassThroughBodyEnabled && !model_setting.GetGlobalSettings().PassThroughRequestEnabled
+	}
+	if targetDemand > decision.FallbackContextWindowTokens && !canTruncate {
 		return relay.SystemPromptPreview{}, contextFallbackRouteError("request context exceeds the supported context window")
 	}
 	applyContextPreview(info, targetPreview)

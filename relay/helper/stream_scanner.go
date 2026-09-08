@@ -241,6 +241,7 @@ func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *
 				writeMutex.Lock()
 				defer writeMutex.Unlock()
 				ExtendWriteDeadline(c)
+				info.ObserveCacheUsage(info.GetFinalRequestRelayFormat(), []byte(data))
 				dataHandler(data, sr)
 			}()
 			if sr.IsStopped() {

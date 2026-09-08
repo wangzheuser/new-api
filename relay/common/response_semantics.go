@@ -158,6 +158,7 @@ func MergeResponseSemantics(base ResponseSemantics, additional ResponseSemantics
 
 // MergeResponseSemantics classifies provider-native bytes and accumulates them on this relay attempt.
 func (info *RelayInfo) MergeResponseSemantics(format types.RelayFormat, body []byte) ResponseSemantics {
+	info.ObserveCacheUsage(format, body)
 	classified := ClassifyResponseSemantics(format, body)
 	if info == nil {
 		return classified

@@ -885,6 +885,7 @@ func recordRelayErrorLog(c *gin.Context, relayInfo *relaycommon.RelayInfo, err *
 		adminInfo["upstream_error"] = common.LocalLogPreview(rawError.MaskSensitiveErrorWithStatusCode())
 	}
 	other["admin_info"] = adminInfo
+	service.AppendInputPolicyLog(other, relayInfo)
 	startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
 	if startTime.IsZero() {
 		startTime = time.Now()

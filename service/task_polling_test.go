@@ -279,8 +279,9 @@ func TestUpdateVideoTasksSlowChannelDoesNotBlockOtherChannels(t *testing.T) {
 	require.Eventually(t, func() bool {
 		fetchedTaskIDs := adaptor.fetchedTaskIDs()
 		return len(fetchedTaskIDs) == 2 &&
-			fetchedTaskIDs[0] == fastFirst.GetUpstreamTaskID() &&
-			fetchedTaskIDs[1] == fastSecond.GetUpstreamTaskID()
+			// Poll immutable fixture IDs; GORM updates the task objects concurrently.
+			fetchedTaskIDs[0] == "upstream_fast_parallel_1" &&
+			fetchedTaskIDs[1] == "upstream_fast_parallel_2"
 	}, 500*time.Millisecond, 10*time.Millisecond)
 
 	releaseBlockedTask()

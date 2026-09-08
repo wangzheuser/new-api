@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { validateInputPolicies } from '@/features/input-policies/policy'
 import { z } from 'zod'
 
 import { parseHttpStatusCodeRules } from '@/lib/http-status-code-rules'
@@ -293,7 +294,8 @@ export const channelFormSchema = z
     settings: z
       .string()
       .optional()
-      .refine(isOptionalJsonObject, ERROR_MESSAGES.INVALID_JSON),
+      .refine(isOptionalJsonObject, ERROR_MESSAGES.INVALID_JSON)
+      .refine(value => validateInputPolicies(value || '{}'), 'Invalid input policy. Check model budgets and percentages.'),
     advanced_custom: z.string().optional(),
     other: z.string().optional(),
     // Multi-key options (not sent to backend directly)

@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -181,6 +182,8 @@ func InitOptionMap() {
 	common.OptionMap["AutomaticRetryStatusCodes"] = operation_setting.AutomaticRetryStatusCodesToString()
 	common.OptionMap["ExposeRatioEnabled"] = strconv.FormatBool(ratio_setting.IsExposeRatioEnabled())
 
+	common.OptionMap[model_setting.ContextTruncationOption] = `{ "force_disabled": false, "models": {} }`
+	common.OptionMap[model_setting.CacheUsageSimulationOption] = `{ "force_disabled": false, "enabled": false, "creation_trigger_percent": 20, "read_trigger_percent": 60, "creation_token_percent": 30, "read_token_percent": 50 }`
 	// 自动添加所有注册的模型配置
 	modelConfigs := config.GlobalConfig.ExportAllConfigs()
 	for k, v := range modelConfigs {
@@ -210,6 +213,9 @@ func SyncOptions(frequency int) {
 }
 
 func UpdateOption(key string, value string) error {
+	if err := model_setting.ValidateInputPolicyOption(key, value); err != nil {
+		return err
+	}
 	// Save to database first
 	option := Option{
 		Key: key,
@@ -235,6 +241,11 @@ func UpdateOption(key string, value string) error {
 // is touched — safe for callers that must commit a set of related options
 // atomically (e.g. payment gateway binding).
 func UpdateOptionsBulk(values map[string]string) error {
+	for k, v := range values {
+		if err := model_setting.ValidateInputPolicyOption(k, v); err != nil {
+			return err
+		}
+	}
 	if len(values) == 0 {
 		return nil
 	}
@@ -267,6 +278,12 @@ func updateOptionMap(key string, value string) (err error) {
 	defer common.OptionMapRWMutex.Unlock()
 	common.OptionMap[key] = value
 
+	switch key {
+	case model_setting.ContextTruncationOption:
+		return model_setting.SetContextTruncation(value)
+	case model_setting.CacheUsageSimulationOption:
+		return model_setting.SetCacheUsageSimulation(value)
+	}
 	// 检查是否是模型配置 - 使用更规范的方式处理
 	if handleConfigUpdate(key, value) {
 		return nil // 已由配置系统处理

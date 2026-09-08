@@ -102,6 +102,10 @@ func usageFromBillingUsage(usage *dto.Usage) (*dto.Usage, bool) {
 
 func usageFromOpenAIBillingUsage(billingUsage *dto.BillingUsage) *dto.Usage {
 	usage := *billingUsage.OpenAIUsage
+	// Responses stores input breakdown under input_tokens_details, not prompt_tokens_details.
+	if billingUsage.Source == dto.BillingUsageSourceOAIResponses && usage.InputTokensDetails != nil {
+		usage.PromptTokensDetails = *usage.InputTokensDetails
+	}
 	if usage.PromptTokens == 0 && usage.InputTokens > 0 {
 		usage.PromptTokens = usage.InputTokens
 	}
