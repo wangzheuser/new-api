@@ -130,7 +130,7 @@ func RewriteClientContextUsageJSON(data []byte, format types.RelayFormat, state 
 		rawTotal = max(rawTotal, usage.Get(inputAlias).Int())
 	}
 	// Later sparse/default-filled frames must not lower an already observed input total in this attempt.
-	reported := max(int64(state.Before), rawTotal, cache, state.Reported)
+	reported := max(int64(state.Before), int64(state.BudgetBefore), rawTotal, cache, state.Reported)
 	newInput := reported
 	if format == types.RelayFormatClaude {
 		newInput -= cache

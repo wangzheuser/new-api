@@ -66,6 +66,15 @@ func prepareTextInputPolicies(c *gin.Context, info *relaycommon.RelayInfo, reque
 		return inputPolicyError(err)
 	}
 	state.Budget = budget
+	// Freeze the existing pre-truncation billing input before the stricter budget estimator runs.
+	billingMeta, err := contextImageTokenMeta(request)
+	if err != nil {
+		return inputPolicyError(err)
+	}
+	state.Before, err = service.CountRequestToken(c, billingMeta, info)
+	if err != nil {
+		return inputPolicyError(err)
+	}
 	// Reuse the concrete protocol DTO for counting; the source object is never changed here.
 	count := func(b []byte) (int, error) {
 		copy, err := copySystemPromptRequest(request)
@@ -75,15 +84,13 @@ func prepareTextInputPolicies(c *gin.Context, info *relaycommon.RelayInfo, reque
 		if err = common.Unmarshal(b, copy); err != nil {
 			return 0, err
 		}
-		meta, err := contextImageTokenMeta(copy)
-		if err != nil {
-			return 0, err
-		}
-		return service.CountRequestToken(c, meta, info)
+		_, budgetTokens, err := countContextBudget(c, info, copy, b)
+		return budgetTokens, err
 	}
 	trimmed, result, err := contexttruncate.Trim(c.Request.Context(), body, budget, rule.Keep(), count)
-	state.Before = result.Before
-	state.After = result.After
+	state.BudgetBefore = result.Before
+	state.BudgetAfter = result.After
+	state.After = state.Before
 	state.Applied = result.Applied
 	state.RemovedTurns = result.RemovedTurns
 	state.RemovedMessages = result.RemovedMessages
@@ -91,11 +98,15 @@ func prepareTextInputPolicies(c *gin.Context, info *relaycommon.RelayInfo, reque
 		state.Reason = err.Error()
 		return inputPolicyError(err)
 	}
-	if apiErr := reserveInputPolicy(c, info, request, result.Before); apiErr != nil {
+	if apiErr := reserveInputPolicy(c, info, request, state.Before); apiErr != nil {
 		return apiErr
 	}
 	if result.Applied {
 		if err := common.Unmarshal(trimmed, request); err != nil {
+			return inputPolicyError(err)
+		}
+		state.After, _, err = countContextBudget(c, info, request, trimmed)
+		if err != nil {
 			return inputPolicyError(err)
 		}
 	}
@@ -124,19 +135,16 @@ func prepareTextInputPolicies(c *gin.Context, info *relaycommon.RelayInfo, reque
 		if err != nil {
 			return inputPolicyError(err)
 		}
-		meta, err := contextImageTokenMeta(outgoing)
+		tokens, budgetTokens, err := countContextBudget(c, info, outgoing, final)
 		if err != nil {
 			return inputPolicyError(err)
 		}
-		tokens, err := service.CountRequestToken(c, meta, info)
-		if err != nil {
-			return inputPolicyError(err)
-		}
-		if tokens > min(state.Budget, finalBudget) {
+		state.After = tokens
+		state.BudgetAfter = budgetTokens
+		if budgetTokens > min(state.Budget, finalBudget) {
 			state.Reason = "context_truncation_final_budget_exceeded"
 			return inputPolicyError(fmt.Errorf("%s", state.Reason))
 		}
-		state.After = tokens
 		return nil
 	}
 

@@ -10,6 +10,8 @@ type ContextTruncationState struct {
 	Model             string                    `json:"model"`
 	Before            int                       `json:"before"`
 	After             int                       `json:"after"`
+	BudgetBefore      int                       `json:"budget_before,omitempty"`
+	BudgetAfter       int                       `json:"budget_after,omitempty"`
 	Budget            int                       `json:"budget"`
 	RemovedTurns      int                       `json:"removed_turns"`
 	RemovedMessages   int                       `json:"removed_messages"`
