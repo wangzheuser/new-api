@@ -58,3 +58,44 @@ func TestContextBudgetHiddenHistory(t *testing.T) {
 		require.ErrorContains(t, info.ValidateInputPolicyBody(final), "final_budget_exceeded")
 	}
 }
+
+// TestContextBudgetMessageCompaction prevents old tool calls from moving to retained messages.
+func TestContextBudgetMessageCompaction(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	info := convertedResponsesViaChatTestInfo("http://127.0.0.1", true)
+	info.RelayFormat = types.RelayFormatOpenAI
+	info.ChannelOtherSettings.ContextTruncation = &dto.ContextTruncationPolicy{Models: map[string]dto.ContextTruncationRule{"MODEL_X": {Mode: "custom", WindowTokens: 2048}}}
+	request := &dto.GeneralOpenAIRequest{Model: "MODEL_X", MaxTokens: common.GetPointer(uint(64)), Messages: []dto.Message{
+		{Role: "user", Content: strings.Repeat("old disposable context ", 5000)},
+		{Role: "assistant", Content: "old answer", ReasoningContent: common.GetPointer("old thinking")},
+		{Role: "tool", ToolCallId: "call_old", Content: "done"},
+		{Role: "user", Content: "new question"},
+		{Role: "assistant", Content: "new answer"},
+	}}
+	request.Messages[1].SetToolCalls([]any{map[string]any{"id": "call_old", "type": "function", "function": map[string]any{"name": "edit", "arguments": "{}"}}})
+	require.Nil(t, prepareTextInputPolicies(c, info, request, false))
+	require.Len(t, request.Messages, 2)
+	assert.Empty(t, request.Messages[1].ToolCalls)
+	assert.Nil(t, request.Messages[1].ReasoningContent)
+	assert.Equal(t, "new answer", request.Messages[1].Content)
+}
+
+// TestContextBudgetFreshProtocolDTO ensures omitted protocol fields do not leak after shortening.
+func TestContextBudgetFreshProtocolDTO(t *testing.T) {
+	for _, tc := range []struct {
+		request   dto.Request
+		old, next string
+	}{
+		{&dto.ClaudeRequest{}, `{"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"old","input":{"x":1}}]}]}`, `{"messages":[{"role":"assistant","content":[{"type":"text","text":"new"}]}]}`},
+		{&dto.GeminiChatRequest{}, `{"contents":[{"parts":[{"functionCall":{"name":"old","args":{"x":1}}}]}]}`, `{"contents":[{"parts":[{"text":"new"}]}]}`},
+		{&dto.OpenAIResponsesRequest{}, `{"input":[{"type":"function_call","call_id":"old","arguments":"{}"}]}`, `{"input":[{"role":"user","content":"new"}]}`},
+	} {
+		require.NoError(t, common.Unmarshal([]byte(tc.old), tc.request))
+		require.NoError(t, decodeContextRequest(tc.request, []byte(tc.next)))
+		encoded, err := common.Marshal(tc.request)
+		require.NoError(t, err)
+		assert.NotContains(t, string(encoded), "old")
+		assert.Contains(t, string(encoded), "new")
+	}
+}

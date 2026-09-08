@@ -81,7 +81,7 @@ func prepareTextInputPolicies(c *gin.Context, info *relaycommon.RelayInfo, reque
 		if err != nil {
 			return 0, err
 		}
-		if err = common.Unmarshal(b, copy); err != nil {
+		if err = decodeContextRequest(copy, b); err != nil {
 			return 0, err
 		}
 		_, budgetTokens, err := countContextBudget(c, info, copy, b)
@@ -102,7 +102,7 @@ func prepareTextInputPolicies(c *gin.Context, info *relaycommon.RelayInfo, reque
 		return apiErr
 	}
 	if result.Applied {
-		if err := common.Unmarshal(trimmed, request); err != nil {
+		if err := decodeContextRequest(request, trimmed); err != nil {
 			return inputPolicyError(err)
 		}
 		state.After, _, err = countContextBudget(c, info, request, trimmed)
