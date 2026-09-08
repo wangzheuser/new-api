@@ -9,7 +9,7 @@ umask 077
 rc=0
 bash "$SCRIPT_DIR/release-remote.sh" observe --seconds 600 --interval 30 > "$STATE_DIR/observe.log" 2>&1 || rc=$?
 printf '%s\n' "$rc" > "$STATE_DIR/observe.exit"
-if (( rc == 3 )); then
+if (( rc == 3 )) && [[ "${ADDITIONAL_DIAGNOSTIC_OBSERVATION:-0}" == 1 ]]; then
   mkdir "$STATE_DIR/first-observation"
   for file in "$STATE_DIR"/observation* "$STATE_DIR"/observe.log "$STATE_DIR"/observe.exit; do
     [[ ! -f "$file" ]] || cp "$file" "$STATE_DIR/first-observation/"

@@ -372,6 +372,24 @@ class ProtocolStabilityGateTest(unittest.TestCase):
         report = json.loads(files["http-observations.json"])
         self.assertEqual(report["post"]["/v1/messages:pre_upstream_rejected"], 1)
 
+    def test_policy_marker_requires_matching_request_and_403(self):
+        """Keep raw counts; only a same-request local policy marker creates evidence."""
+        logs = self.app_logs()
+        logs["post"] += (
+            "[INFO] fixture | denied | relay_policy_rejection reason=auth_group_not_allowed status=403\n"
+            "[GIN] fixture | relay | denied | 403 | 1ms | local | POST /v1/messages\n"
+            "[GIN] fixture | relay | unknown | 403 | 1ms | local | POST /v1/messages\n"
+            "[INFO] fixture | error | relay_policy_rejection reason=auth_group_not_allowed status=403\n"
+            "[GIN] fixture | relay | error | 500 | 1ms | local | POST /v1/messages\n"
+        )
+        result, files = self.run_gate(app_logs=logs)
+        self.assertNotEqual(result.returncode,0)
+        report = json.loads(files["http-observations.json"])
+        self.assertEqual(report["post"]["/v1/messages:http_403"],2)
+        self.assertEqual(report["post"]["/v1/messages:http_500"],1)
+        self.assertEqual(report["policy_rejections"]["post"],[
+            dict(request_id="denied",path="/v1/messages",status=403,reason="auth_group_not_allowed")])
+
     def test_only_reviewed_transport_503_is_excluded(self):
         """External cause review and actual transport evidence are both mandatory."""
         source = dict(self.rows[-1])

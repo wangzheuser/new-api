@@ -549,7 +549,7 @@ action_observe() {
     docker logs --since "$CUTOVER_AT" "$NEW" > "$STATE_DIR/candidate-probe-app.log" 2>&1
     chmod 600 "$STATE_DIR/candidate-probe-app.log"
     if python3 "$SCRIPT_DIR/low-traffic-evidence.py" "$STATE_DIR/public-business.json" \
-      "$STATE_DIR/candidate-probe-app.log" "$protocol_dir" > "$STATE_DIR/low-traffic.result" 2>&1; then
+      "$STATE_DIR/candidate-probe-app.log" "$protocol_dir" "${EXPECTED_POLICY_REJECTION_REASONS:-}" > "$STATE_DIR/low-traffic.result" 2>&1; then
       evidence_mode=verified_low_traffic
       protocol_result=0
     fi

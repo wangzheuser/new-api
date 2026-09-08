@@ -205,13 +205,18 @@ import sys
 baseline, observation, target, *exclude_files = sys.argv[1:]
 excluded = {line.strip() for file in exclude_files for line in Path(file).read_text().splitlines() if line.strip()}
 values = []
-summary = {}
+summary = {"policy_rejections": {}}
 for window, filename in (("pre", baseline), ("post", observation)):
     lines = Path(filename).read_text().splitlines()
     canceled = set()
     rejected = set()
+    policy_rejected = {}
     for line in lines:
         parts = line.split("|", 2)
+        if line.startswith("[INFO]") and len(parts) == 3:
+            marker = re.fullmatch(r"relay_policy_rejection reason=(auth_[a-z_]+) status=403", parts[2].strip())
+            if marker:
+                policy_rejected[parts[1].strip()] = marker.group(1)
         if line.startswith("[INFO]") and len(parts) == 3 and parts[2].strip() == "relay canceled by client":
             canceled.add(parts[1].strip())
         if line.startswith("[ERR]") and len(parts) == 3 and re.fullmatch(
@@ -219,6 +224,7 @@ for window, filename in (("pre", baseline), ("post", observation)):
         ):
             rejected.add(parts[1].strip())
     counts = collections.Counter()
+    summary["policy_rejections"][window] = []
     requests = {}
     for line in lines:
         if not line.startswith("[GIN]"):
@@ -243,6 +249,8 @@ for window, filename in (("pre", baseline), ("post", observation)):
         is_rejected = status == 503 and request_id in rejected
         values.append(f"('{window}','{request_id}','{path}',{status},{str(is_canceled).lower()},{str(is_rejected).lower()})")
         counts[f"{path}:http_{status}"] += 1
+        if status == 403 and request_id in policy_rejected:
+            summary["policy_rejections"][window].append(dict(request_id=request_id, path=path, status=status, reason=policy_rejected[request_id]))
         if is_rejected:
             counts[f"{path}:pre_upstream_rejected"] += 1
         if is_canceled:

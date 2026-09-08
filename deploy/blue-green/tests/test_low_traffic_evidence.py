@@ -12,11 +12,11 @@ spec.loader.exec_module(module)
 
 
 class LowTrafficEvidenceTest(unittest.TestCase):
-    def check(self, mutation=None, natural_successes=0, reason='coverage_gap', natural_requests=0, unresolved=0, http_error=False):
+    def check(self, mutation=None, natural_successes=0, reason='coverage_gap', natural_requests=0, unresolved=0, http_error=False, http_counts=None, rejections=None, reviewed=""):
         """Build complete, candidate-correlated fixtures and vary one contract."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root/'http-observations.json').write_text(json.dumps({'post':{'/v1/messages:http_400':1} if http_error else {}}))
+            (root/'http-observations.json').write_text(json.dumps({'post': http_counts if http_counts is not None else ({'/v1/messages:http_400':1} if http_error else {}), 'policy_rejections': {'post': rejections or []}}))
             probes, logs = [], []
             for protocol in ('chat', 'responses'):
                 for stream in (False, True):
@@ -36,7 +36,7 @@ class LowTrafficEvidenceTest(unittest.TestCase):
             ):
                 with (root/name).open('w') as handle:
                     writer=csv.writer(handle,delimiter='\t');writer.writerow(headers);writer.writerows(rows)
-            return module.validate(root/'probes.json',root/'candidate.log',root)
+            return module.validate(root/'probes.json',root/'candidate.log',root,reviewed)
 
     def test_complete_candidate_probes_allow_empty_natural_traffic(self):
         self.assertTrue(self.check())
@@ -58,6 +58,32 @@ class LowTrafficEvidenceTest(unittest.TestCase):
         self.assertFalse(self.check(natural_requests=1))
         self.assertFalse(self.check(unresolved=1))
         self.assertFalse(self.check(http_error=True))
+
+    def test_only_reviewed_correlated_policy_denials_are_separate(self):
+        row = dict(request_id="deny", path="/v1/messages", status=403, reason="auth_group_not_allowed")
+        args = dict(http_counts={"/v1/messages:http_403": 1}, rejections=[row])
+        self.assertFalse(self.check(**args))
+        self.assertTrue(self.check(**args, reviewed="auth_group_not_allowed"))
+        self.assertFalse(self.check(http_counts=args["http_counts"], reviewed="auth_group_not_allowed"))
+        self.assertFalse(self.check(**args, reviewed="auth_ip_not_allowed"))
+        self.assertFalse(self.check(**args, reviewed="invented_reason"))
+        self.assertFalse(self.check(**args, reviewed="auth_group_not_allowed", unresolved=1))
+        self.assertFalse(self.check(**args, reviewed="auth_group_not_allowed", natural_requests=1))
+
+    def test_rejection_evidence_does_not_hide_other_statuses_or_duplicate_counts(self):
+        row = dict(request_id="deny", path="/v1/messages", status=403, reason="auth_group_not_allowed")
+        for status in (400, 401, 429, 500, 503):
+            self.assertFalse(self.check(http_counts={f"/v1/messages:http_{status}":1},
+                                        rejections=[row], reviewed="auth_group_not_allowed"))
+        self.assertFalse(self.check(http_counts={"/v1/messages:http_403":2}, rejections=[row],
+                                    reviewed="auth_group_not_allowed"))
+        self.assertFalse(self.check(http_counts={"/v1/messages:http_403":2}, rejections=[row,row],
+                                    reviewed="auth_group_not_allowed"))
+
+    def test_malformed_policy_evidence_fails_closed(self):
+        row = dict(request_id="", path="/v1/messages", status=403, reason="auth_group_not_allowed")
+        self.assertFalse(self.check(http_counts={"/v1/messages:http_403":1}, rejections=[row], reviewed="auth_group_not_allowed"))
+        self.assertFalse(self.check(http_counts={"/v1/messages:http_403":-1}))
 
 
 if __name__ == '__main__':

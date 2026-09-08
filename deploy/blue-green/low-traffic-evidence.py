@@ -1,11 +1,16 @@
 """Validate opt-in low-traffic delivery evidence without overriding regressions."""
 import csv
 import json
+import re
 from pathlib import Path
 import sys
 
 
-def validate(probes_path, log_path, protocol_dir):
+POLICY_REASONS = frozenset(("auth_user_disabled", "auth_ip_not_allowed", "auth_group_not_allowed",
+                            "auth_group_retired", "auth_channel_override_denied"))
+
+
+def validate(probes_path, log_path, protocol_dir, reviewed_reasons=""):
     """Require clean live outcomes and four finalized probes from the candidate."""
     root = Path(protocol_dir)
     with (root / 'comparison.tsv').open() as handle:
@@ -23,7 +28,26 @@ def validate(probes_path, log_path, protocol_dir):
         if any(int(row['unresolved_requests']) for row in csv.DictReader(handle, delimiter='\t')):
             return False
     http = json.loads((root / 'http-observations.json').read_text())
-    if any(count and (not name.endswith(':http_200')) for name, count in http['post'].items()):
+    # Only predeclared, reviewed policy reasons can explain matching 403 requests.
+    allowed = set(filter(None, reviewed_reasons.split(",")))
+    if not allowed <= POLICY_REASONS:
+        return False
+    if any(type(count) is not int or count < 0 for count in http["post"].values()):
+        return False
+    explained = {}
+    seen_rejections = set()
+    for row in http.get("policy_rejections", {}).get("post", []):
+        rid = row["request_id"]
+        if not isinstance(rid, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", rid) or rid in seen_rejections or row["status"] != 403:
+            return False
+        seen_rejections.add(rid)
+        if row["reason"] in allowed:
+            key = row["path"] + ":http_403"
+            explained[key] = explained.get(key, 0) + 1
+    if any(count > http["post"].get(key, 0) for key, count in explained.items()):
+        return False
+    if any(count and not name.endswith(":http_200") and explained.get(name, 0) != count
+           for name, count in http["post"].items()):
         return False
     observed = set()
     for line in Path(log_path).read_text().splitlines():
