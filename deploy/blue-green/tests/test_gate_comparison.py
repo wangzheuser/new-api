@@ -84,3 +84,39 @@ class GateComparisonTest(unittest.TestCase):
         result, report = self.compare([self.row("pre", requests=1000, successes=1000), self.row("post", requests=1000, successes=0)])
         self.assertEqual(result.returncode, 1)
         self.assertIn("supported_rate_drop", report)
+
+    def test_simpson_shift_is_not_a_candidate_regression(self):
+        """Both channels improve while the difficult channel gains traffic."""
+        rows = [self.row("pre", channel=1, requests=10, successes=4),
+                self.row("post", channel=1, requests=90, successes=45),
+                self.row("pre", channel=2, requests=90, successes=81),
+                self.row("post", channel=2, requests=10, successes=10)]
+        result, report = self.compare(rows)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("diagnostic\ttraffic_mix_changed", report)
+
+    def test_disappeared_channel_does_not_lower_comparable_channel(self):
+        """The observed high-success channels absent after cutover stay uncovered."""
+        rows = [self.row("pre", channel=67, requests=37, successes=15),
+                self.row("post", channel=67, requests=92, successes=48),
+                self.row("pre", channel=68, requests=20, successes=14),
+                self.row("pre", channel=72, requests=16, successes=13)]
+        result, report = self.compare(rows)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("insufficient_samples", report)
+        self.assertIn("traffic_mix_changed", report)
+
+    def test_mix_change_does_not_hide_member_regression(self):
+        """Changing weights never exempts a regressed channel."""
+        rows = [self.row("pre", channel=1, requests=1000, successes=1000),
+                self.row("post", channel=1, requests=2000, successes=0),
+                self.row("pre", channel=2), self.row("post", channel=2)]
+        result, report = self.compare(rows)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("supported_rate_drop", report)
+
+    def test_changed_mix_without_comparable_members_holds(self):
+        """An aggregate cannot manufacture coverage from noncomparable cohorts."""
+        rows = [self.row("pre", channel=1, requests=30, successes=30),
+                self.row("post", channel=2, requests=30, successes=30)]
+        self.assertEqual(self.compare(rows)[0].returncode, 3)

@@ -545,8 +545,8 @@ for entries, is_coverage in ((raw_rows, False), (raw_coverage, True)):
         cohort = tuple(row[name].strip() for name in cohort_fields)
         if cohort[:4] in legacy:
             cohort = (*cohort[:4], "<legacy-client-model>")
-        # Protocol/stream totals cover sparse channel cohorts without replacing
-        # comparisons for any fully recorded, sufficiently sampled model.
+        # Retain raw protocol totals for diagnostics; changed traffic weights
+        # must not turn improving channel cohorts into an aggregate regression.
         parent = (*cohort[:2], "<all>", "<all>", "<all>")
         for key in (cohort, parent):
             counts = rows[(row["window"].strip(), key)]
@@ -598,6 +598,15 @@ with open(target, "w", encoding="utf-8", newline="") as handle:
             result, reason = "failed", "candidate_integrity_error"
         elif pre["unresolved"]:
             result, reason = "inconclusive", "baseline_incomplete"
+        elif evidence == "protocol_stream" and any(
+            rows[("pre", member)]["requests"] * post["requests"]
+            != rows[("post", member)]["requests"] * pre["requests"]
+            for member in cohorts
+            if member[:2] == cohort[:2] and member[2] not in ("<all>", "")
+        ):
+            # Different channel/model weights confound the unadjusted total.
+            # Comparable member cohorts remain independently binding below.
+            result, reason = "diagnostic", "traffic_mix_changed"
         elif sufficient:
             compared += 1
             passed = (10000 * (pre["successes"] * post["requests"] - post["successes"] * pre["requests"])
