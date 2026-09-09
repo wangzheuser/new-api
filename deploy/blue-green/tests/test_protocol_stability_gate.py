@@ -408,6 +408,51 @@ class ProtocolStabilityGateTest(unittest.TestCase):
         self.assertEqual(files["verified-upstream-counts.txt"], "0 1\n")
         self.assertEqual(json.loads(files["http-observations.json"])["post"]["/v1/messages:http_503"], 1)
 
+    def test_reviewed_sse_503_preserves_http_and_failure_audit(self):
+        """A reviewed upstream rejection after HTTP commit is not an HTTP 5xx."""
+        row = dict(self.rows[-1])
+        row.update(request_id="external-sse-503", type=5, is_stream=True)
+        row["other"] = {
+            "request_path": "/v1/messages", "status_code": 503,
+            "upstream_model_name": "fixture-upstream",
+            "admin_info": {"upstream_status_code": 503},
+            "stream_status": {"status": "error", "app_http_committed": True,
+                              "client_payload_committed": False},
+        }
+        self.rows.append(row)
+        result, files = self.run_gate(app_logs=self.app_logs(), upstream_evidence=[{
+            "request_id": row["request_id"], "evidence": "same upstream failure independently reproduced on old slot",
+        }])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(files["verified-upstream-counts.txt"], "0 0\n")
+        audit = list(csv.DictReader(io.StringIO(files["verified-upstream-503.tsv"]), delimiter="\t"))
+        self.assertEqual(audit, [{"period": "post", "request_id": row["request_id"], "http_status": "200"}])
+        counts = json.loads(files["http-observations.json"])["post"]
+        self.assertEqual(counts["/v1/messages:http_200"], 5)
+        self.assertNotIn("/v1/messages:http_503", counts)
+
+    def test_sse_exception_requires_complete_failure_evidence(self):
+        """Missing review, source receipt or uncommitted error state must block."""
+        for change in (
+            {"admin_info": {}},
+            {"stream_status": {"status": "ok", "app_http_committed": True}},
+            {"stream_status": {"status": "error"}},
+            {"stream_status": {"status": "error", "app_http_committed": True, "client_payload_committed": True}},
+            {"stream_status": {"status": "error", "app_http_committed": True, "billing_finalization": "settled_partial"}},
+            {"error_code": "convert_request_failed"},
+        ):
+            with self.subTest(change=change):
+                self.setUp()
+                row = self.rows[-1]
+                row.update(type=5, is_stream=True)
+                row["other"].update(status_code=503, admin_info={"upstream_status_code": 503},
+                                    stream_status={"status": "error", "app_http_committed": True})
+                row["other"].update(change)
+                result, _ = self.run_gate(app_logs=self.app_logs(), upstream_evidence=[{
+                    "request_id": row["request_id"], "evidence": "fixture external failure review",
+                }])
+                self.assertNotEqual(result.returncode, 0)
+
     def test_public_503_without_transport_proof_is_not_exempt(self):
         """An error mapping to 503 is not evidence that upstream caused the failure."""
         row = self.rows[-1]

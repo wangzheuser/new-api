@@ -308,8 +308,12 @@ WITH $app_requests_sql reviewed AS (
    ORDER BY l.created_at DESC,l.id DESC LIMIT 1) f ON true
  WHERE a.request_id = ANY ($reviewed_sql)
 )
-SELECT period,request_id FROM reviewed
-WHERE status_code=503 AND type=5
+SELECT period,request_id,status_code AS http_status FROM reviewed
+WHERE type=5 AND (
+ status_code=503 OR (
+  status_code=200 AND details#>>'{stream_status,status}'='error'
+  AND details#>>'{stream_status,app_http_committed}'='true'
+ ))
  AND created_at < (CASE WHEN period='pre' THEN $pre_end ELSE $post_end END) + $settle_seconds
  AND details#>>'{admin_info,upstream_status_code}'='503'
  AND details->>'error_code' IS DISTINCT FROM 'convert_request_failed'
@@ -326,9 +330,10 @@ expected = {r["request_id"] for r in json.loads((root / "verified-upstream-evide
 rows = list(csv.DictReader((root / "verified-upstream-503.tsv").open(), delimiter="\t"))
 if {r["request_id"] for r in rows} != expected or len(rows) != len(expected):
     raise ValueError("reviewed exception lacks matching final upstream HTTP 503 evidence")
+# HTTP-committed SSE failures remain audited but must not decrement HTTP 5xx counts.
 (root / "verified-upstream-counts.txt").write_text(
-    str(sum(r["period"] == "pre" for r in rows)) + " " +
-    str(sum(r["period"] == "post" for r in rows)) + "\n"
+    str(sum(r["period"] == "pre" and r["http_status"] == "503" for r in rows)) + " " +
+    str(sum(r["period"] == "post" and r["http_status"] == "503" for r in rows)) + "\n"
 )
 PYCHECK
   excluded_sql="($excluded_sql || $reviewed_sql)"
