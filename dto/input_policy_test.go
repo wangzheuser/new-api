@@ -43,21 +43,32 @@ func TestCachePolicyContracts(t *testing.T) {
 	assert.Zero(t, c+r)
 }
 
-// TestContextRuleBudget covers boundary budgets and omission semantics.
+// TestContextRuleBudget covers required reserves and request-dependent budgets.
 func TestContextRuleBudget(t *testing.T) {
-	var rule ContextTruncationRule
-	require.NoError(t, common.UnmarshalJsonStr(`{"mode":"custom","window_tokens":1000}`, &rule))
-	require.NoError(t, rule.Validate(false))
-	b, err := rule.Budget(100)
-	require.NoError(t, err)
-	assert.Equal(t, 880, b)
-	_, err = rule.Budget(0)
-	assert.ErrorContains(t, err, "output_reserve_required")
-	zero := 0
-	rule.SafetyTokens = &zero
-	b, err = rule.Budget(100)
-	require.NoError(t, err)
-	assert.Equal(t, 900, b)
-	rule.ThresholdPercent = &zero
-	assert.Error(t, rule.Validate(false))
+	for _, tc := range []struct {
+		raw   string
+		valid bool
+	}{
+		{`{"mode":"custom","window_tokens":1000}`, false},
+		{`{"mode":"custom","window_tokens":1000,"output_reserve_tokens":0}`, false},
+		{`{"mode":"custom","window_tokens":1000,"output_reserve_tokens":980}`, false},
+		{`{"mode":"custom","window_tokens":1000,"output_reserve_tokens":100}`, true},
+		{`{"mode":"off"}`, true},
+	} {
+		var rule ContextTruncationRule
+		require.NoError(t, common.UnmarshalJsonStr(tc.raw, &rule))
+		if !tc.valid {
+			assert.Error(t, rule.Validate(false))
+			continue
+		}
+		require.NoError(t, rule.Validate(false))
+		if rule.Mode == "off" {
+			continue
+		}
+		for _, test := range []struct{ output, budget int }{{0, 880}, {100, 880}, {200, 780}} {
+			budget, err := rule.Budget(test.output)
+			require.NoError(t, err)
+			assert.Equal(t, test.budget, budget)
+		}
+	}
 }

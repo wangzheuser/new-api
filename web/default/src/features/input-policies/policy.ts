@@ -45,18 +45,15 @@ const ruleSchema = z
   .object({
     mode: z.enum(['inherit', 'off', 'custom']),
     window_tokens: z.number().int().min(1).max(2147483647).optional(),
-    threshold_percent: z.number().int().min(1).max(100).optional(),
-    keep_recent_turns: z.number().int().min(1).max(256).optional(),
-    safety_tokens: z.number().int().min(0).nullable().optional(),
-    output_reserve_tokens: z.number().int().min(1).nullable().optional(),
+    output_reserve_tokens: z.number().int().min(1).max(1073741823).optional(),
   })
-  .passthrough()
   .superRefine((r, ctx) => {
     if (r.mode !== 'custom') return
     const window = r.window_tokens ?? 0
-    const safety = r.safety_tokens ?? Math.min(Math.ceil(window * 0.02), 8192)
+    const safety = Math.min(Math.ceil(window * 0.02), 8192)
     if (
       !window ||
+      !r.output_reserve_tokens ||
       safety >= window ||
       (r.output_reserve_tokens ?? 0) + safety >= window
     ) {

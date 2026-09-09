@@ -2,16 +2,17 @@ package dto
 
 import (
 	"fmt"
+	"math"
 	"strings"
 )
+
+// MaxOutputTokens bounds output multipliers before request and quota calculations.
+const MaxOutputTokens = math.MaxInt32 / 2
 
 // ContextTruncationRule configures one logical model, before upstream mapping.
 type ContextTruncationRule struct {
 	Mode                string `json:"mode"`
 	WindowTokens        int    `json:"window_tokens,omitempty"`
-	ThresholdPercent    *int   `json:"threshold_percent,omitempty"`
-	SafetyTokens        *int   `json:"safety_tokens"`
-	KeepRecentTurns     *int   `json:"keep_recent_turns,omitempty"`
 	OutputReserveTokens *int   `json:"output_reserve_tokens"`
 }
 
@@ -21,27 +22,18 @@ type ContextTruncationPolicy struct {
 	Models        map[string]ContextTruncationRule `json:"models"`
 }
 
-// Threshold returns the configured threshold, preserving an explicit invalid zero for validation.
+// Threshold keeps headroom without a per-model tuning parameter.
 func (r ContextTruncationRule) Threshold() int {
-	if r.ThresholdPercent != nil {
-		return *r.ThresholdPercent
-	}
 	return 90
 }
 
 // Keep returns the minimum number of protected business turns.
 func (r ContextTruncationRule) Keep() int {
-	if r.KeepRecentTurns != nil {
-		return *r.KeepRecentTurns
-	}
 	return 1
 }
 
-// Safety returns a bounded rounding-up margin, or the explicit override.
+// Safety reserves a bounded rounding-up margin for token estimation.
 func (r ContextTruncationRule) Safety() int {
-	if r.SafetyTokens != nil {
-		return *r.SafetyTokens
-	}
 	return min(int((int64(r.WindowTokens)*2+99)/100), 8192)
 }
 
@@ -68,21 +60,20 @@ func (r ContextTruncationRule) Validate(channel bool) error {
 	if r.Mode != "custom" {
 		return fmt.Errorf("context_truncation: invalid mode")
 	}
-	if r.WindowTokens <= 0 || int64(r.WindowTokens) > 2147483647 || r.Threshold() < 1 || r.Threshold() > 100 || r.Keep() < 1 || r.Keep() > 256 {
-		return fmt.Errorf("context_truncation: invalid window, threshold or retained turns")
+	if r.WindowTokens <= 0 || int64(r.WindowTokens) > math.MaxInt32 {
+		return fmt.Errorf("context_truncation: invalid window")
 	}
 	if r.Safety() < 0 || r.Safety() >= r.WindowTokens {
 		return fmt.Errorf("context_truncation: invalid safety margin")
 	}
-	if r.OutputReserveTokens != nil {
-		if *r.OutputReserveTokens <= 0 || *r.OutputReserveTokens >= r.WindowTokens {
-			return fmt.Errorf("context_truncation: invalid output reserve")
-		}
-		if _, err := r.Budget(0); err != nil {
-			return err
-		}
+	if r.OutputReserveTokens == nil {
+		return fmt.Errorf("context_truncation: output reserve is required")
 	}
-	return nil
+	if *r.OutputReserveTokens <= 0 || *r.OutputReserveTokens > MaxOutputTokens || *r.OutputReserveTokens >= r.WindowTokens {
+		return fmt.Errorf("context_truncation: invalid output reserve")
+	}
+	_, err := r.Budget(0)
+	return err
 }
 
 // Validate validates model keys and all rules, without partial updates.

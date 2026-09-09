@@ -36,7 +36,7 @@ func TestContextPolicySelectionAudit(t *testing.T) {
 			info := convertedResponsesViaChatTestInfo("http://127.0.0.1", false)
 			info.RelayFormat = types.RelayFormatOpenAI
 			info.SetAttemptModelName(tc.model)
-			info.ChannelOtherSettings.ContextTruncation = &dto.ContextTruncationPolicy{Models: map[string]dto.ContextTruncationRule{tc.model: {Mode: tc.mode, WindowTokens: 1024}}}
+			info.ChannelOtherSettings.ContextTruncation = &dto.ContextTruncationPolicy{Models: map[string]dto.ContextTruncationRule{tc.model: {Mode: tc.mode, WindowTokens: 1024, OutputReserveTokens: common.GetPointer(64)}}}
 			request := &dto.GeneralOpenAIRequest{Model: tc.model, MaxTokens: common.GetPointer(uint(64)), Messages: []dto.Message{{Role: "user", Content: "hello"}}}
 			require.NoError(t, helper.ModelMappedHelper(c, info, request))
 			require.Nil(t, prepareTextInputPolicies(c, info, request, false))

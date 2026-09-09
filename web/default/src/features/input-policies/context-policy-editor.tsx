@@ -43,17 +43,15 @@ export function ContextPolicyEditor({
   const { t } = useTranslation()
   const [model, setModel] = useState('')
   const fields = [
-    ['window_tokens', t('Context window (tokens)'), 1, undefined],
-    ['threshold_percent', t('Truncation threshold (%)'), 1, 90],
-    ['keep_recent_turns', t('Keep recent turns'), 1, 1],
-    ['safety_tokens', t('Safety margin (blank = automatic)'), 0, undefined],
-    [
-      'output_reserve_tokens',
-      t('Output reserve (blank = request limit)'),
-      1,
-      undefined,
-    ],
+    ['window_tokens', t('Context window (tokens)')],
+    ['output_reserve_tokens', t('Output reserve (tokens)')],
   ] as const
+  const models: Record<string, ContextRule> = { ...value.models }
+  if (channel) {
+    for (const id of Object.keys(inherited?.models ?? {})) {
+      models[id] ??= { mode: 'inherit' }
+    }
+  }
   /** Replace one rule, preserving every other model. */
   function updateRule(id: string, rule: ContextRule) {
     onChange({ ...value, models: { ...value.models, [id]: rule } })
@@ -69,15 +67,15 @@ export function ContextPolicyEditor({
       {!channel && (
         <label className='flex items-center gap-2 text-sm'>
           <Switch
-            checked={value.force_disabled ?? false}
-            onCheckedChange={(force_disabled) =>
-              onChange({ ...value, force_disabled })
+            checked={!value.force_disabled}
+            onCheckedChange={(enabled) =>
+              onChange({ ...value, force_disabled: !enabled })
             }
           />
-          {t('Emergency stop for all channels')}
+          {t('Enable context truncation for all channels')}
         </label>
       )}
-      {Object.entries(value.models).map(([id, rule]) => (
+      {Object.entries(models).map(([id, rule]) => (
         <div key={id} className='space-y-3 rounded-md border p-3'>
           <div className='flex flex-wrap items-center gap-2'>
             <span className='min-w-0 flex-1 font-mono text-sm break-all'>
@@ -102,12 +100,13 @@ export function ContextPolicyEditor({
                 {t('Disabled')}
               </NativeSelectOption>
               <NativeSelectOption value='custom'>
-                {t('Custom')}
+                {channel ? t('Custom') : t('Enabled')}
               </NativeSelectOption>
             </NativeSelect>
             <Button
               type='button'
               variant='outline'
+              disabled={channel && !Object.hasOwn(value.models, id)}
               onClick={() => {
                 const models = { ...value.models }
                 delete models[id]
@@ -117,25 +116,33 @@ export function ContextPolicyEditor({
               {t('Remove')}
             </Button>
           </div>
-          {(rule.mode === 'custom' ||
-            (rule.mode === 'inherit' &&
-              inherited?.models?.[id]?.mode === 'custom')) && (
+          {channel && rule.mode === 'inherit' && (
+            <p className='text-muted-foreground text-sm' role='status'>
+              {t('Inherit global settings')}:{' '}
+              {!inherited?.force_disabled &&
+              inherited?.models[id]?.mode === 'custom'
+                ? t(
+                    'Window: {{window}} tokens; output reserve: {{reserve}} tokens',
+                    {
+                      window: inherited.models[id].window_tokens,
+                      reserve: inherited.models[id].output_reserve_tokens,
+                    }
+                  )
+                : t('Disabled')}
+            </p>
+          )}
+          {rule.mode === 'custom' && (
             <div className='grid gap-3 sm:grid-cols-2'>
-              {fields.map(([key, label, min, fallback]) => (
+              {fields.map(([key, label]) => (
                 <label key={key} className='space-y-1 text-sm'>
                   {label}
                   <Input
-                    disabled={rule.mode !== 'custom'}
+                    required
                     type='number'
-                    min={min}
+                    min={1}
+                    max={key === 'window_tokens' ? 2147483647 : 1073741823}
                     step={1}
-                    value={
-                      (rule.mode === 'inherit'
-                        ? inherited?.models?.[id]?.[key]
-                        : rule[key]) ??
-                      fallback ??
-                      ''
-                    }
+                    value={rule[key] ?? ''}
                     onChange={(e) =>
                       updateRule(id, {
                         ...rule,
@@ -165,14 +172,12 @@ export function ContextPolicyEditor({
           disabled={
             !model.trim() ||
             model.trim().length > 255 ||
-            Object.hasOwn(value.models, model.trim()) ||
+            Object.hasOwn(models, model.trim()) ||
             Object.keys(value.models).length >= 256
           }
           onClick={() => {
             updateRule(model.trim(), {
-              mode: 'custom',
-              threshold_percent: 90,
-              keep_recent_turns: 1,
+              mode: channel ? 'inherit' : 'custom',
             })
             setModel('')
           }}
@@ -182,7 +187,7 @@ export function ContextPolicyEditor({
       </div>
       <p className='text-muted-foreground text-xs'>
         {t(
-          'Set the real model window. If the request has no output limit, configure an output reserve. Images, audio and opaque histories are not trimmed.'
+          'Set the real context window and output reserve. Trimming keeps the latest complete turn, uses a 90% threshold and reserves an automatic safety margin. Output limits are not changed.'
         )}
       </p>
     </fieldset>

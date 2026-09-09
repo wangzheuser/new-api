@@ -131,7 +131,11 @@ func prepareTextInputPolicies(c *gin.Context, info *relaycommon.RelayInfo, reque
 		if err := common.Unmarshal(final, outgoing); err != nil {
 			return inputPolicyError(err)
 		}
-		finalBudget, err := rule.Budget(outgoing.GetTokenCountMeta().MaxTokens)
+		output := outgoing.GetTokenCountMeta().MaxTokens
+		if output < 0 || output > dto.MaxOutputTokens {
+			return inputPolicyError(fmt.Errorf("context_truncation_invalid_output_limit"))
+		}
+		finalBudget, err := rule.Budget(output)
 		if err != nil {
 			return inputPolicyError(err)
 		}

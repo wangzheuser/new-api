@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/tidwall/gjson"
+	"math"
 	"strings"
 )
 
@@ -310,7 +312,18 @@ func messageTools(m gjson.Result, field string) (calls, results []string) {
 	return
 }
 
-// Conflicts reports content-changing parameter overrides, including operation-style paths.
+// isOutputLimitWrite recognizes bounded scalar assignments, not whole-object mutations.
+func isOutputLimitWrite(path string, value gjson.Result) bool {
+	switch path {
+	case "max_tokens", "max_completion_tokens", "max_output_tokens", "generationConfig.maxOutputTokens":
+		n := value.Float()
+		return value.Type == gjson.Number && n > 0 && n <= dto.MaxOutputTokens && n == math.Trunc(n)
+	default:
+		return false
+	}
+}
+
+// Conflicts protects content and permits output assignments checked again on the final body.
 func Conflicts(overrides map[string]interface{}) bool {
 	keys := []string{"messages", "input", "contents", "system", "system_instruction", "systemInstruction", "instructions", "tools", "max_tokens", "max_completion_tokens", "max_output_tokens", "generationConfig", "generation_config", "model"}
 	encoded, _ := common.Marshal(overrides)
@@ -320,6 +333,9 @@ func Conflicts(overrides map[string]interface{}) bool {
 			return false
 		}
 		if mode := v.Get("mode").String(); mode != "" {
+			if mode == "set" && isOutputLimitWrite(v.Get("path").String(), v.Get("value")) {
+				return false
+			}
 			switch mode {
 			case "return_error", "set_header", "delete_header", "copy_header", "move_header", "pass_headers":
 				return false
@@ -332,6 +348,9 @@ func Conflicts(overrides map[string]interface{}) bool {
 		v.ForEach(func(k, x gjson.Result) bool {
 			key := k.String()
 			if key == "conditions" {
+				return true
+			}
+			if isOutputLimitWrite(key, x) {
 				return true
 			}
 			for _, protected := range keys {

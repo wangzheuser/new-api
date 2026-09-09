@@ -54,37 +54,41 @@ describe('input policy form contracts', () => {
       assert.equal(cachePolicySchema.safeParse(p).success, false)
     }
   })
-  test('custom context requires a real window; nullable automatic margins and zero safety survive', () => {
-    assert.equal(
-      contextPolicySchema.safeParse({ models: { m: { mode: 'custom' } } })
-        .success,
-      false
-    )
-    assert.equal(
-      contextPolicySchema.safeParse({
-        models: {
-          m: {
-            mode: 'custom',
-            window_tokens: 1000,
-            safety_tokens: 0,
-            output_reserve_tokens: null,
-          },
+  test('custom context requires two numbers and ignores removed settings', () => {
+    for (const rule of [
+      { mode: 'custom', window_tokens: 1000 },
+      { mode: 'custom', window_tokens: 1000, output_reserve_tokens: null },
+      { mode: 'custom', window_tokens: 1000, output_reserve_tokens: 980 },
+      {
+        mode: 'custom',
+        window_tokens: 2147483647,
+        output_reserve_tokens: 1073741824,
+      },
+    ]) {
+      assert.equal(
+        contextPolicySchema.safeParse({ models: { m: rule } }).success,
+        false
+      )
+    }
+    const current = {
+      mode: 'custom',
+      window_tokens: 1000,
+      output_reserve_tokens: 100,
+    }
+    const parsed = contextPolicySchema.parse({
+      models: {
+        m: {
+          ...current,
+          threshold_percent: 'ignored',
+          keep_recent_turns: {},
+          safety_tokens: false,
         },
-      }).success,
+      },
+    })
+    assert.deepEqual(parsed.models.m, current)
+    assert.equal(
+      validateInputPolicies(JSON.stringify({ context_truncation: parsed })),
       true
-    )
-    assert.equal(
-      contextPolicySchema.safeParse({
-        models: {
-          m: {
-            mode: 'custom',
-            window_tokens: 1000,
-            output_reserve_tokens: 999,
-            safety_tokens: 2,
-          },
-        },
-      }).success,
-      false
     )
   })
   test('channel/global scope, invalid objects and byte ceiling match the server', () => {

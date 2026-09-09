@@ -11,7 +11,7 @@ import (
 func TestInputPolicyOverrideAndEmergencyStop(t *testing.T) {
 	oldT, oldC := truncationPolicy.Load(), cacheSimulationPolicy.Load()
 	t.Cleanup(func() { truncationPolicy.Store(oldT); cacheSimulationPolicy.Store(oldC) })
-	require.NoError(t, SetContextTruncation(`{"models":{"m":{"mode":"custom","window_tokens":1000}}}`))
+	require.NoError(t, SetContextTruncation(`{"models":{"m":{"mode":"custom","window_tokens":1000,"output_reserve_tokens":100}}}`))
 	channel := &dto.ContextTruncationPolicy{Models: map[string]dto.ContextTruncationRule{"m": {Mode: "off"}}}
 	_, source, enabled := ResolveContextTruncation(channel, "m")
 	assert.Equal(t, "channel", source)

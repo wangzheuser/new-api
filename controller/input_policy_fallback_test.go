@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -22,7 +23,7 @@ func TestInputPolicyFallbackAllowsTruncationOnlyOnEligibleRequests(t *testing.T)
 			}
 			source := newContextFallbackChannel("source", "MODEL_A,MODEL_B", settings)
 			if enabled {
-				source.SetOtherSettings(dto.ChannelOtherSettings{ContextTruncation: &dto.ContextTruncationPolicy{Models: map[string]dto.ContextTruncationRule{"MODEL_B": {Mode: "custom", WindowTokens: 16}}}})
+				source.SetOtherSettings(dto.ChannelOtherSettings{ContextTruncation: &dto.ContextTruncationPolicy{Models: map[string]dto.ContextTruncationRule{"MODEL_B": {Mode: "custom", WindowTokens: 16, OutputReserveTokens: common.GetPointer(1)}}}})
 			}
 			require.NoError(t, db.Create(source).Error)
 			c := setupContextFallbackGinContext(t, source, "MODEL_A")

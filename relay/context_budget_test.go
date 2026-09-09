@@ -21,7 +21,7 @@ func TestContextBudgetHiddenHistory(t *testing.T) {
 		c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
 		info := convertedResponsesViaChatTestInfo("http://127.0.0.1", true)
 		info.RelayFormat = types.RelayFormatOpenAI
-		info.ChannelOtherSettings.ContextTruncation = &dto.ContextTruncationPolicy{Models: map[string]dto.ContextTruncationRule{"MODEL_X": {Mode: "custom", WindowTokens: 2048}}}
+		info.ChannelOtherSettings.ContextTruncation = &dto.ContextTruncationPolicy{Models: map[string]dto.ContextTruncationRule{"MODEL_X": {Mode: "custom", WindowTokens: 2048, OutputReserveTokens: common.GetPointer(64)}}}
 		request := &dto.GeneralOpenAIRequest{Model: "MODEL_X", MaxTokens: common.GetPointer(uint(64)), Messages: []dto.Message{
 			{Role: "user", Content: "old question"},
 			{Role: "assistant", ReasoningContent: common.GetPointer(strings.Repeat("longReasoningValue", 4000))},
@@ -65,7 +65,7 @@ func TestContextBudgetMessageCompaction(t *testing.T) {
 	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
 	info := convertedResponsesViaChatTestInfo("http://127.0.0.1", true)
 	info.RelayFormat = types.RelayFormatOpenAI
-	info.ChannelOtherSettings.ContextTruncation = &dto.ContextTruncationPolicy{Models: map[string]dto.ContextTruncationRule{"MODEL_X": {Mode: "custom", WindowTokens: 2048}}}
+	info.ChannelOtherSettings.ContextTruncation = &dto.ContextTruncationPolicy{Models: map[string]dto.ContextTruncationRule{"MODEL_X": {Mode: "custom", WindowTokens: 2048, OutputReserveTokens: common.GetPointer(64)}}}
 	request := &dto.GeneralOpenAIRequest{Model: "MODEL_X", MaxTokens: common.GetPointer(uint(64)), Messages: []dto.Message{
 		{Role: "user", Content: strings.Repeat("old disposable context ", 5000)},
 		{Role: "assistant", Content: "old answer", ReasoningContent: common.GetPointer("old thinking")},

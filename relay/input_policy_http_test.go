@@ -69,6 +69,11 @@ func TestInputPolicyHTTPMatrix(t *testing.T) {
 				for ui, upstreamFormat := range formats {
 					t.Run(string(client)+"_via_"+string(upstreamFormat)+fmt.Sprint(stream)+"_images_"+fmt.Sprint(images), func(t *testing.T) {
 						calls := 0
+						outputPath := []string{"max_tokens", "max_output_tokens", "max_tokens", "generationConfig.maxOutputTokens"}[ui]
+						// Responses conversion preserves the completion-limit semantics in Chat.
+						if ci == 1 && ui == 0 {
+							outputPath = "max_completion_tokens"
+						}
 						upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 							calls++
 							expectedPath := paths[ui]
@@ -83,6 +88,7 @@ func TestInputPolicyHTTPMatrix(t *testing.T) {
 								assert.Contains(t, string(body), png)
 							}
 							assert.NotContains(t, string(body), "disposable history")
+							assert.Equal(t, int64(32), gjson.GetBytes(body, outputPath).Int())
 							assert.Len(t, gjson.GetBytes(body, []string{"messages", "input", "messages", "contents"}[ui]).Array(), 1)
 							var decoded map[string]any
 							assert.NoError(t, common.Unmarshal(body, &decoded))
@@ -131,6 +137,10 @@ func TestInputPolicyHTTPMatrix(t *testing.T) {
 						info.ChannelOtherSettings.ContextTruncation = &dto.ContextTruncationPolicy{Models: map[string]dto.ContextTruncationRule{"MODEL_X": {Mode: "custom", WindowTokens: 2048, OutputReserveTokens: common.GetPointer(64)}}}
 						info.ChannelOtherSettings.CacheUsageSimulation = &dto.CacheUsageSimulationPolicy{Mode: "custom"}
 						info.InitInputPolicyState()
+						info.ParamOverride = map[string]interface{}{"operations": []interface{}{map[string]interface{}{
+							"mode": "set", "path": outputPath, "value": 32,
+							"conditions": []interface{}{map[string]interface{}{"path": outputPath, "mode": "gt", "value": 32}},
+						}}}
 						require.Nil(t, prepareTextInputPolicies(c, info, request, false))
 						require.True(t, info.ContextTruncation.Applied)
 						assert.Greater(t, info.ContextTruncation.Before, info.ContextTruncation.Budget)
