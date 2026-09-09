@@ -240,7 +240,7 @@ production_container() { echo "$TEST_PRODUCTION"; }
 container_version() { [[ "$1" == "$TEST_PRODUCTION" ]] && echo "$TEST_VERSION"; }
 proxy_version() { echo "$TEST_VERSION"; }
 public_version() { echo "$TEST_VERSION"; }
-docker() { return 1; }
+docker() { printf '\\n'; return 1; }
 python3() { echo "retention_called $*"; }
 if [[ "$TEST_ACTION" == cleanup ]]; then
  action_cleanup --execute ${TEST_ACCEPT:+--accept-current}
@@ -279,7 +279,7 @@ fi
         """A completed cleanup must not make the next release's status query fail."""
         result = self.invoke("status")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("candidate=new-api-blue candidate_state=absent candidate_version=absent", result.stdout)
+        self.assertEqual(result.stdout, "production=new-api-green production_version=new candidate=new-api-blue candidate_state=absent candidate_version=absent\n")
 
     def test_retired_rollback_target_is_rejected(self):
         """The old role-state file alone must never advertise usable rollback assets."""

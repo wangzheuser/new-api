@@ -208,9 +208,13 @@ action_status() {
   local production candidate candidate_state candidate_version
   production="$(production_container)"
   candidate="$(other_container "$production")"
-  candidate_state="$(docker inspect -f '{{.State.Status}}' "$candidate" 2>/dev/null || printf absent)"
-  candidate_version="$(container_version "$candidate" 2>/dev/null || printf stopped)"
-  [[ "$candidate_state" != absent ]] || candidate_version=absent
+  if candidate_state="$(docker inspect -f '{{.State.Status}}' "$candidate" 2>/dev/null)"; then
+    candidate_version="$(container_version "$candidate" 2>/dev/null || printf stopped)"
+  else
+    # Docker may write a newline before failing for a missing container.
+    candidate_state=absent
+    candidate_version=absent
+  fi
   printf 'production=%s production_version=%s candidate=%s candidate_state=%s candidate_version=%s\n' \
     "$production" "$(container_version "$production")" "$candidate" \
     "$candidate_state" "$candidate_version"
