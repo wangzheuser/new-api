@@ -8,12 +8,14 @@ COMPOSE_TEMPLATE="${COMPOSE_TEMPLATE:-$SCRIPT_DIR/docker-compose.slot.yml}"
 
 usage() {
   cat <<'EOF'
-Usage: release-remote.sh <self-check|status|backup|stage|gate|cutover|observe|finalize|rollback> [options]
+Usage: release-remote.sh <self-check|status|backup|stage|gate|cutover|observe|finalize|rollback|cleanup> [options]
 
 Mutating production actions require:
   cutover  --execute   CONFIRM_CUTOVER=<release-id>
   finalize --execute  CONFIRM_FINALIZE=<release-id>
   rollback --execute  CONFIRM_ROLLBACK=<release-id>
+  cleanup --execute   CONFIRM_CLEANUP=<release-id> (permanently retires old rollback assets)
+  cleanup [--dry-run|--execute] [--accept-current] (explicit acceptance of a completed non-passing observation)
 
 Observation gate:
   observe [--seconds N] [--interval N] defaults to 600 seconds / 30 seconds
@@ -194,6 +196,7 @@ action_self_check() {
   bash -n "$0"
   bash -n "$SCRIPT_DIR/protocol-stability-gate.sh"
   python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SCRIPT_DIR/low-traffic-evidence.py"
+  python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SCRIPT_DIR/retention.py"
   load_config
   render_compose blue >/dev/null
   render_compose green >/dev/null
@@ -202,13 +205,15 @@ action_self_check() {
 
 action_status() {
   load_config
-  local production candidate
+  local production candidate candidate_state candidate_version
   production="$(production_container)"
   candidate="$(other_container "$production")"
+  candidate_state="$(docker inspect -f '{{.State.Status}}' "$candidate" 2>/dev/null || printf absent)"
+  candidate_version="$(container_version "$candidate" 2>/dev/null || printf stopped)"
+  [[ "$candidate_state" != absent ]] || candidate_version=absent
   printf 'production=%s production_version=%s candidate=%s candidate_state=%s candidate_version=%s\n' \
     "$production" "$(container_version "$production")" "$candidate" \
-    "$(docker inspect -f '{{.State.Status}}' "$candidate")" \
-    "$(container_version "$candidate" 2>/dev/null || printf stopped)"
+    "$candidate_state" "$candidate_version"
 }
 
 action_backup() {
@@ -314,6 +319,7 @@ action_gate() {
   # Missing observation code must fail before production cutover.
   bash -n "$SCRIPT_DIR/protocol-stability-gate.sh"
   python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SCRIPT_DIR/low-traffic-evidence.py"
+  python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SCRIPT_DIR/retention.py"
   load_config
   # shellcheck disable=SC1090
   source "$STATE_DIR/stage.env"
@@ -370,8 +376,6 @@ action_cutover() {
     return
   fi
   [[ "$mode" == --execute && "${CONFIRM_CUTOVER:-}" == "$RELEASE_ID" ]]
-  exec 9>"${CUTOVER_LOCK:-/var/lock/new-api-cutover.lock}"
-  flock -n 9
   local cutover_at cutover_epoch
   cutover_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   cutover_epoch="$(date +%s)"
@@ -651,14 +655,23 @@ action_rollback() {
       OLD_VERSION="$(container_version "$OLD")"
     fi
     [[ -n "$OLD_IP" && -n "$OLD_VERSION" ]]
+    if ! docker inspect "$OLD" >/dev/null 2>&1 ||
+      ! docker image inspect "$(docker inspect -f '{{.Image}}' "$OLD")" >/dev/null 2>&1; then
+      printf 'rollback_blocked=assets_retired\n' >&2
+      return 1
+    fi
     printf 'rollback_dry_run=passed old=%s old_version=%s\n' "$OLD" "$OLD_VERSION"
     return
   fi
   # shellcheck disable=SC1090
   source "$STATE_DIR/role-state.env"
   [[ "$mode" == --execute && "${CONFIRM_ROLLBACK:-}" == "$RELEASE_ID" ]]
-  exec 9>"${CUTOVER_LOCK:-/var/lock/new-api-cutover.lock}"
-  flock -n 9
+  # Retention cleanup may have intentionally retired this release's rollback target.
+  if ! docker inspect "$OLD" >/dev/null 2>&1 ||
+    ! docker image inspect "$(docker inspect -f '{{.Image}}' "$OLD")" >/dev/null 2>&1; then
+    printf 'rollback_blocked=assets_retired\n' >&2
+    return 1
+  fi
   local current_ip
   current_ip="$(container_ip "$NEW")"
   restore_new_on_error() {
@@ -684,11 +697,68 @@ action_rollback() {
   done
   [[ "$internal" == "$OLD_VERSION" && "$public" == "$OLD_VERSION" ]]
   trap - ERR
-  printf 'rollback=passed production=%s version=%s\n' "$OLD" "$OLD_VERSION"
+  printf 'rollback=passed release_id=%s production=%s version=%s\n' "$RELEASE_ID" "$OLD" "$OLD_VERSION" |
+    tee "$STATE_DIR/rollback.result"
+}
+
+# Cleanup acceptance is separate from statistical acceptance; never rewrite observation evidence.
+action_cleanup() {
+  load_config
+  local mode=--dry-run accept=false production version observation field
+  local observed_release="" observed_production="" observed_version="" elapsed=0 requested=0 decision
+  for field in "$@"; do
+    case "$field" in
+      --dry-run|--execute) mode="$field" ;;
+      --accept-current) accept=true ;;
+      *) usage >&2; return 2 ;;
+    esac
+  done
+  source "$STATE_DIR/role-state.env"
+  production="$(production_container)"
+  version="$(container_version "$production")"
+  if [[ "$production" == "$NEW" && "$version" == "$VERSION" ]]; then
+    observation="$(cat "$STATE_DIR/observation.result")"
+    for field in $observation; do
+      case "$field" in
+        release_id=*) observed_release="${field#*=}" ;;
+        production=*) observed_production="${field#*=}" ;;
+        version=*) observed_version="${field#*=}" ;;
+        elapsed_seconds=*) elapsed="${field#*=}" ;;
+        requested_seconds=*) requested="${field#*=}" ;;
+      esac
+    done
+    [[ "$observed_release" == "$RELEASE_ID" && "$observed_production" == "$production" && "$observed_version" == "$version" ]]
+    [[ "$elapsed" =~ ^[0-9]+$ && "$requested" =~ ^[0-9]+$ ]]
+    (( requested >= 600 && elapsed >= requested ))
+    decision=passed
+    if [[ "$observation" != observation=passed\ * ]]; then
+      [[ "$accept" == true && ( "$observation" == observation=failed\ * || "$observation" == observation=inconclusive\ * ) ]]
+      decision=accepted_by_user
+    fi
+  elif [[ "$production" == "$OLD" && "$version" == "$OLD_VERSION" ]]; then
+    [[ "$(cat "$STATE_DIR/rollback.result")" == "rollback=passed release_id=$RELEASE_ID production=$OLD version=$OLD_VERSION" ]]
+    decision=rolled_back
+  else
+    printf 'cleanup_blocked=production_identity_mismatch\n' >&2
+    return 1
+  fi
+  [[ "$(proxy_version)" == "$version" && "$(public_version)" == "$version" ]]
+  [[ "$mode" != --execute || "${CONFIRM_CLEANUP:-}" == "$RELEASE_ID" ]]
+  python3 "$SCRIPT_DIR/retention.py" "$RELEASE_DIR" "$BACKUP_ROOT" "$production" "$version" \
+    "$PROXY_NETWORK" "$PROXY_ALIAS" "$POSTGRES_CONTAINER" "$OLD_VERSION" "$decision" \
+    "$PUBLIC_STATUS_URL" "$PROXY_CONTAINER" "$mode"
 }
 
 ACTION="${1:-}"
 shift || true
+# All state-changing phases share one lock, including observation and asset retirement.
+case "$ACTION" in
+  backup|stage|gate|cutover|observe|finalize|rollback|cleanup)
+    load_config
+    exec 9>"${CUTOVER_LOCK:-/var/lock/new-api-cutover.lock}"
+    flock -n 9
+    ;;
+esac
 case "$ACTION" in
   self-check) action_self_check "$@" ;;
   status) action_status "$@" ;;
@@ -699,5 +769,6 @@ case "$ACTION" in
   observe) action_observe "$@" ;;
   finalize) action_finalize "$@" ;;
   rollback) action_rollback "$@" ;;
+  cleanup) action_cleanup "$@" ;;
   *) usage >&2; exit 2 ;;
 esac

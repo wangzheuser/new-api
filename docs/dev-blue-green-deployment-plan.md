@@ -65,7 +65,9 @@ NEW
                    v
                 OBSERVED
                    v
-                FINALIZED
+                 FINALIZED
+                   v
+                 CLEANED
 ```
 
 `BUILT` 与 `BACKED_UP` 可以并行。target-clean-dist 只服务下一次发布，可在镜像上传后
@@ -146,7 +148,7 @@ deploy/blue-green/build-local.sh prepare \
 
 - `release.env`；
 - 镜像 `.tar.zst`；
-- `release-remote.sh`、`protocol-stability-gate.sh`、`low-traffic-evidence.py`（必须同提交、同目录上传）；
+- `release-remote.sh`、`protocol-stability-gate.sh`、`low-traffic-evidence.py`、`retention.py`（必须同提交、同目录上传）；
 - `docker-compose.slot.yml`；
 - 两套 target-clean-dist 归档。
 
@@ -171,7 +173,7 @@ deploy/blue-green/build-local.sh prepare \
 `public.conversation_logs` 的表结构、索引及约束，但通过 `--exclude-table-data` 排除这两张
 高容量日志表的行数据；恢复后这两张表为空，其余表的结构和数据正常恢复。排除清单随备份
 保存并与 restore list 交叉校验，清单变化时不得复用同一 release 的旧备份。新备份校验成功
-前不得删除旧备份；发布过程保留已有受限备份，不自动清理其他 release 的恢复资产。备份保留期清理由独立确认的维护任务处理。
+前不得删除旧备份；发布及观察期间保留已有恢复资产，发布决策完成后通过第 12 节的显式清理步骤收敛为一份。
 
 ## 7. 候选槽位与门禁
 
@@ -285,9 +287,9 @@ CONFIRM_FINALIZE=<release-id> ./release-remote.sh finalize --execute
 `finalize` 首先把旧槽位重启策略校正为 `unless-stopped`，再停止旧槽位容器，立即释放其
 CPU 和内存占用，并确保 Docker daemon 重启后不会意外拉起；容器元数据、可写层和旧镜像
 继续保留用于快速回滚。停止后连续验证新槽位健康、零重启、未 OOM、Nginx 内部版本和
-公网版本。验证通过后，`finalize` 保留两个槽位镜像，不执行全局 image/builder prune。
-部署执行端按本次 manifest 精确清理上传归档、本地镜像标签和专用 Builder，保留生产镜像、
-回滚镜像与受限备份；不得清理其他服务的 dangling 镜像或共享构建缓存。
+公网版本。验证通过后，`finalize` 暂时保留两个槽位镜像，再按第 12 节执行服务器保留策略。
+部署执行端仍按本次 manifest 精确清理上传归档、本地镜像标签和专用 Builder；
+不得清理其他服务的 dangling 镜像或共享构建缓存。
 
 ## 10. 回滚
 
@@ -382,3 +384,53 @@ app_http_committed=true，并保持转换错误、已提交业务负载、部分
 仅从回归归因中排除，不算业务成功、不补足样本。HTTP原始200/503数量保持不变；
 verified-upstream-counts.txt只统计真实HTTP503，避免从零HTTP5xx中错误减去SSE失败数。
 低流量交付其他条件、事前固定观察窗口、退款与真实错误阻断不变。应用错误分类和重试规则不变。
+
+
+## 12. 发布结束后的单版本保留约束
+
+这是 new-api 的项目专属保留策略：发布、观察和故障归因期间保留新旧两套；
+完成发布决策并明确授权删除旧回滚资产后，只保留实际生产版本和最新一份已验证备份。
+“镜像最新”按代理网络实际生产归属和镜像身份判断，不按镜像创建时间判断。
+本节取代发布结束后继续保留旧镜像的默认约定，不改变观察期间的保护要求。
+
+固定保留数量为 1，不增加后台 UI、保留天数或数量配置。执行入口：
+
+```bash
+./release-remote.sh cleanup --dry-run
+CONFIRM_CLEANUP=<release-id> ./release-remote.sh cleanup --execute
+```
+
+清理准入与原始门禁结果分开：
+
+- 新版通过同 release、同容器、同版本的不少于600秒观察，可在正常 finalize 后执行清理。
+- 成功回滚后，以本 release 的 `rollback.result` 和实际生产身份为准，保留恢复后的旧版，清理失败候选。
+- 已完成600秒观察但结果 failed/inconclusive 时，默认拒绝清理。只有用户明确接受当前版本并授权
+  放弃旧版快速回滚，执行者才能增加 `--accept-current`，仍须提供本 release 的 `CONFIRM_CLEANUP`。
+  仅“不回滚”不构成删除授权；判断依据和用户决定保存在本 release 的审查记录。
+  `cleanup.result.json` 记录 `decision=accepted_by_user`，不修改 `observation.result`，不伪造 passed。
+- 未完成观察、身份不匹配、生产不健康、备份损坏、共享镜像引用或存在更新 release，均拒绝清理。
+
+清理与 backup/stage/gate/cutover/observe/finalize/rollback 共用服务发布锁，备份还使用原备份锁；
+锁忙时退出，不打断正在执行的发布。先写 `state/cleanup.plan.json`，重新核对身份和文件清单后，
+依次停止旧槽位、复查生产、删除旧容器、删除旧镜像及旧备份和旧制品。禁止 force/prune 和卷删除。
+
+只处理受管资源：精确 `new-api` 镜像仓库、两种槽位名、`new-api-backups` 下标准 release 目录、
+`new-api-artifacts` 下标准 release 的镜像及两主题 clean-dist 归档。拒绝符号链接和路径越界；
+非标准历史文件不猜测归属、不自动删除。镜像被其他容器或其他仓库标签引用时整体阻断。
+
+生产版本保留镜像归档及 Default/Classic clean-dist 三份必要制品，供下次构建使用；
+最新备份必须先校验 SHA 并通过 `pg_restore -l`。最新备份损坏时停止，不悄悄删除它或退选旧备份。
+历史发布的审计记录、配置元数据、数据卷和日志目录不属于本清理范围。
+
+清理完成记录 `rollback_available=false`；旧槽位不存在是合法状态，`status` 显示 absent，
+下一次 `stage` 由 Compose 创建缺失槽位。清理后的旧 release 回滚入口在操作网络前明确拒绝。
+清理错误独立记录为失败，不触发应用回滚，也不重跑观察窗口；修复阻塞原因后可幂等重试。
+带有自动回滚 ERR trap 的发布执行器必须显式捕获清理退出码，不能把清理接入原回滚分支：
+
+```bash
+cleanup_rc=0
+CONFIRM_CLEANUP=<release-id> ./release-remote.sh cleanup --execute > state/cleanup.log 2>&1 || cleanup_rc=$?
+printf '%s\n' "$cleanup_rc" > state/cleanup.exit
+```
+
+本地临时制品仍按部署 manifest 清理，服务器保留策略不能替代本地清理。
