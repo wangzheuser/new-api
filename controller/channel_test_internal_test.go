@@ -168,7 +168,7 @@ func TestChannelTestStreamingRequestsBuildMatchingRelayInfo(t *testing.T) {
 
 // TestChannelConnectionTestOutputLimit verifies default and custom prompt output limits.
 func TestChannelConnectionTestOutputLimit(t *testing.T) {
-	assert.Zero(t, getChannelConnectionTestMaxOutputTokens("hi"))
+	assert.Equal(t, uint(1024), getChannelConnectionTestMaxOutputTokens("hi"))
 	assert.Equal(t, uint(1024), getChannelConnectionTestMaxOutputTokens("Hi"))
 	assert.Equal(t, uint(1024), getChannelConnectionTestMaxOutputTokens("hi "))
 	assert.Equal(t, uint(1024), getChannelConnectionTestMaxOutputTokens("first line\nsecond line"))
@@ -179,7 +179,7 @@ func TestChannelConnectionTestOutputLimit(t *testing.T) {
 	}).(*dto.GeneralOpenAIRequest)
 	require.True(t, ok)
 	require.NotNil(t, defaultRequest.MaxTokens)
-	assert.Equal(t, uint(16), *defaultRequest.MaxTokens)
+	assert.Equal(t, uint(1024), *defaultRequest.MaxTokens)
 
 	customPrompt := "  first line\nsecond line  "
 	customRequest, ok := buildTestRequest("gpt-4o-mini", "", nil, channelTestOptions{

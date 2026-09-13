@@ -105,10 +105,7 @@ const customChannelTestMaxOutputTokens = 1024
 const maxChannelTestResponseDetailBytes = 64 * 1024
 
 // getChannelConnectionTestMaxOutputTokens returns the expanded output limit for a custom prompt.
-func getChannelConnectionTestMaxOutputTokens(userPrompt string) uint {
-	if userPrompt == "hi" {
-		return 0
-	}
+func getChannelConnectionTestMaxOutputTokens(_ string) uint {
 	return customChannelTestMaxOutputTokens
 }
 
