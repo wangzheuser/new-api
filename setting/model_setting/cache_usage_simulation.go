@@ -16,6 +16,9 @@ var cacheSimulationPolicy atomic.Pointer[dto.CacheUsageSimulationPolicy]
 // ValidateInputPolicyOption validates supported option keys before any database write.
 func ValidateInputPolicyOption(key, value string) error {
 	switch key {
+	case SystemPromptOption:
+		_, err := ParseSystemPrompt(value)
+		return err
 	case ContextTruncationOption:
 		_, err := ParseContextTruncation(value)
 		return err

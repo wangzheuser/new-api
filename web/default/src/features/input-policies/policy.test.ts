@@ -28,6 +28,7 @@ import {
   cachePolicySchema,
   contextPolicySchema,
   mergeInputPolicy,
+  systemPromptPolicySchema,
   validateInputPolicies,
 } from './policy'
 
@@ -134,6 +135,25 @@ describe('input policy form contracts', () => {
     assert.deepEqual(
       JSON.parse(payload.channel.settings ?? '{}').provider_future,
       { key: 0 }
+    )
+  })
+  test('global system prompt policy validates model keys and prompt values', () => {
+    assert.equal(
+      systemPromptPolicySchema.safeParse({ models: { 'gpt-4o': 'prompt' } })
+        .success,
+      true
+    )
+    assert.equal(
+      systemPromptPolicySchema.safeParse({ models: { ' gpt-4o': 'prompt' } })
+        .success,
+      false
+    )
+    assert.equal(
+      validateInputPolicies(
+        JSON.stringify({ system_prompt: { models: { 'gpt-4o': 'prompt' } } }),
+        false
+      ),
+      true
     )
   })
 })

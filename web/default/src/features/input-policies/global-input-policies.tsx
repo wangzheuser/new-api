@@ -27,13 +27,16 @@ import { useSystemOptions } from '@/features/system-settings/hooks/use-system-op
 
 import { CachePolicyEditor } from './cache-policy-editor'
 import { ContextPolicyEditor } from './context-policy-editor'
+import { GlobalModelSystemPrompts } from './global-model-system-prompts'
 import {
   CACHE_OPTION,
   CONTEXT_OPTION,
+  SYSTEM_PROMPT_OPTION,
   DEFAULT_CACHE,
   validateInputPolicies,
   type CachePolicy,
   type ContextPolicy,
+  type SystemPromptPolicy,
 } from './policy'
 
 /** Save each whole policy atomically, without re-saving unrelated system options. */
@@ -65,12 +68,18 @@ export function GlobalInputPolicies() {
     drafts[CACHE_OPTION] ??
     data.data.find((o) => o.key === CACHE_OPTION)?.value ??
     JSON.stringify(DEFAULT_CACHE)
+  const systemPromptRaw =
+    drafts[SYSTEM_PROMPT_OPTION] ??
+    data.data.find((o) => o.key === SYSTEM_PROMPT_OPTION)?.value ??
+    '{"models":{}}'
   let context: ContextPolicy
   let cache: CachePolicy
+  let systemPrompt: SystemPromptPolicy
   try {
     context = JSON.parse(contextRaw)
     cache = JSON.parse(cacheRaw)
-    if (!context?.models || !cache || typeof cache !== 'object') {
+    systemPrompt = JSON.parse(systemPromptRaw)
+    if (!context?.models || !cache || !systemPrompt?.models || typeof cache !== 'object') {
       throw new Error()
     }
   } catch {
@@ -85,6 +94,7 @@ export function GlobalInputPolicies() {
             setDrafts({
               [CONTEXT_OPTION]: '{"models":{}}',
               [CACHE_OPTION]: JSON.stringify(DEFAULT_CACHE),
+              [SYSTEM_PROMPT_OPTION]: '{"models":{}}',
             })
           }
         >
@@ -128,6 +138,30 @@ export function GlobalInputPolicies() {
           setDrafts({ ...drafts, [CACHE_OPTION]: JSON.stringify(p) })
         }
       />
+      <GlobalModelSystemPrompts
+        value={systemPrompt.models}
+        onChange={(models) =>
+          setDrafts({
+            ...drafts,
+            [SYSTEM_PROMPT_OPTION]: JSON.stringify({ models }),
+          })
+        }
+      />
+      <Button
+        type='button'
+        disabled={
+          save.isPending ||
+          !validateInputPolicies(
+            JSON.stringify({ system_prompt: systemPrompt }),
+            false
+          )
+        }
+        onClick={() =>
+          save.mutate({ key: SYSTEM_PROMPT_OPTION, value: systemPromptRaw })
+        }
+      >
+        {t('Save global system prompts')}
+      </Button>
       <Button
         type='button'
         disabled={

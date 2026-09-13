@@ -11,6 +11,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayhelper "github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -33,7 +34,7 @@ func resolveSystemPrompt(info *relaycommon.RelayInfo) (string, bool) {
 	if info == nil {
 		return "", false
 	}
-	prompt, prepend, _, _ := info.ChannelSetting.ResolveSystemPromptForAttempt(
+	prompt, prepend, _, _ := model_setting.ResolveSystemPrompt(info.ChannelSetting,
 		info.GetRequestedModelName(),
 		info.GetAttemptModelName(),
 		info.IsContextFallbackActive(),
@@ -62,7 +63,7 @@ func PreviewSystemPromptTokens(c *gin.Context, info *relaycommon.RelayInfo, requ
 		return SystemPromptPreview{}, types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
 
-	prompt, prepend, source, matchedModel := settings.ResolveSystemPromptForAttempt(
+	prompt, prepend, source, matchedModel := model_setting.ResolveSystemPrompt(settings,
 		info.GetRequestedModelName(),
 		attemptModel,
 		fallbackActive,
@@ -200,7 +201,7 @@ func markSystemPromptApplied(c *gin.Context, info *relaycommon.RelayInfo) {
 	if c == nil || info == nil {
 		return
 	}
-	_, _, source, modelName := info.ChannelSetting.ResolveSystemPromptForAttempt(
+	_, _, source, modelName := model_setting.ResolveSystemPrompt(info.ChannelSetting,
 		info.GetRequestedModelName(),
 		info.GetAttemptModelName(),
 		info.IsContextFallbackActive(),

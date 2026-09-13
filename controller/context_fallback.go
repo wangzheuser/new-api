@@ -3,7 +3,6 @@ package controller
 import (
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -26,7 +25,7 @@ func prepareContextFallback(c *gin.Context, info *relaycommon.RelayInfo, request
 	meta := request.GetTokenCountMeta()
 	settings, _ := common.GetContextKeyType[dto.ChannelSettings](c, constant.ContextKeyChannelSetting)
 	rule, hasRule := settings.ResolveContextFallback(info.GetRequestedModelName())
-	hasPromptSettings := strings.TrimSpace(settings.SystemPrompt) != "" || len(settings.ModelSystemPrompts) > 0
+	hasPromptSettings := model_setting.HasSystemPrompt(settings, info.GetRequestedModelName(), info.GetRoutingModelName(), false)
 	if !hasRule && !hasPromptSettings {
 		info.SetEstimatePromptTokens(initialTokens)
 		return meta, nil

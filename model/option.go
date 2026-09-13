@@ -184,6 +184,7 @@ func InitOptionMap() {
 
 	common.OptionMap[model_setting.ContextTruncationOption] = `{ "force_disabled": false, "models": {} }`
 	common.OptionMap[model_setting.CacheUsageSimulationOption] = `{ "force_disabled": false, "enabled": false, "creation_trigger_percent": 20, "read_trigger_percent": 60, "creation_token_percent": 30, "read_token_percent": 50 }`
+	common.OptionMap[model_setting.SystemPromptOption] = `{ "models": {} }`
 	// 自动添加所有注册的模型配置
 	modelConfigs := config.GlobalConfig.ExportAllConfigs()
 	for k, v := range modelConfigs {
@@ -279,6 +280,8 @@ func updateOptionMap(key string, value string) (err error) {
 	common.OptionMap[key] = value
 
 	switch key {
+	case model_setting.SystemPromptOption:
+		return model_setting.SetSystemPrompt(value)
 	case model_setting.ContextTruncationOption:
 		return model_setting.SetContextTruncation(value)
 	case model_setting.CacheUsageSimulationOption:

@@ -20,6 +20,7 @@ import { z } from 'zod'
 
 export const CACHE_OPTION = 'cache_usage_simulation.policy'
 export const CONTEXT_OPTION = 'context_truncation.policy'
+export const SYSTEM_PROMPT_OPTION = 'system_prompt.policy'
 
 export const cachePolicySchema = z
   .object({
@@ -84,6 +85,21 @@ export type CachePolicy = z.input<typeof cachePolicySchema>
 export type ContextPolicy = z.input<typeof contextPolicySchema>
 export type ContextRule = ContextPolicy['models'][string]
 
+export const systemPromptPolicySchema = z.object({
+  models: z
+    .record(
+      z
+        .string()
+        .min(1)
+        .max(255)
+        .refine((id) => id.trim() === id),
+      z.string().trim().min(1).max(65536)
+    )
+    .refine((models) => Object.keys(models).length <= 256),
+})
+
+export type SystemPromptPolicy = z.input<typeof systemPromptPolicySchema>
+
 export const DEFAULT_CACHE: CachePolicy = {
   enabled: false,
   creation_trigger_percent: 20,
@@ -112,6 +128,9 @@ export function validateInputPolicies(
       ) {
         return false
       }
+    }
+    if (parsed.system_prompt !== undefined) {
+      systemPromptPolicySchema.parse(parsed.system_prompt)
     }
     if (parsed.cache_usage_simulation !== undefined) {
       const p = cachePolicySchema.parse(parsed.cache_usage_simulation)

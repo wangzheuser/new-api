@@ -89,6 +89,27 @@ type ChannelSettings struct {
 	ProtocolPolicy         *ChannelProtocolPolicy          `json:"protocol_policy,omitempty"`
 }
 
+// ModelSystemPromptPolicy stores global model-specific system prompts.
+type ModelSystemPromptPolicy struct {
+	Models map[string]string `json:"models"`
+}
+
+// Validate checks global model prompt keys and values.
+func (p ModelSystemPromptPolicy) Validate() error {
+	if len(p.Models) > MaxModelSystemPromptEntries {
+		return fmt.Errorf("model system prompt entries cannot exceed %d", MaxModelSystemPromptEntries)
+	}
+	for model, prompt := range p.Models {
+		if strings.TrimSpace(model) == "" || strings.TrimSpace(model) != model || len(model) > 255 {
+			return fmt.Errorf("invalid model system prompt model: %s", model)
+		}
+		if strings.TrimSpace(prompt) == "" || len(prompt) > MaxModelSystemPromptBytes {
+			return fmt.Errorf("invalid model system prompt for model: %s", model)
+		}
+	}
+	return nil
+}
+
 // EffectiveMaxQuality returns the configured conversion ceiling.
 func (p ChannelProtocolPolicy) EffectiveMaxQuality() ProtocolConversionQuality {
 	if p.MaxQuality == "" {

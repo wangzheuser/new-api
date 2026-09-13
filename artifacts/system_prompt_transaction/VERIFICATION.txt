@@ -1,0 +1,9 @@
+Changed branch/field: global model system prompt fallback via system_prompt.policy; channel model-specific settings remain higher priority.
+MODIFIED_FILE: artifacts/system_prompt_transaction/MODIFIED_FILE.txt
+DIFF_FILE: artifacts/system_prompt_transaction/DIFF_FILE.patch
+VERIFICATION: artifacts/system_prompt_transaction/VERIFICATION.txt
+ROLLBACK: artifacts/system_prompt_transaction/ROLLBACK.sh
+BASELINE command: git diff --check; result: clean before implementation snapshot; exit status: 0.
+MODIFIED command: go test ./dto ./setting/model_setting ./relay/... ./controller; result: passed; exit status: 0.
+ROLLBACK command: artifacts/system_prompt_transaction/ROLLBACK.sh /tmp/system_prompt_restore.txt /tmp/system_prompt_rollback_copy.txt; result: restored copy content to rolled back; exit status: 0.
+Restored behavior/status: rollback copy equals source restore content; working-tree implementation remains changed.

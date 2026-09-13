@@ -30,7 +30,7 @@ func applyRealtimeSystemPrompt(c *gin.Context, info *relaycommon.RelayInfo, even
 	}
 
 	modelName := info.GetRequestedModelName()
-	prompt, prepend := info.ChannelSetting.ResolveSystemPrompt(modelName)
+	prompt, prepend, source, _ := model_setting.ResolveSystemPrompt(info.ChannelSetting, modelName, info.GetAttemptModelName(), info.IsContextFallbackActive())
 	if prompt == "" {
 		return false
 	}
@@ -47,10 +47,6 @@ func applyRealtimeSystemPrompt(c *gin.Context, info *relaycommon.RelayInfo, even
 		event.Session.Instructions = prompt
 	}
 
-	source := "channel_default"
-	if configured, ok := info.ChannelSetting.ModelSystemPrompts[modelName]; ok && strings.TrimSpace(configured) != "" {
-		source = "model"
-	}
 	common.SetContextKey(c, constant.ContextKeySystemPromptApplied, true)
 	common.SetContextKey(c, constant.ContextKeySystemPromptSource, source)
 	common.SetContextKey(c, constant.ContextKeySystemPromptModel, modelName)
