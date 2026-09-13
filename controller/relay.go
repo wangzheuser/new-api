@@ -770,12 +770,15 @@ func retryBlockedByClientCommit(c *gin.Context, relayInfo *relaycommon.RelayInfo
 // resolveConfiguredFinalRelayError applies channel and system final_error rules after retries finish.
 func resolveConfiguredFinalRelayError(c *gin.Context, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
 	// Pre-send truncation failures are local request errors, not an upstream outage.
+	// Keep the classification so unmatched errors can use a safe client message
+	// after channel and global final_error overrides have had a chance to apply.
+	isLocalContextError := false
 	if relayInfo != nil && relayInfo.LastError != nil && relayInfo.ContextTruncation != nil && relayInfo.ContextTruncation.Enabled {
 		code := string(relayInfo.LastError.GetErrorCode())
 		_, upstream := relayInfo.LastError.GetUpstreamStatusCode()
 		if !upstream && relayInfo.LastError.StatusCode == http.StatusBadRequest &&
 			(code == "context_length_exceeded" || strings.HasPrefix(code, "context_truncation_")) {
-			return relayInfo.LastError
+			isLocalContextError = true
 		}
 	}
 	// Local conversion failures must not be presented as upstream congestion.
@@ -807,6 +810,15 @@ func resolveConfiguredFinalRelayError(c *gin.Context, relayInfo *relaycommon.Rel
 		logger.LogError(c, fmt.Sprintf("invalid default final_error override: %s", err.Error()))
 	} else if matched {
 		return mapped
+	}
+
+	if isLocalContextError {
+		return types.NewErrorWithStatusCode(
+			errors.New("请求上下文过长，请减少输入内容后重试。"),
+			relayInfo.LastError.GetErrorCode(),
+			relayInfo.LastError.StatusCode,
+			types.ErrOptionWithSkipRetry(),
+		)
 	}
 
 	return types.NewOpenAIError(
