@@ -9,6 +9,10 @@ function stableStringify(obj) {
 
 const newKeys = {
   en: {
+    'Global model system prompts': 'Global model system prompts',
+    'Used when a channel has no model-specific system prompt.':
+      'Used when a channel has no model-specific system prompt.',
+    'Save global system prompts': 'Save global system prompts',
     'Activate immediately': 'Activate immediately',
     'One subscription record will be created':
       'One subscription record will be created',
@@ -91,6 +95,10 @@ const newKeys = {
     'registration code': 'registration code',
   },
   zh: {
+    'Global model system prompts': '全局模型系统提示词',
+    'Used when a channel has no model-specific system prompt.':
+      '当渠道没有模型专属系统提示词时使用。',
+    'Save global system prompts': '保存全局系统提示词',
     'Activate immediately': '立即生效',
     'One subscription record will be created': '将创建一条订阅记录',
     'Renew after current subscription': '在当前订阅结束后续订',
@@ -165,6 +173,38 @@ const newKeys = {
     'registration code': '注册码',
   },
   'zh-TW': {
+    'Accounting only. Real upstream cache fields, including zero, always take priority. Defaults: creation 20%, read 60%; samples are independent.': '僅用於計費。實際上游快取欄位（包括零值）始終優先。預設值：建立 20%、讀取 60%；樣本彼此獨立。',
+    'Billed before truncation': '截斷前計費',
+    'Cache creation trigger (%)': '快取建立觸發機率 (%)',
+    'Cache read trigger (%)': '快取讀取觸發機率 (%)',
+    'Cache usage simulation': '快取用量模擬',
+    'Channel custom settings override global defaults. A global emergency stop overrides every channel.': '渠道自訂設定會覆寫全域預設值。全域緊急停止會覆寫所有渠道。',
+    'Context truncation': '上下文截斷',
+    'Context window (tokens)': '上下文視窗（token）',
+    'Created cache share (%)': '建立快取佔比 (%)',
+    'Emergency stop for all channels': '對所有渠道執行緊急停止',
+    'Failed to load settings': '載入設定失敗',
+    'Inherit global settings': '繼承全域設定',
+    'Input policies': '輸入策略',
+    'Invalid input policy. Check model budgets and percentages.': '輸入策略無效。請檢查模型預算與百分比。',
+    'Keep recent turns': '保留最近對話輪次',
+    'Model ID': '模型 ID',
+    'Output reserve (blank = request limit)': '輸出預留（留空 = 請求上限）',
+    'Read cache share (%)': '讀取快取佔比 (%)',
+    'Reset to defaults': '重設為預設值',
+    'Safety margin (blank = automatic)': '安全裕度（留空 = 自動）',
+    'Save cache simulation': '儲存快取模擬設定',
+    'Save context truncation': '儲存上下文截斷設定',
+    'Set the real model window. If the request has no output limit, configure an output reserve. Images, audio and opaque histories are not trimmed.': '設定實際模型視窗。若請求沒有輸出上限，請設定輸出預留。圖片、音訊與不透明歷史不會被截斷。',
+    'Simulated accounting, not upstream cache': '模擬計費，非上游快取',
+    'Token shares must total at most 100%. Both trigger probabilities cannot be 100%.': 'Token 佔比總和最多為 100%。兩個觸發機率不能同時為 100%。',
+    'Total billed input tokens': '計費輸入 token 總數',
+    'Trim oldest complete turns before sending. Billing uses the full input before trimming. Client usage is unchanged. Model IDs match before upstream mapping.': '傳送前截斷最舊的完整對話輪次。計費使用截斷前的完整輸入。用戶端用量不變。模型 ID 以映射至上游前的值比對。',
+    'Truncation threshold (%)': '截斷閾值 (%)',
+    'Global model system prompts': '全域模型系統提示詞',
+    'Used when a channel has no model-specific system prompt.':
+      '當渠道沒有模型專屬系統提示詞時使用。',
+    'Save global system prompts': '儲存全域系統提示詞',
     'Activate immediately': '立即生效',
     'One subscription record will be created': '將建立一筆訂閱記錄',
     'Renew after current subscription': '於目前訂閱結束後續訂',
@@ -239,6 +279,10 @@ const newKeys = {
     'registration code': '註冊碼',
   },
   fr: {
+    'Global model system prompts': 'Prompts système globaux des modèles',
+    'Used when a channel has no model-specific system prompt.':
+      'Utilisé lorsqu’un canal ne possède pas de prompt système spécifique au modèle.',
+    'Save global system prompts': 'Enregistrer les prompts système globaux',
     'Activate immediately': 'Activer immédiatement',
     'One subscription record will be created': 'Un seul abonnement sera créé',
     'Renew after current subscription': 'Renouveler après l’abonnement actuel',
@@ -323,6 +367,10 @@ const newKeys = {
     'registration code': 'code d’inscription',
   },
   ja: {
+    'Global model system prompts': 'グローバルモデルシステムプロンプト',
+    'Used when a channel has no model-specific system prompt.':
+      'チャネルにモデル固有のシステムプロンプトがない場合に使用します。',
+    'Save global system prompts': 'グローバルシステムプロンプトを保存',
     'Activate immediately': '今すぐ有効化',
     'One subscription record will be created':
       'サブスクリプションレコードが1件作成されます',
@@ -403,6 +451,10 @@ const newKeys = {
     'registration code': '登録コード',
   },
   ru: {
+    'Global model system prompts': 'Глобальные системные подсказки моделей',
+    'Used when a channel has no model-specific system prompt.':
+      'Используется, если для канала не задана системная подсказка модели.',
+    'Save global system prompts': 'Сохранить глобальные системные подсказки',
     'Activate immediately': 'Активировать сразу',
     'One subscription record will be created':
       'Будет создана одна запись подписки',
@@ -486,6 +538,10 @@ const newKeys = {
     'registration code': 'код регистрации',
   },
   vi: {
+    'Global model system prompts': 'Lời nhắc hệ thống toàn cục cho mô hình',
+    'Used when a channel has no model-specific system prompt.':
+      'Được sử dụng khi kênh không có lời nhắc hệ thống riêng cho mô hình.',
+    'Save global system prompts': 'Lưu lời nhắc hệ thống toàn cục',
     'Activate immediately': 'Kích hoạt ngay',
     'One subscription record will be created': 'Sẽ tạo một bản ghi gói đăng ký',
     'Renew after current subscription': 'Gia hạn sau gói đăng ký hiện tại',
