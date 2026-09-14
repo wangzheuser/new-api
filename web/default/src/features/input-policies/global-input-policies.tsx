@@ -79,7 +79,12 @@ export function GlobalInputPolicies() {
     context = JSON.parse(contextRaw)
     cache = JSON.parse(cacheRaw)
     systemPrompt = JSON.parse(systemPromptRaw)
-    if (!context?.models || !cache || !systemPrompt?.models || typeof cache !== 'object') {
+    if (
+      !context?.models ||
+      !cache ||
+      !systemPrompt?.models ||
+      typeof cache !== 'object'
+    ) {
       throw new Error()
     }
   } catch {
@@ -105,76 +110,90 @@ export function GlobalInputPolicies() {
   }
   return (
     <div className='space-y-4'>
-      <ContextPolicyEditor
-        value={context}
-        onChange={(p) =>
-          setDrafts({ ...drafts, [CONTEXT_OPTION]: JSON.stringify(p) })
-        }
-      />
-      {!validateInputPolicies(
-        JSON.stringify({ context_truncation: context }),
-        false
-      ) && (
-        <p role='alert' className='text-destructive text-sm'>
-          {t('Invalid input policy. Check model budgets and percentages.')}
-        </p>
-      )}
-      <Button
-        type='button'
-        disabled={
-          save.isPending ||
-          !validateInputPolicies(
-            JSON.stringify({ context_truncation: context }),
-            false
-          )
-        }
-        onClick={() => save.mutate({ key: CONTEXT_OPTION, value: contextRaw })}
-      >
-        {t('Save context truncation')}
-      </Button>
-      <CachePolicyEditor
-        value={cache}
-        onChange={(p) =>
-          setDrafts({ ...drafts, [CACHE_OPTION]: JSON.stringify(p) })
-        }
-      />
-      <GlobalModelSystemPrompts
-        value={systemPrompt.models}
-        onChange={(models) =>
-          setDrafts({
-            ...drafts,
-            [SYSTEM_PROMPT_OPTION]: JSON.stringify({ models }),
-          })
-        }
-      />
-      <Button
-        type='button'
-        disabled={
-          save.isPending ||
-          !validateInputPolicies(
-            JSON.stringify({ system_prompt: systemPrompt }),
-            false
-          )
-        }
-        onClick={() =>
-          save.mutate({ key: SYSTEM_PROMPT_OPTION, value: systemPromptRaw })
-        }
-      >
-        {t('Save global system prompts')}
-      </Button>
-      <Button
-        type='button'
-        disabled={
-          save.isPending ||
-          !validateInputPolicies(
-            JSON.stringify({ cache_usage_simulation: cache }),
-            false
-          )
-        }
-        onClick={() => save.mutate({ key: CACHE_OPTION, value: cacheRaw })}
-      >
-        {t('Save cache simulation')}
-      </Button>
+      <div className='space-y-3'>
+        <ContextPolicyEditor
+          value={context}
+          onChange={(p) =>
+            setDrafts({ ...drafts, [CONTEXT_OPTION]: JSON.stringify(p) })
+          }
+        />
+        {!validateInputPolicies(
+          JSON.stringify({ context_truncation: context }),
+          false
+        ) && (
+          <p role='alert' className='text-destructive text-sm'>
+            {t('Invalid input policy. Check model budgets and percentages.')}
+          </p>
+        )}
+        <div className='flex'>
+          <Button
+            type='button'
+            disabled={
+              save.isPending ||
+              !validateInputPolicies(
+                JSON.stringify({ context_truncation: context }),
+                false
+              )
+            }
+            onClick={() =>
+              save.mutate({ key: CONTEXT_OPTION, value: contextRaw })
+            }
+          >
+            {t('Save context truncation')}
+          </Button>
+        </div>
+      </div>
+      <div className='space-y-3'>
+        <CachePolicyEditor
+          value={cache}
+          onChange={(p) =>
+            setDrafts({ ...drafts, [CACHE_OPTION]: JSON.stringify(p) })
+          }
+        />
+        <div className='flex'>
+          <Button
+            type='button'
+            disabled={
+              save.isPending ||
+              !validateInputPolicies(
+                JSON.stringify({ cache_usage_simulation: cache }),
+                false
+              )
+            }
+            onClick={() => save.mutate({ key: CACHE_OPTION, value: cacheRaw })}
+          >
+            {t('Save cache simulation')}
+          </Button>
+        </div>
+      </div>
+      <div className='space-y-3'>
+        <GlobalModelSystemPrompts
+          value={systemPrompt.models}
+          onChange={(models) =>
+            setDrafts({
+              ...drafts,
+              [SYSTEM_PROMPT_OPTION]: JSON.stringify({ models }),
+            })
+          }
+        />
+        <div className='flex'>
+          <Button
+            type='button'
+            disabled={
+              save.isPending ||
+              !validateInputPolicies(
+                JSON.stringify({ system_prompt: systemPrompt }),
+                false
+              )
+            }
+            onClick={() =>
+              save.mutate({ key: SYSTEM_PROMPT_OPTION, value: systemPromptRaw })
+            }
+          >
+            {t('Save global system prompts')}
+          </Button>
+        </div>
+      </div>
     </div>
   )
 }
