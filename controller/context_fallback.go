@@ -271,6 +271,9 @@ func contextFallbackTargetEligible(channel *model.Channel, group, modelName, req
 	if channel == nil || channel.Status != common.ChannelStatusEnabled {
 		return false
 	}
+	if service.IsChannelRoutingBlocked(channel, modelName) {
+		return false
+	}
 	if !common.StringsContains(channel.GetGroups(), group) || !common.StringsContains(channel.GetModels(), modelName) {
 		return false
 	}

@@ -24,8 +24,9 @@ func TestMultiKeyHTTPFailureOverride(t *testing.T) {
 		upstream int
 		want     MultiKeyFailureAction
 	}{
-		{"upstream failure", 500, MultiKeyFailureTemporary},
-		{"gateway failure", 502, MultiKeyFailureTemporary},
+		{"upstream failure", 500, MultiKeyFailureNone},
+		{"gateway failure", 502, MultiKeyFailureNone},
+		{"rate limited", 429, MultiKeyFailureTemporary},
 		{"local conversion failure", 0, MultiKeyFailureNone},
 		{"mapped client error", 400, MultiKeyFailureNone},
 		{"expired credential", 401, MultiKeyFailurePersistent},

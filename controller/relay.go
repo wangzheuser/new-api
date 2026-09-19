@@ -266,7 +266,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		if newAPIError == nil {
 			service.FinishChannelKeyProbe(c, true)
-			service.RecordChannelUpstreamResponseAsync(channel, http.StatusOK)
+			service.RecordChannelUpstreamResponseAsync(channel, http.StatusOK,
+				common.GetContextKeyString(c, constant.ContextKeyChannelKey),
+				common.GetContextKeyString(c, constant.ContextKeyChannelHealthModel))
 			relayInfo.LastError = nil
 			// Response overrides may map one successful, billable upstream attempt
 			// to a client 4xx/5xx without changing its internal success semantics.
@@ -334,9 +336,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				}
 				logger.LogInfo(c, fmt.Sprintf("multi-key failure handled: channel_id=%d, key_index=%d, action=%s", channel.Id, common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex), keyAction))
 			} else {
-				if upstreamStatusCode, ok := newAPIError.GetUpstreamStatusCode(); ok && (channel.ChannelInfo.IsMultiKey || !service.ShouldDisableChannel(newAPIError)) {
-					service.RecordChannelUpstreamResponseAsync(channel, upstreamStatusCode)
-				}
+				service.RecordChannelUpstreamErrorAsync(channel, newAPIError, usingKey,
+					common.GetContextKeyString(c, constant.ContextKeyChannelHealthModel))
 				processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, usingKey, channel.GetAutoBan()), newAPIError)
 			}
 		}
@@ -628,10 +629,23 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	if preferredChannelID > 0 {
 		channel, err = model.CacheGetChannel(preferredChannelID)
 		selectGroup = relayRetryGroup(info)
+		if err == nil && channel != nil && channel.GetAutoBan() {
+			_, mappingErr := common.ResolveMappedModel(channel.GetModelMapping(), info.GetAttemptModelName())
+			if mappingErr != nil {
+				return nil, types.NewError(mappingErr, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+			}
+			if service.IsChannelRoutingBlocked(channel, info.GetAttemptModelName()) {
+				if retryParam.ExcludedChannelIDs == nil {
+					retryParam.ExcludedChannelIDs = make(map[int]struct{})
+				}
+				retryParam.ExcludedChannelIDs[channel.Id] = struct{}{}
+				return getChannel(c, info, retryParam)
+			}
+		}
 	} else if info.IsContextFallbackActive() && info.ContextFallback.RouteMode == dto.ContextFallbackModeSame {
 		selectGroup = contextFallbackRoutingGroup(c, info)
 		channel, err = model.CacheGetChannel(info.ContextFallback.SourceChannelID)
-		if err == nil && channel != nil && channel.GetAutoBan() && service.IsChannelTemporarilyDisabled(channel.Id) {
+		if err == nil && channel != nil && service.IsChannelRoutingBlocked(channel, info.GetAttemptModelName()) {
 			channel = nil
 		} else if err == nil && !contextFallbackTargetEligible(channel, selectGroup, info.GetAttemptModelName(), c.Request.URL.Path, info.IsStream) {
 			channel = nil
@@ -1064,7 +1078,7 @@ func RelayTask(c *gin.Context) {
 				break
 			}
 		}
-		if channel.GetAutoBan() && (service.IsChannelTemporarilyDisabled(channel.Id) || service.IsMultiKeyPoolTemporarilyDisabled(channel.Id)) {
+		if service.IsChannelRoutingBlocked(channel, relayInfo.GetRoutingModelName()) {
 			taskErr = service.TaskErrorWrapperLocal(errors.New("channel is temporarily disabled"), "channel_temporarily_disabled", http.StatusServiceUnavailable)
 			break
 		}
@@ -1084,7 +1098,9 @@ func RelayTask(c *gin.Context) {
 		result, taskErr = relay.RelayTaskSubmit(c, relayInfo)
 		if taskErr == nil {
 			service.FinishChannelKeyProbe(c, true)
-			service.RecordChannelUpstreamResponseAsync(channel, http.StatusOK)
+			service.RecordChannelUpstreamResponseAsync(channel, http.StatusOK,
+				common.GetContextKeyString(c, constant.ContextKeyChannelKey),
+				common.GetContextKeyString(c, constant.ContextKeyChannelHealthModel))
 			break
 		}
 
@@ -1092,7 +1108,12 @@ func RelayTask(c *gin.Context) {
 		if !taskErr.LocalError {
 			relayError := taskErr.UpstreamError
 			if relayError == nil {
-				relayError = types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode)
+				relayError = types.NewOpenAIError(
+					taskErr.Error,
+					types.ErrorCodeBadResponseStatusCode,
+					taskErr.StatusCode,
+					types.ErrOptionWithUpstreamStatusCode(taskErr.StatusCode),
+				)
 			}
 			usingKey := common.GetContextKeyString(c, constant.ContextKeyChannelKey)
 			if _, real := relayError.GetUpstreamStatusCode(); real && channel.ChannelInfo.IsMultiKey {
@@ -1117,9 +1138,8 @@ func RelayTask(c *gin.Context) {
 				}
 				logger.LogInfo(c, fmt.Sprintf("multi-key task failure handled: channel_id=%d, key_index=%d, action=%s", channel.Id, common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex), keyAction))
 			} else {
-				if channel.ChannelInfo.IsMultiKey || !service.ShouldDisableChannel(relayError) {
-					service.RecordChannelUpstreamResponseAsync(channel, taskErr.StatusCode)
-				}
+				service.RecordChannelUpstreamErrorAsync(channel, relayError, usingKey,
+					common.GetContextKeyString(c, constant.ContextKeyChannelHealthModel))
 				processChannelError(c,
 					*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey,
 						usingKey, channel.GetAutoBan()),

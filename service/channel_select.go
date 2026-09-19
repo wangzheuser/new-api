@@ -217,46 +217,23 @@ func CacheGetRandomSatisfiedChannelWithRoute(param *RetryParam) (*model.Channel,
 		param.RelayFormat = relayFormat
 	}
 
-	var temporaryFallback *model.Channel
-	var temporaryFallbackGroup string
 	for {
 		channel, selectGroup, err := CacheGetRandomSatisfiedChannel(param)
 		if err != nil {
 			return channel, nil, selectGroup, err
 		}
 		if channel == nil {
-			if temporaryFallback == nil {
-				return nil, nil, selectGroup, nil
-			}
-			if !isTextProtocol {
-				return temporaryFallback, nil, temporaryFallbackGroup, nil
-			}
-			plan, planErr := PlanChannelProtocolRoute(temporaryFallback, param.ModelName, param.RequestPath, param.IsStream)
-			if planErr != nil || plan == nil {
-				return nil, nil, temporaryFallbackGroup, planErr
-			}
-			return temporaryFallback, plan, temporaryFallbackGroup, nil
+			return nil, nil, selectGroup, nil
 		}
 		mappingModel := param.ModelName
 		if strings.HasSuffix(param.RequestPath, "/responses/compact") {
 			mappingModel = strings.TrimSuffix(mappingModel, ratio_setting.CompactModelSuffix)
 		}
-		healthModel, mappingErr := common.ResolveMappedModel(channel.GetModelMapping(), mappingModel)
+		_, mappingErr := common.ResolveMappedModel(channel.GetModelMapping(), mappingModel)
 		if mappingErr != nil {
 			return nil, nil, selectGroup, mappingErr
 		}
-		if IsMultiKeyModelPoolBlocked(channel, healthModel) || (channel.GetAutoBan() && IsMultiKeyPoolTemporarilyDisabled(channel.Id)) {
-			if param.ExcludedChannelIDs == nil {
-				param.ExcludedChannelIDs = make(map[int]struct{})
-			}
-			param.ExcludedChannelIDs[channel.Id] = struct{}{}
-			continue
-		}
-		if channel.GetAutoBan() && IsChannelTemporarilyDisabled(channel.Id) {
-			if temporaryFallback == nil {
-				temporaryFallback = channel
-				temporaryFallbackGroup = selectGroup
-			}
+		if IsChannelRoutingBlocked(channel, mappingModel) {
 			if param.ExcludedChannelIDs == nil {
 				param.ExcludedChannelIDs = make(map[int]struct{})
 			}

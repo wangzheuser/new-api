@@ -345,10 +345,10 @@ const (
 
 // ChannelAutoDisableOverride replaces the global numeric thresholds for one channel.
 type ChannelAutoDisableOverride struct {
-	WindowMinutes    int `json:"window_minutes"`
-	MinRequests      int `json:"min_requests"`
-	ErrorRatePercent int `json:"error_rate_percent"`
-	DisableMinutes   int `json:"disable_minutes"`
+	SampleSize        int `json:"sample_size"`
+	MinimumSampleSize int `json:"minimum_sample_size"`
+	ErrorRatePercent  int `json:"error_rate_percent"`
+	DisableMinutes    int `json:"disable_minutes"`
 }
 
 // MultiKeyAutoDisableOverride replaces the global per-key disable policy for one channel.
@@ -360,26 +360,39 @@ type MultiKeyAutoDisableOverride struct {
 
 // MultiKeyTemporaryDisableInfo describes one TTL-backed key cooldown.
 type MultiKeyTemporaryDisableInfo struct {
-	DisabledUntil int64  `json:"disabled_until"`
-	StatusCode    int    `json:"last_status_code"`
-	Reason        string `json:"reason,omitempty"`
-	Scope         string `json:"scope,omitempty"`
-	Model         string `json:"model,omitempty"`
-	Category      string `json:"category,omitempty"`
-	Source        string `json:"source,omitempty"`
-	State         string `json:"state,omitempty"`
-	Failures      int    `json:"failures,omitempty"`
-	Version       string `json:"version,omitempty"`
+	DisabledUntil     int64   `json:"disabled_until"`
+	StatusCode        int     `json:"last_status_code"`
+	Reason            string  `json:"reason,omitempty"`
+	Scope             string  `json:"scope,omitempty"`
+	Model             string  `json:"model,omitempty"`
+	Category          string  `json:"category,omitempty"`
+	Source            string  `json:"source,omitempty"`
+	State             string  `json:"state,omitempty"`
+	Failures          int     `json:"failures,omitempty"`
+	Version           string  `json:"version,omitempty"`
+	KeyFingerprint    string  `json:"key_fingerprint,omitempty"`
+	SampleSize        int     `json:"sample_size,omitempty"`
+	MinimumSampleSize int     `json:"minimum_sample_size,omitempty"`
+	Requests          int64   `json:"requests,omitempty"`
+	Errors            int64   `json:"errors,omitempty"`
+	ErrorRate         float64 `json:"error_rate_percent,omitempty"`
 }
 
 // TemporaryAutoDisableInfo describes one Redis-backed temporary channel disable decision.
 type TemporaryAutoDisableInfo struct {
-	DisabledUntil int64   `json:"disabled_until"`
-	WindowMinutes int     `json:"window_minutes"`
-	Requests      int64   `json:"requests"`
-	Errors        int64   `json:"errors"`
-	ErrorRate     float64 `json:"error_rate_percent"`
-	StatusCodes   string  `json:"status_codes"`
+	DisabledUntil     int64   `json:"disabled_until"`
+	ConfigFingerprint string  `json:"config_fingerprint,omitempty"`
+	KeyFingerprint    string  `json:"key_fingerprint,omitempty"`
+	SampleSize        int     `json:"sample_size"`
+	MinimumSampleSize int     `json:"minimum_sample_size"`
+	Requests          int64   `json:"requests"`
+	Errors            int64   `json:"errors"`
+	ErrorRate         float64 `json:"error_rate_percent"`
+	StatusCodes       string  `json:"status_codes"`
+	Scope             string  `json:"scope,omitempty"`
+	Model             string  `json:"model,omitempty"`
+	StatusCode        int     `json:"status_code,omitempty"`
+	Reason            string  `json:"reason,omitempty"`
 }
 
 type ChannelOtherSettings struct {

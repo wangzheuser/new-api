@@ -163,7 +163,7 @@ func TestCacheGetRandomSatisfiedChannelWithRouteSkipsTemporarilyDisabledChannel(
 	assert.True(t, excluded)
 }
 
-func TestCacheGetRandomSatisfiedChannelWithRouteFallsBackWhenAllChannelsAreTemporaryDisabled(t *testing.T) {
+func TestCacheGetRandomSatisfiedChannelWithRouteReturnsNoneWhenAllChannelsAreTemporaryDisabled(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupChannelSelectProtocolTestDB(t)
 	first := createProtocolSelectionChannel(t, db, "first", 10, constant.EndpointTypeOpenAIResponse)
@@ -198,7 +198,6 @@ func TestCacheGetRandomSatisfiedChannelWithRouteFallsBackWhenAllChannelsAreTempo
 	})
 
 	require.NoError(t, err)
-	require.NotNil(t, selected)
-	assert.Equal(t, first.Id, selected.Id)
-	require.NotNil(t, plan)
+	assert.Nil(t, selected)
+	assert.Nil(t, plan)
 }

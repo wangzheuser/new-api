@@ -138,7 +138,7 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 					} else {
 						assert.Equal(t, 1, strings.Count(body, "[DONE]"))
 					}
-					assert.Len(t, service.LoadMultiKeyTemporaryDisableInfo(channel), 1)
+					assert.Empty(t, service.LoadMultiKeyCooldowns(channel.Id, "KEY_A"), "a single 5xx must remain below the rolling sample threshold")
 					key, _, apiErr := service.SelectNextEnabledChannelKey(channel, nil)
 					require.Nil(t, apiErr)
 					assert.NotEqual(t, "KEY_A", key, "a new request must skip the cooling key")
@@ -155,9 +155,7 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 					assert.Equal(t, 1, strings.Count(body, `"error":`), body)
 					assert.NotContains(t, body, "event: message_stop")
 					assert.NotContains(t, body, "[DONE]")
-					if scenario == "budget exhausted" {
-						assert.Len(t, service.LoadMultiKeyTemporaryDisableInfo(channel), 3)
-					}
+					assert.Empty(t, service.LoadMultiKeyCooldowns(channel.Id, "KEY_A"), "5xx failures are statistical until the configured sample threshold is reached")
 				}
 				loaded, err := model.GetChannelById(channel.Id, true)
 				require.NoError(t, err)

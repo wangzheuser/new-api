@@ -258,8 +258,8 @@ export const channelFormSchema = z
     test_model: z.string().optional(),
     auto_ban: z.number().optional(),
     auto_disable_use_global: z.boolean(),
-    auto_disable_window_minutes: z.number().int().min(1).max(60),
-    auto_disable_min_requests: z.number().int().min(1).max(100000),
+    auto_disable_sample_size: z.number().int().min(1).max(1000),
+    auto_disable_minimum_sample_size: z.number().int().min(1).max(1000),
     auto_disable_error_rate_percent: z.number().int().min(1).max(100),
     auto_disable_disable_minutes: z.number().int().min(1).max(1440),
     multi_key_auto_disable_use_global: z.boolean(),
@@ -333,6 +333,18 @@ export const channelFormSchema = z
     upstream_model_update_check_enabled: z.boolean().optional(),
     upstream_model_update_auto_sync_enabled: z.boolean().optional(),
     upstream_model_update_ignored_models: z.string().optional(),
+  })
+  .superRefine((values, ctx) => {
+    if (
+      values.auto_disable_minimum_sample_size >
+      values.auto_disable_sample_size
+    ) {
+      addRequiredIssue(
+        ctx,
+        'auto_disable_minimum_sample_size',
+        'Minimum sample size cannot exceed sample size'
+      )
+    }
   })
   .superRefine((data, ctx) => {
     if (!data.multi_key_auto_disable_use_global) {
@@ -590,8 +602,8 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   test_model: '',
   auto_ban: 1,
   auto_disable_use_global: true,
-  auto_disable_window_minutes: 10,
-  auto_disable_min_requests: 30,
+  auto_disable_sample_size: 20,
+  auto_disable_minimum_sample_size: 3,
   auto_disable_error_rate_percent: 80,
   auto_disable_disable_minutes: 10,
   multi_key_auto_disable_use_global: true,
@@ -745,8 +757,8 @@ export function transformChannelToFormDefaults(
   let upstreamModelUpdateIgnoredModels = ''
   let advancedCustom = ''
   let autoDisableUseGlobal = true
-  let autoDisableWindowMinutes = 10
-  let autoDisableMinRequests = 30
+  let autoDisableSampleSize = 20
+  let autoDisableMinimumSampleSize = 3
   let autoDisableErrorRatePercent = 80
   let autoDisableDisableMinutes = 10
   let multiKeyAutoDisableUseGlobal = true
@@ -786,13 +798,17 @@ export function transformChannelToFormDefaults(
       if (
         autoDisableOverride &&
         typeof autoDisableOverride === 'object' &&
-        !Array.isArray(autoDisableOverride)
+        !Array.isArray(autoDisableOverride) &&
+        Number.isInteger(autoDisableOverride.sample_size) &&
+        Number.isInteger(autoDisableOverride.minimum_sample_size) &&
+        Number.isInteger(autoDisableOverride.error_rate_percent) &&
+        Number.isInteger(autoDisableOverride.disable_minutes)
       ) {
         autoDisableUseGlobal = false
-        autoDisableWindowMinutes = Number(
-          autoDisableOverride.window_minutes ?? 10
+        autoDisableSampleSize = Number(autoDisableOverride.sample_size)
+        autoDisableMinimumSampleSize = Number(
+          autoDisableOverride.minimum_sample_size
         )
-        autoDisableMinRequests = Number(autoDisableOverride.min_requests ?? 30)
         autoDisableErrorRatePercent = Number(
           autoDisableOverride.error_rate_percent ?? 80
         )
@@ -837,8 +853,8 @@ export function transformChannelToFormDefaults(
     test_model: channel.test_model || '',
     auto_ban: channel.auto_ban ?? 1,
     auto_disable_use_global: autoDisableUseGlobal,
-    auto_disable_window_minutes: autoDisableWindowMinutes,
-    auto_disable_min_requests: autoDisableMinRequests,
+    auto_disable_sample_size: autoDisableSampleSize,
+    auto_disable_minimum_sample_size: autoDisableMinimumSampleSize,
     auto_disable_error_rate_percent: autoDisableErrorRatePercent,
     auto_disable_disable_minutes: autoDisableDisableMinutes,
     multi_key_auto_disable_use_global: multiKeyAutoDisableUseGlobal,
@@ -946,8 +962,8 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     delete settingsObj.auto_disable_override
   } else {
     settingsObj.auto_disable_override = {
-      window_minutes: formData.auto_disable_window_minutes,
-      min_requests: formData.auto_disable_min_requests,
+      sample_size: formData.auto_disable_sample_size,
+      minimum_sample_size: formData.auto_disable_minimum_sample_size,
       error_rate_percent: formData.auto_disable_error_rate_percent,
       disable_minutes: formData.auto_disable_disable_minutes,
     }

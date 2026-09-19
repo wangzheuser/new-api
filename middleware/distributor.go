@@ -58,7 +58,7 @@ func Distribute() func(c *gin.Context) {
 				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
 				return
 			}
-			if channel.GetAutoBan() && service.IsChannelTemporarilyDisabled(channel.Id) {
+			if service.IsChannelRoutingBlocked(channel, modelRequest.Model) {
 				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
 				return
 			}
@@ -121,7 +121,7 @@ func Distribute() func(c *gin.Context) {
 					affinityUsable := false
 					preferred, err := model.CacheGetChannel(preferredChannelID)
 					if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
-						(!preferred.GetAutoBan() || !service.IsChannelTemporarilyDisabled(preferred.Id)) &&
+						!service.IsChannelRoutingBlocked(preferred, modelRequest.Model) &&
 						channelSupportsRequest(preferred, c.Request.URL.Path, modelRequest.Model, modelRequest.Stream) {
 						if usingGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)

@@ -888,8 +888,12 @@ export function useChannelsColumns(
                         {formatTimestampToDate(temporaryDisable.disabled_until)}
                       </div>
                       <div>
-                        {t('Statistics window:')}{' '}
-                        {temporaryDisable.window_minutes} {t('minutes')}
+                        {t('Recent upstream sample size:')}{' '}
+                        {temporaryDisable.sample_size}
+                      </div>
+                      <div>
+                        {t('Minimum health sample size:')}{' '}
+                        {temporaryDisable.minimum_sample_size}
                       </div>
                       <div>
                         {t('Upstream responses:')} {temporaryDisable.requests}

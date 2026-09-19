@@ -1097,7 +1097,7 @@ func (channel *Channel) ValidateSettings() error {
 			return err
 		}
 	}
-	if channelOtherSettings.AutoDisableOverride != nil {
+	if channelOtherSettings.AutoDisableOverride != nil && hasChannelAutoDisableThresholdFields(channel.OtherSettings) {
 		if err := validateChannelAutoDisableOverride(*channelOtherSettings.AutoDisableOverride); err != nil {
 			return err
 		}
@@ -1111,13 +1111,28 @@ func (channel *Channel) ValidateSettings() error {
 	return nil
 }
 
+// hasChannelAutoDisableThresholdFields detects whether the persisted object uses the new threshold names.
+func hasChannelAutoDisableThresholdFields(rawSettings string) bool {
+	var settings map[string]interface{}
+	if err := common.UnmarshalJsonStr(rawSettings, &settings); err != nil {
+		return false
+	}
+	rawOverride, ok := settings["auto_disable_override"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	_, hasSampleSize := rawOverride["sample_size"]
+	_, hasMinimumSampleSize := rawOverride["minimum_sample_size"]
+	return hasSampleSize && hasMinimumSampleSize
+}
+
 // validateChannelAutoDisableOverride validates a complete per-channel threshold override.
 func validateChannelAutoDisableOverride(value dto.ChannelAutoDisableOverride) error {
-	if value.WindowMinutes < operation_setting.ChannelAutoDisableMinWindowMinutes || value.WindowMinutes > operation_setting.ChannelAutoDisableMaxWindowMinutes {
-		return fmt.Errorf("auto_disable_override.window_minutes must be between %d and %d", operation_setting.ChannelAutoDisableMinWindowMinutes, operation_setting.ChannelAutoDisableMaxWindowMinutes)
+	if value.SampleSize < operation_setting.ChannelAutoDisableMinSampleSize || value.SampleSize > operation_setting.ChannelAutoDisableMaxSampleSize {
+		return fmt.Errorf("auto_disable_override.sample_size must be between %d and %d", operation_setting.ChannelAutoDisableMinSampleSize, operation_setting.ChannelAutoDisableMaxSampleSize)
 	}
-	if value.MinRequests < operation_setting.ChannelAutoDisableMinRequests || value.MinRequests > operation_setting.ChannelAutoDisableMaxRequests {
-		return fmt.Errorf("auto_disable_override.min_requests must be between %d and %d", operation_setting.ChannelAutoDisableMinRequests, operation_setting.ChannelAutoDisableMaxRequests)
+	if value.MinimumSampleSize < operation_setting.ChannelAutoDisableMinMinimumSamples || value.MinimumSampleSize > value.SampleSize {
+		return fmt.Errorf("auto_disable_override.minimum_sample_size must be between %d and sample_size", operation_setting.ChannelAutoDisableMinMinimumSamples)
 	}
 	if value.ErrorRatePercent < operation_setting.ChannelAutoDisableMinErrorRate || value.ErrorRatePercent > operation_setting.ChannelAutoDisableMaxErrorRate {
 		return fmt.Errorf("auto_disable_override.error_rate_percent must be between %d and %d", operation_setting.ChannelAutoDisableMinErrorRate, operation_setting.ChannelAutoDisableMaxErrorRate)

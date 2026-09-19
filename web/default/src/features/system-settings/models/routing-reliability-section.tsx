@@ -79,8 +79,8 @@ const routingReliabilitySchema = z
     AutomaticDisableStatusCodes: z.string(),
     channel_auto_disable_setting: z.object({
       status_codes: z.string(),
-      window_minutes: z.coerce.number().int().min(1).max(60),
-      min_requests: z.coerce.number().int().min(1).max(100000),
+      sample_size: z.coerce.number().int().min(1).max(1000),
+      minimum_sample_size: z.coerce.number().int().min(1).max(1000),
       error_rate_percent: z.coerce.number().int().min(1).max(100),
       disable_minutes: z.coerce.number().int().min(1).max(1440),
     }),
@@ -125,6 +125,17 @@ const routingReliabilitySchema = z
           : `Invalid status code rules: ${statisticalDisableParsed.invalidTokens.join(
               ', '
             )}`,
+      })
+    }
+
+    if (
+      values.channel_auto_disable_setting.minimum_sample_size >
+      values.channel_auto_disable_setting.sample_size
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['channel_auto_disable_setting', 'minimum_sample_size'],
+        message: 'Minimum sample size cannot exceed sample size',
       })
     }
 
@@ -199,8 +210,8 @@ type RoutingReliabilitySectionProps = {
     AutomaticDisableKeywords: string
     AutomaticDisableStatusCodes: string
     'channel_auto_disable_setting.status_codes': string
-    'channel_auto_disable_setting.window_minutes': number
-    'channel_auto_disable_setting.min_requests': number
+    'channel_auto_disable_setting.sample_size': number
+    'channel_auto_disable_setting.minimum_sample_size': number
     'channel_auto_disable_setting.error_rate_percent': number
     'channel_auto_disable_setting.disable_minutes': number
     'multi_key_auto_disable_setting.temporary_status_codes': string
@@ -225,8 +236,8 @@ type NormalizedRoutingReliabilityValues = {
   AutomaticDisableKeywords: string
   AutomaticDisableStatusCodes: string
   'channel_auto_disable_setting.status_codes': string
-  'channel_auto_disable_setting.window_minutes': number
-  'channel_auto_disable_setting.min_requests': number
+  'channel_auto_disable_setting.sample_size': number
+  'channel_auto_disable_setting.minimum_sample_size': number
   'channel_auto_disable_setting.error_rate_percent': number
   'channel_auto_disable_setting.disable_minutes': number
   'multi_key_auto_disable_setting.temporary_status_codes': string
@@ -255,10 +266,10 @@ const buildFormDefaults = (
   AutomaticDisableStatusCodes: defaults.AutomaticDisableStatusCodes ?? '',
   channel_auto_disable_setting: {
     status_codes:
-      defaults['channel_auto_disable_setting.status_codes'] ?? '400-599',
-    window_minutes:
-      defaults['channel_auto_disable_setting.window_minutes'] ?? 10,
-    min_requests: defaults['channel_auto_disable_setting.min_requests'] ?? 30,
+      defaults['channel_auto_disable_setting.status_codes'] ?? '408,500-599',
+    sample_size: defaults['channel_auto_disable_setting.sample_size'] ?? 20,
+    minimum_sample_size:
+      defaults['channel_auto_disable_setting.minimum_sample_size'] ?? 3,
     error_rate_percent:
       defaults['channel_auto_disable_setting.error_rate_percent'] ?? 80,
     disable_minutes:
@@ -301,12 +312,12 @@ const normalizeDefaults = (
     defaults.AutomaticDisableStatusCodes ?? ''
   ).normalized,
   'channel_auto_disable_setting.status_codes': parseHttpStatusCodeRules(
-    defaults['channel_auto_disable_setting.status_codes'] ?? '400-599'
+    defaults['channel_auto_disable_setting.status_codes'] ?? '408,500-599'
   ).normalized,
-  'channel_auto_disable_setting.window_minutes':
-    defaults['channel_auto_disable_setting.window_minutes'] ?? 10,
-  'channel_auto_disable_setting.min_requests':
-    defaults['channel_auto_disable_setting.min_requests'] ?? 30,
+  'channel_auto_disable_setting.sample_size':
+    defaults['channel_auto_disable_setting.sample_size'] ?? 20,
+  'channel_auto_disable_setting.minimum_sample_size':
+    defaults['channel_auto_disable_setting.minimum_sample_size'] ?? 3,
   'channel_auto_disable_setting.error_rate_percent':
     defaults['channel_auto_disable_setting.error_rate_percent'] ?? 80,
   'channel_auto_disable_setting.disable_minutes':
@@ -350,10 +361,10 @@ const normalizeFormValues = (
   'channel_auto_disable_setting.status_codes': parseHttpStatusCodeRules(
     values.channel_auto_disable_setting.status_codes
   ).normalized,
-  'channel_auto_disable_setting.window_minutes':
-    values.channel_auto_disable_setting.window_minutes,
-  'channel_auto_disable_setting.min_requests':
-    values.channel_auto_disable_setting.min_requests,
+  'channel_auto_disable_setting.sample_size':
+    values.channel_auto_disable_setting.sample_size,
+  'channel_auto_disable_setting.minimum_sample_size':
+    values.channel_auto_disable_setting.minimum_sample_size,
   'channel_auto_disable_setting.error_rate_percent':
     values.channel_auto_disable_setting.error_rate_percent,
   'channel_auto_disable_setting.disable_minutes':
@@ -511,6 +522,23 @@ export function RoutingReliabilitySection({
       updates = updates.filter(
         (key) => key !== temporaryKey && key !== persistentKey
       )
+    }
+
+    const sampleSizeKey =
+      'channel_auto_disable_setting.sample_size' as const
+    const minimumSampleSizeKey =
+      'channel_auto_disable_setting.minimum_sample_size' as const
+    if (updates.includes(sampleSizeKey) && updates.includes(minimumSampleSizeKey)) {
+      const thresholdOrder =
+        normalized[sampleSizeKey] < baselineRef.current[sampleSizeKey]
+          ? [minimumSampleSizeKey, sampleSizeKey]
+          : [sampleSizeKey, minimumSampleSizeKey]
+      updates = [
+        ...thresholdOrder,
+        ...updates.filter(
+          (key) => key !== sampleSizeKey && key !== minimumSampleSizeKey
+        ),
+      ]
     }
 
     for (const key of updates) {
@@ -852,23 +880,21 @@ export function RoutingReliabilitySection({
 
               <FormField
                 control={form.control}
-                name='channel_auto_disable_setting.window_minutes'
+                name='channel_auto_disable_setting.sample_size'
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t('Statistics window (minutes)')}</FormLabel>
+                    <FormLabel>{t('Recent upstream sample size')}</FormLabel>
                     <FormControl>
                       <Input
                         type='number'
                         min={1}
-                        max={60}
+                        max={1000}
                         step={1}
                         {...safeNumberFieldProps(field)}
                       />
                     </FormControl>
                     <FormDescription>
-                      {t(
-                        'Count upstream responses from the latest time window.'
-                      )}
+                      {t('Keep the latest N valid upstream outcomes for health evaluation.')}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -877,23 +903,21 @@ export function RoutingReliabilitySection({
 
               <FormField
                 control={form.control}
-                name='channel_auto_disable_setting.min_requests'
+                name='channel_auto_disable_setting.minimum_sample_size'
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t('Minimum upstream responses')}</FormLabel>
+                    <FormLabel>{t('Minimum health sample size')}</FormLabel>
                     <FormControl>
                       <Input
                         type='number'
                         min={1}
-                        max={100000}
+                        max={1000}
                         step={1}
                         {...safeNumberFieldProps(field)}
                       />
                     </FormControl>
                     <FormDescription>
-                      {t(
-                        'Do not disable a channel before this sample size is reached.'
-                      )}
+                      {t('Start error-rate evaluation after this many valid outcomes.')}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>

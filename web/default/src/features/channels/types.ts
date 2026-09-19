@@ -76,11 +76,18 @@ export const channelSchema = z.object({
   temporary_auto_disable: z
     .object({
       disabled_until: z.number(),
-      window_minutes: z.number(),
+      config_fingerprint: z.string().optional(),
+      key_fingerprint: z.string().optional(),
+      sample_size: z.number(),
+      minimum_sample_size: z.number(),
       requests: z.number(),
       errors: z.number(),
       error_rate_percent: z.number(),
       status_codes: z.string(),
+      scope: z.string().optional(),
+      model: z.string().optional(),
+      status_code: z.number().optional(),
+      reason: z.string().optional(),
     })
     .optional(),
 })
@@ -229,8 +236,8 @@ export interface ChannelOpsResponse {
     redis_enabled: boolean
     auto_disable_defaults: {
       status_codes: string
-      window_minutes: number
-      min_requests: number
+      sample_size: number
+      minimum_sample_size: number
       error_rate_percent: number
       disable_minutes: number
     }
@@ -529,8 +536,8 @@ export interface ChannelFormData {
   test_model?: string
   auto_ban?: number
   auto_disable_use_global?: boolean
-  auto_disable_window_minutes?: number
-  auto_disable_min_requests?: number
+  auto_disable_sample_size?: number
+  auto_disable_minimum_sample_size?: number
   auto_disable_error_rate_percent?: number
   auto_disable_disable_minutes?: number
   status: number

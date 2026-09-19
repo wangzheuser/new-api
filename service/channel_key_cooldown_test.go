@@ -32,14 +32,14 @@ func TestMultiKeyPolicyScopesAndRecovery(t *testing.T) {
 		delay                            int64
 	}{
 		{"credential", 401, "invalid key", "", "key", "credential", MultiKeyFailurePersistent, 0},
-		{"old keyword ignored", 403, "Permission denied usage limit", "", "key", "", MultiKeyFailureNone, 0},
+		{"usage limit is model cooldown", 403, "Permission denied usage limit", "", "model", "account_quota", MultiKeyFailureTemporary, 0},
 		{"model quota", 429, "Error 429: Daily free limit reached on model z-ai/glm-5.3-flash. Try again in 2h 16m", "60", "model", "daily_quota", MultiKeyFailureTemporary, 8160},
 		{"later header", 429, "Error 429: Daily free limit reached on model z-ai/glm-5.3-flash. Try again in 2h 16m", "9000", "model", "daily_quota", MultiKeyFailureTemporary, 9000},
-		{"workspace", 429, "Workspace allocated quota exceeded, please increase your quota limit.", "", "key", "account_quota", MultiKeyFailureTemporary, 0},
-		{"entitlement", 403, "token plan entitlement exhausted", "", "key", "account_quota", MultiKeyFailureTemporary, 0},
-		{"generic quota text", 403, "quota exceeded", "", "key", "", MultiKeyFailureNone, 0},
-		{"http date", 429, "limited", now.Add(time.Hour).Format(http.TimeFormat), "key", "rate_limit", MultiKeyFailureTemporary, 3600},
-		{"invalid delay", 429, "limited", "999999999999999999999", "key", "rate_limit", MultiKeyFailureTemporary, 0},
+		{"workspace", 429, "Workspace allocated quota exceeded, please increase your quota limit.", "", "model", "account_quota", MultiKeyFailureTemporary, 0},
+		{"entitlement", 403, "token plan entitlement exhausted", "", "model", "account_quota", MultiKeyFailureTemporary, 0},
+		{"generic quota text", 403, "quota exceeded", "", "model", "account_quota", MultiKeyFailureTemporary, 0},
+		{"http date", 429, "limited", now.Add(time.Hour).Format(http.TimeFormat), "model", "rate_limit", MultiKeyFailureTemporary, 3600},
+		{"invalid delay", 429, "limited", "999999999999999999999", "model", "rate_limit", MultiKeyFailureTemporary, 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			err := upstreamStatusError(test.status, test.message)
@@ -58,7 +58,7 @@ func TestMultiKeyPolicyScopesAndRecovery(t *testing.T) {
 	local := types.NewOpenAIError(errors.New("token plan entitlement exhausted"), types.ErrorCodeBadResponse, 429)
 	assert.Equal(t, MultiKeyFailureNone, DecideMultiKeyFailure(channel, "model", local, now).Action)
 	channel.OtherSettings = `{"multi_key_auto_disable_override":{"persistent_status_codes":"403","temporary_status_codes":"429","temporary_disable_minutes":10}}`
-	assert.Equal(t, MultiKeyFailurePersistent, DecideMultiKeyFailure(channel, "model", upstreamStatusError(403, "token plan entitlement exhausted"), now).Action)
+	assert.Equal(t, MultiKeyFailureTemporary, DecideMultiKeyFailure(channel, "model", upstreamStatusError(403, "token plan entitlement exhausted"), now).Action)
 }
 
 // TestMultiKeyProbeLeaseLifecycle exercises concurrent instances, renewal, expiry and cancellation.
@@ -168,7 +168,7 @@ func TestMultiKeyModelIsolationAndHalfOpen(t *testing.T) {
 func TestMultiKeyCooldownBackoff(t *testing.T) {
 	server := setupMultiKeyHealthRedis(t)
 	now := int64(1000000)
-	name := "newapi:multi-key-disable:{1}:key:test"
+	name := "newapi:channel-auto-disable:v2:{1}:cooldown:key:test"
 	for _, want := range []int64{600, 1200, 2400} {
 		at, err := common.RDB.Eval(context.Background(), recordKeyCooldown, []string{name}, `{"version":"test"}`, now, 600, 0, 0).Int64()
 		require.NoError(t, err)

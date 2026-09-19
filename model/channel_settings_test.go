@@ -75,11 +75,16 @@ func TestChannelValidateSettingsInputModalities(t *testing.T) {
 }
 
 func TestChannelValidateSettingsAutoDisableOverride(t *testing.T) {
-	valid := &Channel{OtherSettings: `{"auto_disable_override":{"window_minutes":10,"min_requests":30,"error_rate_percent":80,"disable_minutes":10}}`}
+	valid := &Channel{OtherSettings: `{"auto_disable_override":{"sample_size":20,"minimum_sample_size":3,"error_rate_percent":80,"disable_minutes":10}}`}
 	require.NoError(t, valid.ValidateSettings())
 
-	invalid := &Channel{OtherSettings: `{"auto_disable_override":{"window_minutes":0,"min_requests":30,"error_rate_percent":80,"disable_minutes":10}}`}
-	assert.ErrorContains(t, invalid.ValidateSettings(), "auto_disable_override.window_minutes")
+	invalid := &Channel{OtherSettings: `{"auto_disable_override":{"sample_size":2,"minimum_sample_size":3,"error_rate_percent":80,"disable_minutes":10}}`}
+	assert.ErrorContains(t, invalid.ValidateSettings(), "auto_disable_override.minimum_sample_size")
+}
+
+func TestChannelValidateSettingsIgnoresLegacyAutoDisableOverride(t *testing.T) {
+	legacy := &Channel{OtherSettings: `{"auto_disable_override":{"window_minutes":10,"min_requests":30,"error_rate_percent":80,"disable_minutes":10}}`}
+	require.NoError(t, legacy.ValidateSettings())
 }
 
 func TestChannelValidateSettingsMultiKeyAutoDisableOverride(t *testing.T) {

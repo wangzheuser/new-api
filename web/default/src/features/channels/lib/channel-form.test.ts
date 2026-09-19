@@ -158,8 +158,8 @@ describe('channel temporary auto-disable overrides', () => {
     const channel = createChannel({})
     channel.settings = JSON.stringify({
       auto_disable_override: {
-        window_minutes: 5,
-        min_requests: 20,
+        sample_size: 5,
+        minimum_sample_size: 3,
         error_rate_percent: 70,
         disable_minutes: 30,
       },
@@ -167,16 +167,16 @@ describe('channel temporary auto-disable overrides', () => {
 
     const defaults = transformChannelToFormDefaults(channel)
     assert.equal(defaults.auto_disable_use_global, false)
-    assert.equal(defaults.auto_disable_window_minutes, 5)
-    assert.equal(defaults.auto_disable_min_requests, 20)
+    assert.equal(defaults.auto_disable_sample_size, 5)
+    assert.equal(defaults.auto_disable_minimum_sample_size, 3)
     assert.equal(defaults.auto_disable_error_rate_percent, 70)
     assert.equal(defaults.auto_disable_disable_minutes, 30)
 
     const payload = transformFormDataToUpdatePayload(defaults, channel.id)
     const settings = JSON.parse(String(payload.settings))
     assert.deepEqual(settings.auto_disable_override, {
-      window_minutes: 5,
-      min_requests: 20,
+      sample_size: 5,
+      minimum_sample_size: 3,
       error_rate_percent: 70,
       disable_minutes: 30,
     })

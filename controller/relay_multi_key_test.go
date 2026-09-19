@@ -128,7 +128,11 @@ func TestMultiKeyRelayHTTP(t *testing.T) {
 						assert.NotEqual(t, got[0], got[1])
 					}
 					if status == 429 {
-						assert.Len(t, service.LoadMultiKeyTemporaryDisableInfo(channel), expected, "even zero retries must isolate the first failed key")
+						cooldownCount := 0
+						for _, key := range []string{"KEY_A", "KEY_B"} {
+							cooldownCount += len(service.LoadMultiKeyCooldowns(channel.Id, key))
+						}
+						assert.Equal(t, expected, cooldownCount, "even zero retries must isolate the first failed key and model")
 					} else {
 						loaded, err := model.GetChannelById(channel.Id, true)
 						require.NoError(t, err)

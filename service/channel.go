@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -49,6 +50,20 @@ func ShouldDisableChannel(err *types.NewAPIError) bool {
 		return false
 	}
 	if err == nil {
+		return false
+	}
+	if statusCode, realUpstream := err.GetUpstreamStatusCode(); realUpstream && statusCode == http.StatusUnauthorized {
+		return true
+	}
+	// Upstream health failures are evaluated by rolling samples, never by the legacy persistent rule.
+	if isIgnoredChannelHealthError(strings.ToLower(err.Error())) || isRealUpstreamTimeout(err) {
+		return false
+	}
+	if statusCode, realUpstream := err.GetUpstreamStatusCode(); realUpstream &&
+		(statusCode == http.StatusRequestTimeout || statusCode >= http.StatusInternalServerError) {
+		return false
+	}
+	if IsTemporaryQuotaError(err) {
 		return false
 	}
 	if types.IsChannelError(err) {

@@ -235,8 +235,8 @@ export type ModelSettings = {
   AutomaticDisableKeywords: string
   AutomaticDisableStatusCodes: string
   'channel_auto_disable_setting.status_codes': string
-  'channel_auto_disable_setting.window_minutes': number
-  'channel_auto_disable_setting.min_requests': number
+  'channel_auto_disable_setting.sample_size': number
+  'channel_auto_disable_setting.minimum_sample_size': number
   'channel_auto_disable_setting.error_rate_percent': number
   'channel_auto_disable_setting.disable_minutes': number
   'multi_key_auto_disable_setting.temporary_status_codes': string

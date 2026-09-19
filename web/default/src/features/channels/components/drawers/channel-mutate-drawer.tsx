@@ -721,12 +721,15 @@ export function ChannelMutateDrawer({
       statusCodes:
         options.find(
           (item) => item.key === 'channel_auto_disable_setting.status_codes'
-        )?.value || '400-599',
-      windowMinutes: readInteger(
-        'channel_auto_disable_setting.window_minutes',
-        10
+        )?.value || '408,500-599',
+      sampleSize: readInteger(
+        'channel_auto_disable_setting.sample_size',
+        20
       ),
-      minRequests: readInteger('channel_auto_disable_setting.min_requests', 30),
+      minimumSampleSize: readInteger(
+        'channel_auto_disable_setting.minimum_sample_size',
+        3
+      ),
       errorRatePercent: readInteger(
         'channel_auto_disable_setting.error_rate_percent',
         80
@@ -1508,13 +1511,13 @@ export function ChannelMutateDrawer({
   useEffect(() => {
     if (!open || !form.getValues('auto_disable_use_global')) return
     form.setValue(
-      'auto_disable_window_minutes',
-      globalAutoDisableDefaults.windowMinutes,
+      'auto_disable_sample_size',
+      globalAutoDisableDefaults.sampleSize,
       { shouldDirty: false }
     )
     form.setValue(
-      'auto_disable_min_requests',
-      globalAutoDisableDefaults.minRequests,
+      'auto_disable_minimum_sample_size',
+      globalAutoDisableDefaults.minimumSampleSize,
       { shouldDirty: false }
     )
     form.setValue(
@@ -1533,8 +1536,8 @@ export function ChannelMutateDrawer({
     form,
     globalAutoDisableDefaults.disableMinutes,
     globalAutoDisableDefaults.errorRatePercent,
-    globalAutoDisableDefaults.minRequests,
-    globalAutoDisableDefaults.windowMinutes,
+    globalAutoDisableDefaults.minimumSampleSize,
+    globalAutoDisableDefaults.sampleSize,
     open,
   ])
 
@@ -4495,17 +4498,17 @@ export function ChannelMutateDrawer({
 
                               <FormField
                                 control={form.control}
-                                name='auto_disable_window_minutes'
+                                name='auto_disable_sample_size'
                                 render={({ field }) => (
                                   <FormItem>
                                     <FormLabel>
-                                      {t('Statistics window (minutes)')}
+                                      {t('Recent upstream sample size')}
                                     </FormLabel>
                                     <FormControl>
                                       <Input
                                         type='number'
                                         min={1}
-                                        max={60}
+                                        max={1000}
                                         step={1}
                                         disabled={
                                           currentAutoBan !== 1 ||
@@ -4526,17 +4529,17 @@ export function ChannelMutateDrawer({
 
                               <FormField
                                 control={form.control}
-                                name='auto_disable_min_requests'
+                                name='auto_disable_minimum_sample_size'
                                 render={({ field }) => (
                                   <FormItem>
                                     <FormLabel>
-                                      {t('Minimum upstream responses')}
+                                      {t('Minimum health sample size')}
                                     </FormLabel>
                                     <FormControl>
                                       <Input
                                         type='number'
                                         min={1}
-                                        max={100000}
+                                        max={1000}
                                         step={1}
                                         disabled={
                                           currentAutoBan !== 1 ||

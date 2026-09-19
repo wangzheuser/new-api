@@ -119,7 +119,7 @@ func TestTemporaryMultiKeyDisableSkipsKeyAndExpires(t *testing.T) {
 	require.Contains(t, temporary, 0)
 	assert.Equal(t, http.StatusTooManyRequests, temporary[0].StatusCode)
 	assert.NotContains(t, temporary[0].Reason, "KEY_A")
-	assert.Contains(t, server.Keys(), multiKeyTemporaryDisableKey(channel.Id, "KEY_A"))
+	assert.Contains(t, server.Keys(), multiKeyModelDisableKey(channel.Id, "KEY_A", "unknown"))
 	for _, redisKey := range server.Keys() {
 		assert.NotContains(t, redisKey, "KEY_A")
 	}
@@ -165,7 +165,7 @@ func TestAllCoolingKeysBlockPoolUntilEarliestExpiry(t *testing.T) {
 	assert.True(t, handled)
 	assert.True(t, IsMultiKeyPoolTemporarilyDisabled(channel.Id))
 
-	server.FastForward(server.TTL(multiKeyPoolBlockedKey(channel.Id)) + time.Second)
+	server.FastForward(server.TTL(multiKeyPoolBlockedKey(channel.Id, "unknown")) + time.Second)
 	assert.False(t, IsMultiKeyPoolTemporarilyDisabled(channel.Id))
 }
 

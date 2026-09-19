@@ -92,7 +92,7 @@ func HandleMultiKeyFailure(channel *model.Channel, keyIndex int, usingKey string
 	case MultiKeyFailureTemporary:
 		writeMultiKeyCooldown(channel, usingKey, decision, reason)
 	}
-	refreshMultiKeyPoolBlock(channel.Id)
+	refreshMultiKeyPoolBlock(channel.Id, decision.Model)
 	return action, true
 }
 
@@ -127,9 +127,12 @@ func LoadMultiKeyTemporaryDisableInfo(channel *model.Channel) map[int]dto.MultiK
 	if len(keys) == 0 {
 		return result
 	}
-	redisKeys := make([]string, 0, len(keys))
+	redisKeys := make([]string, 0, len(keys)*3)
 	for _, key := range keys {
 		redisKeys = append(redisKeys, multiKeyTemporaryDisableKey(channel.Id, key))
+		redisKeys = append(redisKeys, multiKeyModelDisableKey(channel.Id, key, "unknown"))
+		healthBlockKey, _, _ := channelAutoDisableScopeKeys(channel.Id, "key:"+MultiKeyFingerprint(key), "unknown", effectiveChannelAutoDisableConfig(channel))
+		redisKeys = append(redisKeys, healthBlockKey)
 	}
 	values, err := common.RDB.MGet(context.Background(), redisKeys...).Result()
 	if err != nil {
@@ -150,8 +153,34 @@ func LoadMultiKeyTemporaryDisableInfo(channel *model.Channel) map[int]dto.MultiK
 			continue
 		}
 		var info dto.MultiKeyTemporaryDisableInfo
-		if unmarshalErr := common.UnmarshalJsonStr(raw, &info); unmarshalErr == nil && info.DisabledUntil > time.Now().Unix() {
-			result[index] = info
+		if strings.Contains(redisKeys[index], ":scope:") {
+			var healthInfo dto.TemporaryAutoDisableInfo
+			if common.UnmarshalJsonStr(raw, &healthInfo) != nil {
+				continue
+			}
+			info = dto.MultiKeyTemporaryDisableInfo{
+				DisabledUntil:     healthInfo.DisabledUntil,
+				StatusCode:        healthInfo.StatusCode,
+				Reason:            healthInfo.Reason,
+				Scope:             healthInfo.Scope,
+				Model:             healthInfo.Model,
+				KeyFingerprint:    healthInfo.KeyFingerprint,
+				Category:          "statistical_health",
+				Source:            "rolling_sample",
+				SampleSize:        healthInfo.SampleSize,
+				MinimumSampleSize: healthInfo.MinimumSampleSize,
+				Requests:          healthInfo.Requests,
+				Errors:            healthInfo.Errors,
+				ErrorRate:         healthInfo.ErrorRate,
+			}
+		} else if unmarshalErr := common.UnmarshalJsonStr(raw, &info); unmarshalErr != nil {
+			continue
+		}
+		if info.DisabledUntil > time.Now().Unix() {
+			keyIndex := index / 3
+			if _, exists := result[keyIndex]; !exists {
+				result[keyIndex] = info
+			}
 		}
 	}
 	return result
@@ -162,30 +191,54 @@ func ClearMultiKeyTemporaryDisable(channelId int, key string) bool {
 	if channelId <= 0 || key == "" || !common.RedisEnabled || common.RDB == nil {
 		return false
 	}
-	var cursor uint64
 	removed := int64(0)
-	for {
-		names, next, err := common.RDB.Scan(context.Background(), cursor, multiKeyTemporaryDisableKey(channelId, key)+"*", 100).Result()
-		if err != nil {
-			logChannelAutoDisableRedisError(err)
-			return false
-		}
-		if len(names) > 0 {
-			count, err := common.RDB.Del(context.Background(), names...).Result()
+	patterns := []string{
+		multiKeyTemporaryDisableKey(channelId, key) + "*",
+		fmt.Sprintf("newapi:channel-auto-disable:v2:{%d}:scope:key:%s:*", channelId, MultiKeyFingerprint(key)),
+	}
+	for _, pattern := range patterns {
+		var cursor uint64
+		for {
+			names, next, err := common.RDB.Scan(context.Background(), cursor, pattern, 100).Result()
 			if err != nil {
 				logChannelAutoDisableRedisError(err)
 				return false
 			}
-			removed += count
-		}
-		cursor = next
-		if cursor == 0 {
-			break
+			if len(names) > 0 {
+				count, err := common.RDB.Del(context.Background(), names...).Result()
+				if err != nil {
+					logChannelAutoDisableRedisError(err)
+					return false
+				}
+				removed += count
+			}
+			cursor = next
+			if cursor == 0 {
+				break
+			}
 		}
 	}
 	_, err := common.RDB.Del(context.Background(), multiKeyPoolBlockedKey(channelId)).Result()
 	if err != nil {
 		logChannelAutoDisableRedisError(err)
+	}
+	var cursor uint64
+	for {
+		names, next, scanErr := common.RDB.Scan(context.Background(), cursor, multiKeyPoolBlockedKey(channelId)+":model:*", 100).Result()
+		if scanErr != nil {
+			logChannelAutoDisableRedisError(scanErr)
+			break
+		}
+		if len(names) > 0 {
+			if _, deleteErr := common.RDB.Del(context.Background(), names...).Result(); deleteErr != nil {
+				logChannelAutoDisableRedisError(deleteErr)
+				break
+			}
+		}
+		cursor = next
+		if cursor == 0 {
+			break
+		}
 	}
 	return removed > 0
 }
@@ -196,40 +249,67 @@ func ClearAllMultiKeyTemporaryDisable(channelId int) bool {
 		return false
 	}
 	ctx := context.Background()
-	pattern := fmt.Sprintf("newapi:multi-key-disable:{%d}:*", channelId)
-	var cursor uint64
+	patterns := []string{
+		fmt.Sprintf("newapi:channel-auto-disable:v2:{%d}:cooldown:*", channelId),
+		fmt.Sprintf("newapi:channel-auto-disable:v2:{%d}:scope:key:*", channelId),
+	}
 	removed := int64(0)
-	for {
-		keys, nextCursor, err := common.RDB.Scan(ctx, cursor, pattern, 100).Result()
-		if err != nil {
-			logChannelAutoDisableRedisError(err)
-			return removed > 0
-		}
-		if len(keys) > 0 {
-			count, deleteErr := common.RDB.Del(ctx, keys...).Result()
-			if deleteErr != nil {
-				logChannelAutoDisableRedisError(deleteErr)
+	for _, pattern := range patterns {
+		var cursor uint64
+		for {
+			keys, nextCursor, err := common.RDB.Scan(ctx, cursor, pattern, 100).Result()
+			if err != nil {
+				logChannelAutoDisableRedisError(err)
 				return removed > 0
 			}
-			removed += count
-		}
-		cursor = nextCursor
-		if cursor == 0 {
-			break
+			if len(keys) > 0 {
+				count, deleteErr := common.RDB.Del(ctx, keys...).Result()
+				if deleteErr != nil {
+					logChannelAutoDisableRedisError(deleteErr)
+					return removed > 0
+				}
+				removed += count
+			}
+			cursor = nextCursor
+			if cursor == 0 {
+				break
+			}
 		}
 	}
 	return removed > 0
 }
 
 // IsMultiKeyPoolTemporarilyDisabled reports whether every usable key is cooling down.
-func IsMultiKeyPoolTemporarilyDisabled(channelId int) bool {
+func IsMultiKeyPoolTemporarilyDisabled(channelId int, upstreamModels ...string) bool {
 	if channelId <= 0 || !common.AutomaticDisableChannelEnabled || !common.RedisEnabled || common.RDB == nil {
 		return false
 	}
-	exists, err := common.RDB.Exists(context.Background(), multiKeyPoolBlockedKey(channelId)).Result()
+	keys := []string{multiKeyPoolBlockedKey(channelId)}
+	if len(upstreamModels) > 0 && strings.TrimSpace(upstreamModels[0]) != "" {
+		keys = append(keys, multiKeyPoolBlockedKey(channelId, upstreamModels[0]))
+	}
+	exists, err := common.RDB.Exists(context.Background(), keys...).Result()
 	if err != nil {
 		logChannelAutoDisableRedisError(err)
 		return false
+	}
+	if exists == 0 && len(upstreamModels) == 0 {
+		pattern := multiKeyPoolBlockedKey(channelId) + ":model:*"
+		var cursor uint64
+		for {
+			names, next, scanErr := common.RDB.Scan(context.Background(), cursor, pattern, 100).Result()
+			if scanErr != nil {
+				logChannelAutoDisableRedisError(scanErr)
+				return false
+			}
+			if len(names) > 0 {
+				return true
+			}
+			cursor = next
+			if cursor == 0 {
+				break
+			}
+		}
 	}
 	return exists > 0
 }
@@ -254,7 +334,7 @@ func effectiveMultiKeyAutoDisableConfig(channel *model.Channel) operation_settin
 	return normalized
 }
 
-func refreshMultiKeyPoolBlock(channelId int) {
+func refreshMultiKeyPoolBlock(channelId int, upstreamModels ...string) {
 	if channelId <= 0 || !common.RedisEnabled || common.RDB == nil {
 		return
 	}
@@ -262,18 +342,55 @@ func refreshMultiKeyPoolBlock(channelId int) {
 	if err != nil || channel == nil || !channel.ChannelInfo.IsMultiKey {
 		return
 	}
+	channel = channel.Snapshot()
 	temporary := LoadMultiKeyTemporaryDisableInfo(channel)
+	upstreamModel := ""
+	if len(upstreamModels) > 0 {
+		upstreamModel = upstreamModels[0]
+	}
 	keys := channel.GetKeys()
 	earliest := int64(0)
 	hasUsableKey := false
-	pollingLock := model.GetChannelPollingLock(channelId)
-	pollingLock.Lock()
-	for index := range keys {
+	for index, key := range keys {
 		status := common.ChannelStatusEnabled
 		if storedStatus, exists := channel.ChannelInfo.MultiKeyStatusList[index]; exists {
 			status = storedStatus
 		}
 		if status != common.ChannelStatusEnabled {
+			continue
+		}
+		if upstreamModel != "" {
+			records, err := loadKeyCooldownRecords(channel, key, upstreamModel)
+			if err != nil || len(records) == 0 {
+				hasUsableKey = true
+				break
+			}
+			blocked := false
+			for _, record := range records {
+				if record.info.DisabledUntil > time.Now().Unix() {
+					blocked = true
+					if earliest == 0 || record.info.DisabledUntil < earliest {
+						earliest = record.info.DisabledUntil
+					}
+					continue
+				}
+				exists, probeErr := common.RDB.Exists(context.Background(), record.name+":probe").Result()
+				if probeErr != nil {
+					logChannelAutoDisableRedisError(probeErr)
+					hasUsableKey = true
+					break
+				}
+				if exists > 0 {
+					blocked = true
+				}
+			}
+			if hasUsableKey {
+				break
+			}
+			if !blocked {
+				hasUsableKey = true
+				break
+			}
 			continue
 		}
 		info, cooling := temporary[index]
@@ -285,10 +402,10 @@ func refreshMultiKeyPoolBlock(channelId int) {
 			earliest = info.DisabledUntil
 		}
 	}
-	pollingLock.Unlock()
 	ctx := context.Background()
+	blockKey := multiKeyPoolBlockedKey(channelId, upstreamModel)
 	if hasUsableKey || earliest == 0 {
-		if deleteErr := common.RDB.Del(ctx, multiKeyPoolBlockedKey(channelId)).Err(); deleteErr != nil {
+		if deleteErr := common.RDB.Del(ctx, blockKey).Err(); deleteErr != nil {
 			logChannelAutoDisableRedisError(deleteErr)
 		}
 		return
@@ -297,7 +414,7 @@ func refreshMultiKeyPoolBlock(channelId int) {
 	if ttl <= 0 {
 		return
 	}
-	created, setErr := common.RDB.SetNX(ctx, multiKeyPoolBlockedKey(channelId), earliest, ttl).Result()
+	created, setErr := common.RDB.SetNX(ctx, blockKey, earliest, ttl).Result()
 	if setErr != nil {
 		logChannelAutoDisableRedisError(setErr)
 		return
@@ -310,9 +427,13 @@ func refreshMultiKeyPoolBlock(channelId int) {
 }
 
 func multiKeyTemporaryDisableKey(channelId int, key string) string {
-	return fmt.Sprintf("newapi:multi-key-disable:{%d}:key:%s", channelId, MultiKeyFingerprint(key))
+	return fmt.Sprintf("newapi:channel-auto-disable:v2:{%d}:cooldown:key:%s", channelId, MultiKeyFingerprint(key))
 }
 
-func multiKeyPoolBlockedKey(channelId int) string {
-	return fmt.Sprintf("newapi:multi-key-disable:{%d}:pool-blocked", channelId)
+func multiKeyPoolBlockedKey(channelId int, upstreamModels ...string) string {
+	key := fmt.Sprintf("newapi:channel-auto-disable:v2:{%d}:cooldown:pool-blocked", channelId)
+	if len(upstreamModels) > 0 && strings.TrimSpace(upstreamModels[0]) != "" {
+		return key + ":model:" + MultiKeyFingerprint(normalizeMultiKeyHealthModel(upstreamModels[0]))
+	}
+	return key
 }

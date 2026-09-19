@@ -39,12 +39,16 @@ func DecideMultiKeyFailure(channel *model.Channel, upstreamModel string, apiErr 
 		d.Source = "channel"
 	}
 	setting := effectiveMultiKeyAutoDisableConfig(channel)
-	if operation_setting.MatchMultiKeyStatusCode(setting.PersistentStatusCodes, status) {
+	message := strings.ToLower(apiErr.Error())
+	if isIgnoredChannelHealthError(message) {
+		return d
+	}
+	providerCode := fmt.Sprint(apiErr.ToOpenAIError().Code)
+	// Credential failure is always persistent; quota and rate-limit failures are always temporary.
+	if status == http.StatusUnauthorized {
 		d.Action, d.Category = MultiKeyFailurePersistent, "credential"
 		return d
 	}
-	message := strings.ToLower(apiErr.Error())
-	providerCode := fmt.Sprint(apiErr.ToOpenAIError().Code)
 	quota := false
 	if match := dailyModelLimit.FindStringSubmatch(message); len(match) == 4 && upstreamModel != "" {
 		d.Scope, d.Model, d.Category = "model", upstreamModel, "daily_quota"
@@ -56,18 +60,49 @@ func DecideMultiKeyFailure(channel *model.Channel, upstreamModel string, apiErr 
 		quota = true
 	} else if providerCode == "INFERENCE_CAP_ERROR" && upstreamModel != "" {
 		d.Scope, d.Model, d.Category, quota = "model", upstreamModel, "model_quota", true
-	} else if strings.Contains(message, "token plan entitlement exhausted") || strings.Contains(message, "workspace allocated quota exceeded") || providerCode == "insufficient_quota" {
-		d.Category, quota = "account_quota", true
+	} else if isProviderQuotaMessage(message) {
+		d.Scope, d.Model, d.Category, quota = "model", upstreamModel, "provider_quota", true
+		if d.Model == "" {
+			d.Model = "unknown"
+		}
+	} else if isAccountQuotaMessage(message) || providerCode == "insufficient_quota" {
+		d.Scope, d.Model, d.Category, quota = "model", upstreamModel, "account_quota", true
+		if d.Model == "" {
+			d.Model = "unknown"
+		}
+	} else if status == http.StatusTooManyRequests {
+		d.Scope, d.Model, d.Category, quota = "model", upstreamModel, "rate_limit", true
+	}
+	if quota {
+		if d.Model == "" {
+			d.Model = "unknown"
+		}
+		d.Source += ":provider"
+		d.Action = MultiKeyFailureTemporary
+		if header := apiErr.GetUpstreamRetryAfter(); header != "" {
+			at, valid := parseMultiKeyRetryAfter(header, now)
+			if valid && at > d.RecoverAt {
+				d.RecoverAt = at
+			}
+			if !valid {
+				common.SysLog(fmt.Sprintf("invalid multi-key recovery hint: channel_id=%d", channel.Id))
+			}
+		}
+		return d
+	}
+	if operation_setting.MatchMultiKeyStatusCode(setting.PersistentStatusCodes, status) {
+		d.Action, d.Category = MultiKeyFailurePersistent, "credential"
+		return d
+	}
+	// 408 and 5xx are statistical health failures; they must not be converted into key cooldowns.
+	if !quota && (status == http.StatusRequestTimeout || status >= 500) {
+		return d
 	}
 	if !quota && !operation_setting.MatchMultiKeyStatusCode(setting.TemporaryStatusCodes, status) {
 		return d
 	}
 	d.Action = MultiKeyFailureTemporary
-	if quota {
-		d.Source += ":provider"
-	} else {
-		d.Category = "rate_limit"
-	}
+	d.Category = "rate_limit"
 	if header := apiErr.GetUpstreamRetryAfter(); header != "" {
 		at, valid := parseMultiKeyRetryAfter(header, now)
 		if valid && at > d.RecoverAt {

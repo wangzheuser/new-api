@@ -34,7 +34,7 @@ func TestMultiKeyCooldownManagement(t *testing.T) {
 	})
 	channel := &model.Channel{Name: "management-fixture", Key: "KEY_A\nKEY_B", Status: 1, ChannelInfo: model.ChannelInfo{IsMultiKey: true, MultiKeySize: 2}}
 	require.NoError(t, db.Create(channel).Error)
-	prefix := fmt.Sprintf("newapi:multi-key-disable:{%d}:key:%s:model:", channel.Id, service.MultiKeyFingerprint("KEY_A"))
+	prefix := fmt.Sprintf("newapi:channel-auto-disable:v2:{%d}:cooldown:key:%s:model:", channel.Id, service.MultiKeyFingerprint("KEY_A"))
 	for _, name := range []string{"MODEL_A", "MODEL_B"} {
 		raw := fmt.Sprintf(`{"scope":"model","model":%q,"disabled_until":1,"version":"v1"}`, name)
 		require.NoError(t, common.RDB.Set(context.Background(), prefix+service.MultiKeyFingerprint(name), raw, time.Hour).Err())
