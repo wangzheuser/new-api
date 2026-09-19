@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Preserve the first decision; a second window diagnoses uncertainty, not a retry to pass.
+# Evidence gaps are a hold state. They must not become a shell failure that an
+# outer deployment runner interprets as permission to roll back.
 set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STATE_DIR="${SCRIPT_DIR}/state"
@@ -26,9 +28,21 @@ if (( rc == 3 )) && [[ "${ADDITIONAL_DIAGNOSTIC_OBSERVATION:-0}" == 1 ]]; then
   fi
 fi
 case "$rc" in
-  0) result=passed ;;
-  3) result=evidence_inconclusive ;;
-  *) result=failed ;;
+  0)
+    result=passed
+    action=finalize
+    return_code=0
+    ;;
+  3)
+    result=evidence_inconclusive
+    action=hold
+    return_code=0
+    ;;
+  *)
+    result=failed
+    action=rollback
+    return_code="$rc"
+    ;;
 esac
-printf 'result=%s exit=%s\n' "$result" "$rc" | tee "$STATE_DIR/bounded.result"
-exit "$rc"
+printf 'result=%s observation_exit=%s action=%s\n' "$result" "$rc" "$action" | tee "$STATE_DIR/bounded.result"
+exit "$return_code"

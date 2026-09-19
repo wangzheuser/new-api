@@ -20,6 +20,7 @@ Mutating production actions require:
 Observation gate:
   observe [--seconds N] [--interval N] defaults to 600 seconds / 30 seconds
   finalize requires a successful observation of at least 600 seconds
+  an inconclusive observation requires ALLOW_INCONCLUSIVE_ROLLBACK=1 for an explicit rollback
 EOF
 }
 
@@ -670,6 +671,14 @@ action_rollback() {
   # shellcheck disable=SC1090
   source "$STATE_DIR/role-state.env"
   [[ "$mode" == --execute && "${CONFIRM_ROLLBACK:-}" == "$RELEASE_ID" ]]
+  if [[ -r "$STATE_DIR/observation.result" ]]; then
+    local observation_result
+    observation_result="$(cat "$STATE_DIR/observation.result")"
+    if [[ "$observation_result" == observation=inconclusive\ * && "${ALLOW_INCONCLUSIVE_ROLLBACK:-0}" != 1 ]]; then
+      printf 'rollback_blocked=observation_inconclusive\n' >&2
+      return 2
+    fi
+  fi
   # Retention cleanup may have intentionally retired this release's rollback target.
   if ! docker inspect "$OLD" >/dev/null 2>&1 ||
     ! docker image inspect "$(docker inspect -f '{{.Image}}' "$OLD")" >/dev/null 2>&1; then

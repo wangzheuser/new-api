@@ -305,13 +305,18 @@ Bonferroni 校正的双侧 Wilson 比例区间，仅当前窗口上界低于基�
 覆盖不足继续展示，整个窗口无可比分组归为待判定；`finalize` 仍只接受 passed。
 
 发布端上传同提交的 `observe-bounded.sh`，执行 `bash ./observe-bounded.sh`。
-执行端对退出码 1 或其他错误立即执行已授权回滚；对退出码 3 记录证据不足回退。
-包装脚本默认只执行预定的一轮 600 秒观察，证据不足返回 3，不自动重复等待。
+包装脚本默认只执行预定的一轮 600 秒观察，证据不足写入
+`result=evidence_inconclusive ... action=hold`，并将包装层退出码转换为 0。
+执行端必须读取 `state/bounded.result`，不得把原始观察退出码 3 或包装层的非失败退出码
+当作回滚信号；只有确定性回归才进入 `action=rollback`。这样可以避免 `set -e` 或通用
+非零处理把“证据不足”误判为候选版本故障。
 仅当执行前设置 `ADDITIONAL_DIAGNOSTIC_OBSERVATION=1` 时，才追加一次
 600 秒诊断观察及结算等待，保留原结果，不覆盖首次记录、不循环重试直到通过。
 第二次观察仍需独立标注；它用于补充诊断而不是重复显著性检验获取放行机会。
 首次待判定的发布不得仅凭第二窗口碰巧通过而 finalize：未获得独立对照证据时，
-到期回退旧版并记录 `evidence_inconclusive`，不称为新版代码故障。
+保持候选版本处于 hold，记录 `evidence_inconclusive`，不称为新版代码故障。
+`finalize` 仍会拒绝该状态；如业务策略确实要求恢复旧版，必须显式设置
+`ALLOW_INCONCLUSIVE_ROLLBACK=1` 并记录人工决策，不能由观察包装层自动触发。
 确定性业务回归、健康、版本、账务和整体 HTTP 门禁保持原有强度。
 
 

@@ -246,6 +246,8 @@ if [[ "$TEST_ACTION" == cleanup ]]; then
  action_cleanup --execute ${TEST_ACCEPT:+--accept-current}
 elif [[ "$TEST_ACTION" == rollback ]]; then
  action_rollback --dry-run
+elif [[ "$TEST_ACTION" == rollback_execute ]]; then
+ CONFIRM_ROLLBACK=fixture action_rollback --execute
 else
  action_status
 fi
@@ -253,7 +255,8 @@ fi
             result = subprocess.run(["bash", "-c", harness, "test", str(root)], capture_output=True, text=True,
                                     env={**os.environ, "TEST_ACTION": action, "TEST_PRODUCTION": "new-api-blue" if rollback else "new-api-green",
                                          "TEST_VERSION": "old" if rollback else "new", "TEST_ACCEPT": "1" if accept else "",
-                                         "CONFIRM_CLEANUP": "fixture" if confirmed else "wrong"})
+                                         "CONFIRM_CLEANUP": "fixture" if confirmed else "wrong",
+                                         "CONFIRM_ROLLBACK": "fixture" if confirmed else "wrong"})
             self.assertEqual((root / "observation.result").read_text(), record)
             return result
 
@@ -286,6 +289,12 @@ fi
         result = self.invoke("rollback")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("rollback_blocked=assets_retired", result.stderr)
+
+    def test_inconclusive_observation_blocks_implicit_rollback(self):
+        """An evidence gap cannot be converted into a rollback by a generic runner."""
+        result = self.invoke("rollback_execute", "inconclusive", confirmed=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("rollback_blocked=observation_inconclusive", result.stderr)
 
     def test_stage_creates_a_missing_slot(self):
         """The real stage action recreates a removed standby through Compose."""
