@@ -12,7 +12,7 @@ Usage: release-remote.sh <self-check|status|backup|stage|gate|cutover|observe|fi
 
 Mutating production actions require:
   cutover  --execute   CONFIRM_CUTOVER=<release-id>
-  finalize --execute  CONFIRM_FINALIZE=<release-id>
+  finalize --execute [--accept-inconclusive]  CONFIRM_FINALIZE=<release-id>
   rollback --execute  CONFIRM_ROLLBACK=<release-id>
   cleanup --execute   CONFIRM_CLEANUP=<release-id> (permanently retires old rollback assets)
   cleanup [--dry-run|--execute] [--accept-current] (explicit acceptance of a completed non-passing observation)
@@ -20,6 +20,8 @@ Mutating production actions require:
 Observation gate:
   observe [--seconds N] [--interval N] defaults to 600 seconds / 30 seconds
   finalize requires a successful observation of at least 600 seconds
+  --accept-inconclusive requires ACCEPT_INCONCLUSIVE=1 and a non-empty ACCEPT_REASON;
+  it records an explicit release decision without rewriting observation.result
   an inconclusive observation requires ALLOW_INCONCLUSIVE_ROLLBACK=1 for an explicit rollback
 EOF
 }
@@ -206,7 +208,7 @@ action_self_check() {
 
 action_status() {
   load_config
-  local production candidate candidate_state candidate_version
+  local production candidate candidate_state candidate_version observation=missing decision=missing
   production="$(production_container)"
   candidate="$(other_container "$production")"
   if candidate_state="$(docker inspect -f '{{.State.Status}}' "$candidate" 2>/dev/null)"; then
@@ -219,6 +221,15 @@ action_status() {
   printf 'production=%s production_version=%s candidate=%s candidate_state=%s candidate_version=%s\n' \
     "$production" "$(container_version "$production")" "$candidate" \
     "$candidate_state" "$candidate_version"
+  if [[ -r "$STATE_DIR/observation.result" ]]; then
+    observation="$(awk '{print $1}' "$STATE_DIR/observation.result")"
+    observation="${observation#observation=}"
+  fi
+  if [[ -r "$STATE_DIR/decision.result" ]]; then
+    decision="$(awk '{print $1}' "$STATE_DIR/decision.result")"
+    decision="${decision#release_decision=}"
+  fi
+  printf 'observation=%s release_decision=%s\n' "$observation" "$decision"
 }
 
 action_backup() {
@@ -581,22 +592,47 @@ action_observe() {
 
 action_finalize() {
   load_config
-  local mode="${1:---dry-run}"
-  local minimum_observe_seconds=600 observation_result field
+  local mode=--dry-run accept_inconclusive=false
+  local minimum_observe_seconds=600 observation_result observation_state field
   local observed_release="" observed_production="" observed_version=""
   local requested_seconds="" elapsed_seconds=""
+  local decision_mode=statistical_pass accept_reason="" decision_plan
+  for field in "$@"; do
+    case "$field" in
+      --dry-run|--execute) mode="$field" ;;
+      --accept-inconclusive) accept_inconclusive=true ;;
+      *) usage >&2; return 2 ;;
+    esac
+  done
   # shellcheck disable=SC1090
   source "$STATE_DIR/role-state.env"
-  # Finalization only accepts a successful observation for this release and production slot.
+  # Observation evidence is immutable; release disposition is recorded separately.
   if [[ ! -r "$STATE_DIR/observation.result" ]]; then
     printf 'finalize_blocked=observation_missing\n' >&2
     return 1
   fi
   observation_result="$(cat "$STATE_DIR/observation.result")"
-  if [[ "$observation_result" != observation=passed\ * ]]; then
-    printf 'finalize_blocked=observation_not_passed\n' >&2
-    return 1
-  fi
+  observation_state="${observation_result%% *}"
+  case "$observation_state" in
+    observation=passed)
+      ;;
+    observation=inconclusive)
+      if [[ "$accept_inconclusive" != true || "${ACCEPT_INCONCLUSIVE:-0}" != 1 ]]; then
+        printf 'finalize_blocked=observation_inconclusive acceptance_required=1\n' >&2
+        return 1
+      fi
+      accept_reason="${ACCEPT_REASON:-}"
+      if [[ -z "$accept_reason" || ${#accept_reason} -gt 256 || "$accept_reason" == *$'\n'* || "$accept_reason" == *$'\r'* ]]; then
+        printf 'finalize_blocked=accept_reason_required max_length=256\n' >&2
+        return 1
+      fi
+      decision_mode=accepted_inconclusive
+      ;;
+    *)
+      printf 'finalize_blocked=observation_failed\n' >&2
+      return 1
+      ;;
+  esac
   for field in $observation_result; do
     case "$field" in
       release_id=*) observed_release="${field#*=}" ;;
@@ -619,10 +655,14 @@ action_finalize() {
   [[ "$(docker inspect -f '{{.State.Health.Status}}' "$NEW")" == healthy ]]
   [[ "$(proxy_version)" == "$VERSION" ]]
   if [[ "$mode" == --dry-run ]]; then
-    printf 'finalize_dry_run=passed production=%s old=%s\n' "$NEW" "$OLD"
+    printf 'finalize_dry_run=passed decision=%s production=%s old=%s\n' "$decision_mode" "$NEW" "$OLD"
     return
   fi
   [[ "$mode" == --execute && "${CONFIRM_FINALIZE:-}" == "$RELEASE_ID" ]]
+  decision_plan="$STATE_DIR/decision.plan"
+  printf 'release_decision=%s state=planned release_id=%s production=%s version=%s reason=%s\n' \
+    "$decision_mode" "$RELEASE_ID" "$NEW" "$VERSION" "${accept_reason:-statistical_observation_passed}" > "$decision_plan"
+  chmod 600 "$decision_plan"
   # Preserve the manual standby stop across Docker daemon restarts.
   docker update --restart=unless-stopped "$OLD" >/dev/null
   [[ "$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$OLD")" == unless-stopped ]]
@@ -639,8 +679,11 @@ action_finalize() {
   done
   # Deployment cleanup is manifest-scoped; never prune another service's build cache.
   # Keep both slot images and let the deployment runner remove its registered uploads.
-  printf 'finalize=passed production=%s old=%s old_state=exited old_restart_policy=unless-stopped version=%s docker_cleanup=manifest_required\n' \
-    "$NEW" "$OLD" "$VERSION" | tee "$STATE_DIR/final.result"
+  printf 'release_decision=%s state=finalized release_id=%s production=%s version=%s reason=%s\n' \
+    "$decision_mode" "$RELEASE_ID" "$NEW" "$VERSION" "${accept_reason:-statistical_observation_passed}" > "$STATE_DIR/decision.result"
+  chmod 600 "$STATE_DIR/decision.result"
+  printf 'finalize=passed decision=%s production=%s old=%s old_state=exited old_restart_policy=unless-stopped version=%s docker_cleanup=manifest_required\n' \
+    "$decision_mode" "$NEW" "$OLD" "$VERSION" | tee "$STATE_DIR/final.result"
 }
 
 action_rollback() {

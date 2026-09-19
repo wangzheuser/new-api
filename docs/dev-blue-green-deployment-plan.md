@@ -302,7 +302,24 @@ Bonferroni 校正的双侧 Wilson 比例区间，仅当前窗口上界低于基�
 具体比较为 `pre_lower - post_upper > 0.02`，同时控制所有分组及两个比例区间。
 此计算假设请求近似独立，不构成代码因果证明；不得将缺少显著性当作等价性证明。
 仅基线记录不完整归为待判定，候选缺失结算或本地转换错误仍失败。
-覆盖不足继续展示，整个窗口无可比分组归为待判定；`finalize` 仍只接受 passed。
+覆盖不足继续展示，整个窗口无可比分组归为待判定；自动收尾仍只接受 passed。
+
+观察结论与发布处置分离：`observation.result` 只记录 `passed`、`failed` 或
+`inconclusive`，不得被人工改写。完整观察窗口结束后，如果候选健康、版本、账务、协议、
+浏览器和 HTTP 硬门禁全部通过，但自然流量仍不足以完成统计比较，发布负责人可以显式接受
+证据不足并完成收尾：
+
+```bash
+CONFIRM_FINALIZE=<release-id> \
+ACCEPT_INCONCLUSIVE=1 \
+ACCEPT_REASON="低流量但健康和硬门禁均通过" \
+./release-remote.sh finalize --accept-inconclusive --execute
+```
+
+该路径只允许 `inconclusive`，禁止接受确定性 `failed`；要求理由非空且不超过 256 个字符。
+它写入独立的 `state/decision.result` 和 `state/final.result`，保留原始观察结论，
+并在状态查询中显示 `release_decision=accepted_inconclusive`。`--dry-run` 会执行同样的
+身份、时长和健康校验，不产生终态记录。
 
 发布端上传同提交的 `observe-bounded.sh`，执行 `bash ./observe-bounded.sh`。
 包装脚本默认只执行预定的一轮 600 秒观察，证据不足写入
@@ -315,8 +332,10 @@ Bonferroni 校正的双侧 Wilson 比例区间，仅当前窗口上界低于基�
 第二次观察仍需独立标注；它用于补充诊断而不是重复显著性检验获取放行机会。
 首次待判定的发布不得仅凭第二窗口碰巧通过而 finalize：未获得独立对照证据时，
 保持候选版本处于 hold，记录 `evidence_inconclusive`，不称为新版代码故障。
-`finalize` 仍会拒绝该状态；如业务策略确实要求恢复旧版，必须显式设置
+默认仍保持 hold；如业务策略要求恢复旧版，必须显式设置
 `ALLOW_INCONCLUSIVE_ROLLBACK=1` 并记录人工决策，不能由观察包装层自动触发。
+如业务策略要求保留候选版本，则使用上面的 `--accept-inconclusive` 收尾路径，
+不得把处置记录伪造为统计通过。
 确定性业务回归、健康、版本、账务和整体 HTTP 门禁保持原有强度。
 
 

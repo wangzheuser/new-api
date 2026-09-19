@@ -282,7 +282,7 @@ fi
         """A completed cleanup must not make the next release's status query fail."""
         result = self.invoke("status")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, "production=new-api-green production_version=new candidate=new-api-blue candidate_state=absent candidate_version=absent\n")
+        self.assertEqual(result.stdout, "production=new-api-green production_version=new candidate=new-api-blue candidate_state=absent candidate_version=absent\nobservation=passed release_decision=missing\n")
 
     def test_retired_rollback_target_is_rejected(self):
         """The old role-state file alone must never advertise usable rollback assets."""
