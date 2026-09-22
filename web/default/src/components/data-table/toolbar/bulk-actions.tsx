@@ -35,6 +35,7 @@ type DataTableBulkActionsProps<TData> = {
   table: Table<TData>
   entityName: string
   children: React.ReactNode
+  selectedCount?: number
 }
 
 /**
@@ -44,6 +45,7 @@ type DataTableBulkActionsProps<TData> = {
  * @param {object} props The component props.
  * @param {Table<TData>} props.table The react-table instance.
  * @param {string} props.entityName The name of the entity being acted upon (e.g., "task", "user").
+ * @param {number} [props.selectedCount] Optional selected-row count for selections retained outside the current filtered row model.
  * @param {React.ReactNode} props.children The action buttons to be rendered inside the toolbar.
  * @returns {React.ReactNode | null} The rendered component or null if no rows are selected.
  */
@@ -51,10 +53,11 @@ export function DataTableBulkActions<TData>({
   table,
   entityName,
   children,
+  selectedCount: selectedCountOverride,
 }: DataTableBulkActionsProps<TData>): React.ReactNode | null {
   const { t } = useTranslation()
   const selectedRows = table.getFilteredSelectedRowModel().rows
-  const selectedCount = selectedRows.length
+  const selectedCount = selectedCountOverride ?? selectedRows.length
   const toolbarRef = useRef<HTMLDivElement>(null)
   const buttonsRef = useRef<NodeListOf<HTMLButtonElement> | null>(null)
   const [announcement, setAnnouncement] = useState('')

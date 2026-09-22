@@ -362,6 +362,31 @@ func TestUpdateChannelConvertsSingleKeyChannel(t *testing.T) {
 	})
 }
 
+func TestUpdateChannelPersistsExplicitEmptyModels(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	channel := model.Channel{
+		Type:   1,
+		Key:    "saved-key",
+		Name:   "channel with removable models",
+		Models: "model-a,model-b",
+		Group:  "default",
+		Status: common.ChannelStatusEnabled,
+	}
+	require.NoError(t, db.Create(&channel).Error)
+	require.NoError(t, channel.AddAbilities(nil))
+
+	response := updateChannelForTest(t, fmt.Sprintf(`{"id":%d,"models":""}`, channel.Id))
+	require.True(t, response.Success, response.Message)
+
+	var saved model.Channel
+	require.NoError(t, db.First(&saved, channel.Id).Error)
+	assert.Empty(t, saved.Models)
+
+	var abilityCount int64
+	require.NoError(t, db.Model(&model.Ability{}).Where("channel_id = ?", channel.Id).Count(&abilityCount).Error)
+	assert.Zero(t, abilityCount)
+}
+
 func TestUpdateMultiKeyChannelPreservesOrResetsKeyStatus(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
 

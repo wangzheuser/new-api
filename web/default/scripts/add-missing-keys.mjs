@@ -2417,6 +2417,64 @@ for (const [key, zh, zhTW, fr, ja, ru, vi] of multiKeyAutoDisableRows) {
   Object.assign(newKeys.vi, { [key]: vi })
 }
 
+const channelTestModelActionRows = [
+  [
+    'Select failed models ({{count}})',
+    '勾选失败模型（{{count}}）',
+    '勾選失敗模型（{{count}}）',
+    'Sélectionner les modèles en échec ({{count}})',
+    '失敗したモデルを選択（{{count}}）',
+    'Выбрать неуспешные модели ({{count}})',
+    'Chọn các mô hình thất bại ({{count}})',
+  ],
+  [
+    'Remove selected models',
+    '移除勾选模型',
+    '移除勾選模型',
+    'Supprimer les modèles sélectionnés',
+    '選択したモデルを削除',
+    'Удалить выбранные модели',
+    'Xóa các mô hình đã chọn',
+  ],
+  [
+    'Removed {{count}} selected models',
+    '已移除 {{count}} 个勾选模型',
+    '已移除 {{count}} 個勾選模型',
+    '{{count}} modèles sélectionnés supprimés',
+    '選択したモデルを {{count}} 個削除しました',
+    'Удалено выбранных моделей: {{count}}',
+    'Đã xóa {{count}} mô hình đã chọn',
+  ],
+  [
+    'Failed to remove selected models',
+    '移除勾选模型失败',
+    '移除勾選模型失敗',
+    'Échec de la suppression des modèles sélectionnés',
+    '選択したモデルの削除に失敗しました',
+    'Не удалось удалить выбранные модели',
+    'Không thể xóa các mô hình đã chọn',
+  ],
+  [
+    'This removes {{count}} selected models from this channel. This action cannot be undone.',
+    '此操作将从该渠道移除 {{count}} 个勾选模型，且无法撤销。',
+    '此操作將從該渠道移除 {{count}} 個勾選模型，且無法復原。',
+    'Cette action supprime {{count}} modèles sélectionnés de ce canal. Elle est irréversible.',
+    'この操作でこのチャネルから選択した {{count}} 個のモデルを削除します。元に戻せません。',
+    'Это удалит {{count}} выбранных моделей из канала. Действие необратимо.',
+    'Thao tác này sẽ xóa {{count}} mô hình đã chọn khỏi kênh. Không thể hoàn tác.',
+  ],
+]
+
+for (const [key, zh, zhTW, fr, ja, ru, vi] of channelTestModelActionRows) {
+  Object.assign(newKeys.en, { [key]: key })
+  Object.assign(newKeys.zh, { [key]: zh })
+  Object.assign(newKeys['zh-TW'], { [key]: zhTW })
+  Object.assign(newKeys.fr, { [key]: fr })
+  Object.assign(newKeys.ja, { [key]: ja })
+  Object.assign(newKeys.ru, { [key]: ru })
+  Object.assign(newKeys.vi, { [key]: vi })
+}
+
 async function main() {
   let totalAdded = 0
 

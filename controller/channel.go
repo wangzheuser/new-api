@@ -1187,7 +1187,8 @@ func UpdateChannel(c *gin.Context) {
 		}
 		channel.RecalculateMultiKeyStatus()
 	}
-	err = channel.Update()
+	_, modelsProvided := requestData["models"]
+	err = channel.Update(modelsProvided)
 	if err != nil {
 		common.ApiError(c, err)
 		return

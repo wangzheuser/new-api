@@ -40,7 +40,7 @@ type DataTablePaginationProps<TData> = {
   table: Table<TData>
 }
 
-const PAGE_SIZE_OPTIONS = [10, 20, 30, 40, 50, 100] as const
+const PAGE_SIZE_OPTIONS = [10, 20, 30, 40, 50, 100, 200, 500, 1000] as const
 const PAGE_SIZE_SELECT_ITEMS = PAGE_SIZE_OPTIONS.map((pageSize) => ({
   value: `${pageSize}`,
   label: pageSize,
@@ -83,7 +83,7 @@ export function DataTablePagination<TData>({
               table.setPageSize(Number(value))
             }}
           >
-            <SelectTrigger className='text-foreground h-8 w-[64px] font-medium tabular-nums sm:w-[70px]'>
+            <SelectTrigger className='text-foreground h-8 w-[80px] font-medium tabular-nums sm:w-[86px]'>
               <SelectValue placeholder={pageSize} />
             </SelectTrigger>
             <SelectContent side='top' alignItemWithTrigger={false}>

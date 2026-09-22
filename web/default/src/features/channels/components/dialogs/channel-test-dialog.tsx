@@ -106,6 +106,10 @@ import {
   resolveChannelTestResponseKind,
   resolveChannelTestResultProtocol,
 } from '../../lib'
+import {
+  getSelectedChannelTestModels,
+  getChannelTestModelsWithStatus,
+} from '../../lib/channel-test-models'
 import type {
   Channel,
   ChannelTestResponseDetails,
@@ -374,6 +378,9 @@ function ChannelTestDialogContent({
   const [isDeleteFailedDialogOpen, setIsDeleteFailedDialogOpen] =
     useState(false)
   const [isDeletingFailed, setIsDeletingFailed] = useState(false)
+  const [isRemoveSelectedDialogOpen, setIsRemoveSelectedDialogOpen] =
+    useState(false)
+  const [isRemovingSelected, setIsRemovingSelected] = useState(false)
   const [detailsModel, setDetailsModel] = useState<string | null>(null)
   const [pagination, setPagination] = useState({
     pageIndex: 0,
@@ -435,6 +442,8 @@ function ChannelTestDialogContent({
     setRemovedModels(() => new Set())
     setIsDeleteFailedDialogOpen(false)
     setIsDeletingFailed(false)
+    setIsRemoveSelectedDialogOpen(false)
+    setIsRemovingSelected(false)
     setDetailsModel(null)
     setPagination({ pageIndex: 0, pageSize: 30 })
   }, [])
@@ -501,13 +510,18 @@ function ChannelTestDialogContent({
   )
 
   const successModels = useMemo(
-    () => models.filter((model) => testResults[model]?.status === 'success'),
+    () => getChannelTestModelsWithStatus(models, testResults, 'success'),
     [models, testResults]
   )
 
   const failedModels = useMemo(
-    () => models.filter((model) => testResults[model]?.status === 'error'),
+    () => getChannelTestModelsWithStatus(models, testResults, 'error'),
     [models, testResults]
+  )
+
+  const selectedModels = useMemo(
+    () => getSelectedChannelTestModels(models, rowSelection),
+    [models, rowSelection]
   )
 
   const filteredModels = useMemo(() => {
@@ -844,57 +858,107 @@ function ChannelTestDialogContent({
     })
   }, [successModels])
 
+  /** Selects every failed result, including models on another page or hidden by search. */
+  const handleSelectFailedModels = useCallback(() => {
+    setRowSelection(() => {
+      const next: RowSelectionState = {}
+      for (const model of failedModels) {
+        next[model] = true
+      }
+      return next
+    })
+  }, [failedModels])
+
+  /** Persists a model removal and synchronizes every local selection/result view. */
+  const removeModelsFromChannel = useCallback(
+    async (
+      modelsToRemove: string[],
+      successMessage: string,
+      failureMessage: string
+    ) => {
+      const modelsToRemoveSet = new Set(modelsToRemove)
+      const removed = models.filter((model) => modelsToRemoveSet.has(model))
+      if (!removed.length) return false
+
+      const remaining = models.filter((model) => !modelsToRemoveSet.has(model))
+
+      try {
+        const response = await updateChannel(currentRow.id, {
+          models: remaining.join(','),
+        })
+        if (response.success) {
+          setRemovedModels((prev) => {
+            const next = new Set(prev)
+            for (const model of removed) next.add(model)
+            return next
+          })
+          setTestResults((prev) => {
+            const next = { ...prev }
+            for (const model of removed) delete next[model]
+            return next
+          })
+          setRowSelection((prev) => {
+            const next = { ...prev }
+            for (const model of removed) delete next[model]
+            return next
+          })
+          toast.success(t(successMessage, { count: removed.length }))
+          refreshChannelLists()
+          return true
+        } else {
+          toast.error(response.message || t(failureMessage))
+        }
+      } catch (error: unknown) {
+        toast.error(error instanceof Error ? error.message : t(failureMessage))
+      }
+      return false
+    },
+    [currentRow.id, models, refreshChannelLists, t]
+  )
+
+  /** Keeps the existing failed-only removal shortcut on the shared persistence path. */
   const handleDeleteFailedModels = useCallback(async () => {
-    const failed = models.filter(
-      (model) => testResults[model]?.status === 'error'
-    )
-    if (!failed.length) {
+    if (!failedModels.length) {
       setIsDeleteFailedDialogOpen(false)
       return
     }
 
-    const failedSet = new Set(failed)
-    const remaining = models.filter((model) => !failedSet.has(model))
-
     setIsDeletingFailed(true)
     try {
-      const response = await updateChannel(currentRow.id, {
-        models: remaining.join(','),
-      })
-      if (response.success) {
-        setRemovedModels((prev) => {
-          const next = new Set(prev)
-          for (const model of failed) next.add(model)
-          return next
-        })
-        setTestResults((prev) => {
-          const next = { ...prev }
-          for (const model of failed) delete next[model]
-          return next
-        })
-        setRowSelection((prev) => {
-          const next = { ...prev }
-          for (const model of failed) delete next[model]
-          return next
-        })
-        toast.success(
-          t('Deleted {{count}} failed models', { count: failed.length })
-        )
-        refreshChannelLists()
-        setIsDeleteFailedDialogOpen(false)
-      } else {
-        toast.error(response.message || t('Failed to delete failed models'))
-      }
-    } catch (error: unknown) {
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : t('Failed to delete failed models')
+      const removed = await removeModelsFromChannel(
+        failedModels,
+        'Deleted {{count}} failed models',
+        'Failed to delete failed models'
       )
+      if (removed) {
+        setIsDeleteFailedDialogOpen(false)
+      }
     } finally {
       setIsDeletingFailed(false)
     }
-  }, [currentRow.id, models, refreshChannelLists, t, testResults])
+  }, [failedModels, removeModelsFromChannel])
+
+  /** Removes the confirmed full selection, regardless of the current page or filter. */
+  const handleConfirmRemoveSelected = useCallback(async () => {
+    if (!selectedModels.length) {
+      setIsRemoveSelectedDialogOpen(false)
+      return
+    }
+
+    setIsRemovingSelected(true)
+    try {
+      const removed = await removeModelsFromChannel(
+        selectedModels,
+        'Removed {{count}} selected models',
+        'Failed to remove selected models'
+      )
+      if (removed) {
+        setIsRemoveSelectedDialogOpen(false)
+      }
+    } finally {
+      setIsRemovingSelected(false)
+    }
+  }, [removeModelsFromChannel, selectedModels])
 
   const handleClose = useCallback(() => {
     resetState()
@@ -1202,6 +1266,11 @@ function ChannelTestDialogContent({
                           variant='outline'
                           size='sm'
                           onClick={handleSelectSuccessfulModels}
+                          disabled={
+                            isAnyTesting ||
+                            isDeletingFailed ||
+                            isRemovingSelected
+                          }
                         >
                           <CheckCircle2 data-icon='inline-start' />
                           {t('Select successful models ({{count}})', {
@@ -1213,7 +1282,29 @@ function ChannelTestDialogContent({
                         <Button
                           variant='outline'
                           size='sm'
+                          onClick={handleSelectFailedModels}
+                          disabled={
+                            isAnyTesting ||
+                            isDeletingFailed ||
+                            isRemovingSelected
+                          }
+                        >
+                          <CheckCircle2 data-icon='inline-start' />
+                          {t('Select failed models ({{count}})', {
+                            count: failedModels.length,
+                          })}
+                        </Button>
+                      )}
+                      {failedModels.length > 0 && (
+                        <Button
+                          variant='outline'
+                          size='sm'
                           onClick={() => setIsDeleteFailedDialogOpen(true)}
+                          disabled={
+                            isAnyTesting ||
+                            isDeletingFailed ||
+                            isRemovingSelected
+                          }
                         >
                           <Trash2 data-icon='inline-start' />
                           {t('Delete failed models ({{count}})', {
@@ -1276,7 +1367,12 @@ function ChannelTestDialogContent({
               <DataTablePagination table={table} />
             </div>
 
-            <TestModelsBulkActions table={table} />
+            <TestModelsBulkActions
+              table={table}
+              selectedModels={selectedModels}
+              disabled={isAnyTesting || isRemovingSelected || isDeletingFailed}
+              onRemoveSelected={() => setIsRemoveSelectedDialogOpen(true)}
+            />
           </div>
         </div>
       </Dialog>
@@ -1292,6 +1388,19 @@ function ChannelTestDialogContent({
         isLoading={isDeletingFailed}
         confirmText={t('Delete')}
         handleConfirm={handleDeleteFailedModels}
+      />
+      <ConfirmDialog
+        open={isRemoveSelectedDialogOpen}
+        onOpenChange={setIsRemoveSelectedDialogOpen}
+        title={t('Remove selected models')}
+        desc={t(
+          'This removes {{count}} selected models from this channel. This action cannot be undone.',
+          { count: selectedModels.length }
+        )}
+        destructive
+        isLoading={isRemovingSelected}
+        confirmText={t('Remove')}
+        handleConfirm={handleConfirmRemoveSelected}
       />
       <TestDetailsSheet
         model={detailsModel}
@@ -1721,11 +1830,19 @@ function TestDetailsSheet({
   )
 }
 
-function TestModelsBulkActions({ table }: { table: TanStackTable<ModelRow> }) {
+function TestModelsBulkActions({
+  table,
+  selectedModels,
+  disabled,
+  onRemoveSelected,
+}: {
+  table: TanStackTable<ModelRow>
+  selectedModels: string[]
+  disabled: boolean
+  onRemoveSelected: () => void
+}) {
   const { t } = useTranslation()
   const { copyToClipboard } = useCopyToClipboard()
-  const selectedRows = table.getFilteredSelectedRowModel().rows
-  const selectedModels = selectedRows.map((row) => row.original.model)
 
   const handleCopySelected = useCallback(() => {
     if (selectedModels.length === 0) return
@@ -1733,7 +1850,11 @@ function TestModelsBulkActions({ table }: { table: TanStackTable<ModelRow> }) {
   }, [copyToClipboard, selectedModels])
 
   return (
-    <BulkActionsToolbar table={table} entityName='model'>
+    <BulkActionsToolbar
+      table={table}
+      entityName='model'
+      selectedCount={selectedModels.length}
+    >
       <Tooltip>
         <TooltipTrigger
           render={
@@ -1749,6 +1870,27 @@ function TestModelsBulkActions({ table }: { table: TanStackTable<ModelRow> }) {
         </TooltipTrigger>
         <TooltipContent>
           <p>{t('Copy selected models separated by commas (e.g. a,b)')}</p>
+        </TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant='destructive'
+              size='icon'
+              onClick={onRemoveSelected}
+              disabled={disabled}
+              className='size-8'
+              aria-label={t('Remove selected models')}
+              title={t('Remove selected models')}
+            />
+          }
+        >
+          <Trash2 />
+          <span className='sr-only'>{t('Remove selected models')}</span>
+        </TooltipTrigger>
+        <TooltipContent>
+          <p>{t('Remove selected models')}</p>
         </TooltipContent>
       </Tooltip>
     </BulkActionsToolbar>
