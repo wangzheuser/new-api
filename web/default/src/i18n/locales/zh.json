@@ -5045,6 +5045,7 @@
     "Test Connection": "测试连接",
     "Test connectivity for:": "测试连接性：",
     "Test failed": "测试失败",
+    "Test failed models ({{count}})": "测试失败模型（{{count}}）",
     "Test interval (minutes)": "测试间隔 (分钟)",
     "Test key": "测试密钥",
     "Test Latency": "测试延迟",

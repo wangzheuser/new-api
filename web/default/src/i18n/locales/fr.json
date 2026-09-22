@@ -5045,6 +5045,7 @@
     "Test Connection": "Tester la connexion",
     "Test connectivity for:": "Tester la connectivité pour :",
     "Test failed": "Échec du test",
+    "Test failed models ({{count}})": "Tester les modèles en échec ({{count}})",
     "Test interval (minutes)": "Intervalle de test (minutes)",
     "Test key": "Tester la clé",
     "Test Latency": "Tester la latence",

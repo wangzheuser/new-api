@@ -5045,6 +5045,7 @@
     "Test Connection": "Kiểm tra kết nối",
     "Test connectivity for:": "Kiểm tra kết nối cho:",
     "Test failed": "Kiểm tra thất bại",
+    "Test failed models ({{count}})": "Kiểm tra các mô hình thất bại ({{count}})",
     "Test interval (minutes)": "Khoảng thời gian kiểm tra (phút)",
     "Test key": "Kiểm tra khóa",
     "Test Latency": "Kiểm tra độ trễ",

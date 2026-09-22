@@ -5045,6 +5045,7 @@
     "Test Connection": "接続をテスト",
     "Test connectivity for:": "接続性をテスト:",
     "Test failed": "テストに失敗しました",
+    "Test failed models ({{count}})": "失敗したモデルをテスト（{{count}}）",
     "Test interval (minutes)": "テスト間隔（分）",
     "Test key": "キーをテスト",
     "Test Latency": "レイテンシをテスト",

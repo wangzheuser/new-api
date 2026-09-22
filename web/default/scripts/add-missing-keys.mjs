@@ -2419,6 +2419,15 @@ for (const [key, zh, zhTW, fr, ja, ru, vi] of multiKeyAutoDisableRows) {
 
 const channelTestModelActionRows = [
   [
+    'Test failed models ({{count}})',
+    '测试失败模型（{{count}}）',
+    '測試失敗模型（{{count}}）',
+    'Tester les modèles en échec ({{count}})',
+    '失敗したモデルをテスト（{{count}}）',
+    'Тестировать неуспешные модели ({{count}})',
+    'Kiểm tra các mô hình thất bại ({{count}})',
+  ],
+  [
     'Select failed models ({{count}})',
     '勾选失败模型（{{count}}）',
     '勾選失敗模型（{{count}}）',

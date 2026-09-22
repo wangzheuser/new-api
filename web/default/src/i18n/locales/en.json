@@ -5045,6 +5045,7 @@
     "Test Connection": "Test Connection",
     "Test connectivity for:": "Test connectivity for:",
     "Test failed": "Test failed",
+    "Test failed models ({{count}})": "Test failed models ({{count}})",
     "Test interval (minutes)": "Test interval (minutes)",
     "Test key": "Test key",
     "Test Latency": "Test Latency",

@@ -30,6 +30,7 @@ import {
   Eye,
   Gauge,
   Loader2,
+  RefreshCw,
   Settings,
   Trash2,
 } from 'lucide-react'
@@ -858,6 +859,11 @@ function ChannelTestDialogContent({
     })
   }, [successModels])
 
+  /** Retries every model that currently has a failed test result. */
+  const handleTestFailedModels = useCallback(() => {
+    void handleBatchTest(failedModels)
+  }, [failedModels, handleBatchTest])
+
   /** Selects every failed result, including models on another page or hidden by search. */
   const handleSelectFailedModels = useCallback(() => {
     setRowSelection(() => {
@@ -1261,6 +1267,24 @@ function ChannelTestDialogContent({
                       >
                         {testAllButtonLabel}
                       </Button>
+                      {failedModels.length > 0 && (
+                        <Button
+                          variant='outline'
+                          size='sm'
+                          onClick={handleTestFailedModels}
+                          disabled={
+                            isAnyTesting ||
+                            !isTestPromptValid ||
+                            isDeletingFailed ||
+                            isRemovingSelected
+                          }
+                        >
+                          <RefreshCw data-icon='inline-start' />
+                          {t('Test failed models ({{count}})', {
+                            count: failedModels.length,
+                          })}
+                        </Button>
+                      )}
                       {successModels.length > 0 && (
                         <Button
                           variant='outline'

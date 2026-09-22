@@ -5045,6 +5045,7 @@
     "Test Connection": "Проверить подключение",
     "Test connectivity for:": "Проверить подключение для:",
     "Test failed": "Тест не выполнен",
+    "Test failed models ({{count}})": "Тестировать неуспешные модели ({{count}})",
     "Test interval (minutes)": "Интервал проверки (минуты)",
     "Test key": "Проверить ключ",
     "Test Latency": "Проверить задержку",
