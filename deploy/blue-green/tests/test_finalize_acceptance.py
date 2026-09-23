@@ -33,6 +33,7 @@ class FinalizeAcceptanceTest(unittest.TestCase):
                 "public-browser.exit": "0\n",
                 "observation.metrics": (
                     "protocol_stability_rc=3\n"
+                    "verified_upstream_503_pre=0 verified_upstream_503_post=0 "
                     f"actionable_errors_5xx={http_errors} actionable_allowed_errors_5xx=1\n"
                 ),
             }

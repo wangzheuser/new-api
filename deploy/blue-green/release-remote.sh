@@ -635,7 +635,7 @@ action_finalize() {
         [[ -e "$STATE_DIR/public-browser.exit.pending" ]] ||
         [[ ! -s "$STATE_DIR/observation.metrics" ]] ||
         ! grep -qx 'protocol_stability_rc=3' "$STATE_DIR/observation.metrics" ||
-        ! grep -Eq '^actionable_errors_5xx=0 actionable_allowed_errors_5xx=[0-9]+$' "$STATE_DIR/observation.metrics"; then
+        ! grep -Eq '(^|[[:space:]])actionable_errors_5xx=0 actionable_allowed_errors_5xx=[0-9]+$' "$STATE_DIR/observation.metrics"; then
         printf 'finalize_blocked=inconclusive_hard_gates\n' >&2
         return 1
       fi
