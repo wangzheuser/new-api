@@ -141,6 +141,8 @@ deploy/blue-green/build-local.sh prepare \
 10. 写入不含凭据的 `release.env`。
 
 同一提交的完整制品和 SHA 均正确时直接复用；只有显式 `--force` 才重新构建。
+构建使用本次专用 Buildx Builder；Bun 安装缓存和 Go 编译缓存位于构建临时目录，
+构建结束时随目录清除。Go 模块下载缓存及其他项目共享的 Docker 缓存不做全局清理。
 
 ## 6. 上传与备份
 
@@ -293,8 +295,7 @@ CONFIRM_FINALIZE=<release-id> ./release-remote.sh finalize --execute
 CPU 和内存占用，并确保 Docker daemon 重启后不会意外拉起；容器元数据、可写层和旧镜像
 继续保留用于快速回滚。停止后连续验证新槽位健康、零重启、未 OOM、Nginx 内部版本和
 公网版本。验证通过后，`finalize` 暂时保留两个槽位镜像，再按第 12 节执行服务器保留策略。
-部署执行端仍按本次 manifest 精确清理上传归档、本地镜像标签和专用 Builder；
-不得清理其他服务的 dangling 镜像或共享构建缓存。
+部署执行端按第 13 节清理本地资源；不得清理其他服务的 dangling 镜像或共享构建缓存。
 
 ## 10. 回滚
 
@@ -467,3 +468,20 @@ printf '%s\n' "$cleanup_rc" > state/cleanup.exit
 ```
 
 本地临时制品仍按部署 manifest 清理，服务器保留策略不能替代本地清理。
+
+## 13. 部署执行端本地清理
+
+每次发布结束（新版完成发布或旧版成功恢复）后，确认远端已保存实际生产版本的镜像归档、
+Default/Classic clean-dist 且 SHA 校验通过，发布决策与回滚证据已记录，再执行：
+
+```bash
+deploy/blue-green/cleanup-local.sh --release-dir "$HOME/.cache/new-api-deploy/releases/<完整提交前12位>" --dry-run
+deploy/blue-green/cleanup-local.sh --release-dir "$HOME/.cache/new-api-deploy/releases/<完整提交前12位>" --execute
+```
+
+未完成观察、待决策或上传未校验时保留本地归档供恢复和重试。清理命令只接受标准发布目录
+及与提交匹配的 `release.env`，先校验现存归档 SHA 和本地镜像身份，再移除该发布的三份
+归档、本地镜像标签及专用 Builder；保留小体积 manifest 和构建日志以便审计、失败重试。
+镜像被其他容器引用时不强制删除；清理失败独立记录并在解除引用后重试，不触发生产回滚。
+远端 `cleanup` 与本地清理互不替代；不执行 `docker system prune`、全局 Buildx prune、
+卷删除或共享 Go 模块缓存清理。下一次发布需要的 clean-dist 由远端已校验制品恢复。

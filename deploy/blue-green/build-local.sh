@@ -126,6 +126,8 @@ fi
 mkdir -p "$ARTIFACTS" "$OUTPUT/logs"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/new-api-release-${SHORT_SHA}.XXXXXX")"
 SMOKE_CONTAINER="new-api-release-smoke-${SHORT_SHA}"
+BUILDER_NAME="new-api-release-${SHORT_SHA}"
+export BUN_INSTALL_CACHE_DIR="$WORK/bun-cache"
 cleanup() {
   docker rm -f "$SMOKE_CONTAINER" >/dev/null 2>&1 || true
   if [[ "${KEEP_RELEASE_WORKDIR:-0}" != 1 && "$WORK" == "${TMPDIR:-/tmp}"/new-api-release-* ]]; then
@@ -196,6 +198,7 @@ cp -R "$CLASSIC_TREE/web/classic/dist"/. "$DEFAULT_TREE/web/classic/dist"/
 (cd "$DEFAULT_TREE/web/default" && node --test scripts/merge-previous-assets.test.mjs)
 
 go_start="$(date +%s)"
+export GOCACHE="$WORK/go-cache"
 (cd "$DEFAULT_TREE" && "$GO_BIN" test ./...) >"$OUTPUT/logs/go-test.log" 2>&1
 (cd "$DEFAULT_TREE" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 GOEXPERIMENT=greenteagc \
   "$GO_BIN" build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$VERSION'" -o "$RUNTIME_CONTEXT/new-api")
@@ -203,7 +206,11 @@ printf 'go_test_build_seconds=%s\n' "$(( $(date +%s) - go_start ))"
 
 cp "$DEFAULT_TREE/LICENSE" "$DEFAULT_TREE/NOTICE" "$DEFAULT_TREE/THIRD-PARTY-LICENSES.md" "$RUNTIME_CONTEXT/"
 IMAGE_TAG="new-api:$VERSION"
+if ! docker buildx inspect "$BUILDER_NAME" >/dev/null 2>&1; then
+  docker buildx create --name "$BUILDER_NAME" --driver docker-container >/dev/null
+fi
 docker buildx build \
+  --builder "$BUILDER_NAME" \
   --platform linux/amd64 \
   --target runtime-local \
   --build-arg "RELEASE_VERSION=$VERSION" \
@@ -246,6 +253,7 @@ VERSION=$VERSION
 ARCH=linux/amd64
 IMAGE_TAG=$IMAGE_TAG
 IMAGE_ID=$IMAGE_ID
+BUILDER_NAME=$BUILDER_NAME
 IMAGE_ARCHIVE=$IMAGE_ARCHIVE
 IMAGE_SHA256=$IMAGE_SHA256
 DEFAULT_CLEAN_DIST_ARCHIVE=$DEFAULT_CLEAN_DIST_ARCHIVE

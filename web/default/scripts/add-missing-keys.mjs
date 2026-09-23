@@ -1,3 +1,21 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -173,12 +191,14 @@ const newKeys = {
     'registration code': '注册码',
   },
   'zh-TW': {
-    'Accounting only. Real upstream cache fields, including zero, always take priority. Defaults: creation 20%, read 60%; samples are independent.': '僅用於計費。實際上游快取欄位（包括零值）始終優先。預設值：建立 20%、讀取 60%；樣本彼此獨立。',
+    'Accounting only. Real upstream cache fields, including zero, always take priority. Defaults: creation 20%, read 60%; samples are independent.':
+      '僅用於計費。實際上游快取欄位（包括零值）始終優先。預設值：建立 20%、讀取 60%；樣本彼此獨立。',
     'Billed before truncation': '截斷前計費',
     'Cache creation trigger (%)': '快取建立觸發機率 (%)',
     'Cache read trigger (%)': '快取讀取觸發機率 (%)',
     'Cache usage simulation': '快取用量模擬',
-    'Channel custom settings override global defaults. A global emergency stop overrides every channel.': '渠道自訂設定會覆寫全域預設值。全域緊急停止會覆寫所有渠道。',
+    'Channel custom settings override global defaults. A global emergency stop overrides every channel.':
+      '渠道自訂設定會覆寫全域預設值。全域緊急停止會覆寫所有渠道。',
     'Context truncation': '上下文截斷',
     'Context window (tokens)': '上下文視窗（token）',
     'Created cache share (%)': '建立快取佔比 (%)',
@@ -186,7 +206,8 @@ const newKeys = {
     'Failed to load settings': '載入設定失敗',
     'Inherit global settings': '繼承全域設定',
     'Input policies': '輸入策略',
-    'Invalid input policy. Check model budgets and percentages.': '輸入策略無效。請檢查模型預算與百分比。',
+    'Invalid input policy. Check model budgets and percentages.':
+      '輸入策略無效。請檢查模型預算與百分比。',
     'Keep recent turns': '保留最近對話輪次',
     'Model ID': '模型 ID',
     'Output reserve (blank = request limit)': '輸出預留（留空 = 請求上限）',
@@ -195,11 +216,14 @@ const newKeys = {
     'Safety margin (blank = automatic)': '安全裕度（留空 = 自動）',
     'Save cache simulation': '儲存快取模擬設定',
     'Save context truncation': '儲存上下文截斷設定',
-    'Set the real model window. If the request has no output limit, configure an output reserve. Images, audio and opaque histories are not trimmed.': '設定實際模型視窗。若請求沒有輸出上限，請設定輸出預留。圖片、音訊與不透明歷史不會被截斷。',
+    'Set the real model window. If the request has no output limit, configure an output reserve. Images, audio and opaque histories are not trimmed.':
+      '設定實際模型視窗。若請求沒有輸出上限，請設定輸出預留。圖片、音訊與不透明歷史不會被截斷。',
     'Simulated accounting, not upstream cache': '模擬計費，非上游快取',
-    'Token shares must total at most 100%. Both trigger probabilities cannot be 100%.': 'Token 佔比總和最多為 100%。兩個觸發機率不能同時為 100%。',
+    'Token shares must total at most 100%. Both trigger probabilities cannot be 100%.':
+      'Token 佔比總和最多為 100%。兩個觸發機率不能同時為 100%。',
     'Total billed input tokens': '計費輸入 token 總數',
-    'Trim oldest complete turns before sending. Billing uses the full input before trimming. Client usage is unchanged. Model IDs match before upstream mapping.': '傳送前截斷最舊的完整對話輪次。計費使用截斷前的完整輸入。用戶端用量不變。模型 ID 以映射至上游前的值比對。',
+    'Trim oldest complete turns before sending. Billing uses the full input before trimming. Client usage is unchanged. Model IDs match before upstream mapping.':
+      '傳送前截斷最舊的完整對話輪次。計費使用截斷前的完整輸入。用戶端用量不變。模型 ID 以映射至上游前的值比對。',
     'Truncation threshold (%)': '截斷閾值 (%)',
     'Global model system prompts': '全域模型系統提示詞',
     'Used when a channel has no model-specific system prompt.':
@@ -2265,6 +2289,69 @@ const channelAutoDisableRows = [
     '一時無効化を解除',
     'Снять временное отключение',
     'Bỏ tạm tắt',
+  ],
+  [
+    'Recent upstream sample size',
+    '最近上游样本数',
+    '最近上游樣本數',
+    'Taille récente de l’échantillon amont',
+    '直近の上流サンプル数',
+    'Размер последней выборки upstream',
+    'Số mẫu upstream gần nhất',
+  ],
+  [
+    'Minimum health sample size',
+    '最小健康样本数',
+    '最小健康樣本數',
+    'Taille minimale de l’échantillon de santé',
+    '最小ヘルスサンプル数',
+    'Минимальный размер выборки для проверки здоровья',
+    'Số mẫu sức khỏe tối thiểu',
+  ],
+  [
+    'Keep the latest N valid upstream outcomes for health evaluation.',
+    '保留最近 N 次有效上游结果用于健康评估。',
+    '保留最近 N 次有效上游結果用於健康評估。',
+    'Conserve les N derniers résultats upstream valides pour évaluer la santé.',
+    'ヘルス評価のため、直近 N 件の有効な上流結果を保持します。',
+    'Хранить последние N корректных результатов upstream для оценки состояния.',
+    'Giữ N kết quả upstream hợp lệ gần nhất để đánh giá tình trạng.',
+  ],
+  [
+    'Start error-rate evaluation after this many valid outcomes.',
+    '达到此数量的有效结果后开始计算错误率。',
+    '達到此數量的有效結果後開始計算錯誤率。',
+    'Commence l’évaluation du taux d’erreur après ce nombre de résultats valides.',
+    'この件数の有効な結果に達してからエラー率を評価します。',
+    'Начинать оценку доли ошибок после получения такого числа корректных результатов.',
+    'Bắt đầu đánh giá tỷ lệ lỗi sau số kết quả hợp lệ này.',
+  ],
+  [
+    'Minimum sample size cannot exceed sample size',
+    '最小样本数不能大于样本数',
+    '最小樣本數不能大於樣本數',
+    'La taille minimale ne peut pas dépasser la taille de l’échantillon',
+    '最小サンプル数はサンプル数を超えられません',
+    'Минимальный размер выборки не может превышать размер выборки',
+    'Số mẫu tối thiểu không thể lớn hơn số mẫu',
+  ],
+  [
+    'Recent upstream sample size:',
+    '最近上游样本数：',
+    '最近上游樣本數：',
+    'Taille récente de l’échantillon amont :',
+    '直近の上流サンプル数：',
+    'Размер последней выборки upstream:',
+    'Số mẫu upstream gần nhất:',
+  ],
+  [
+    'Minimum health sample size:',
+    '最小健康样本数：',
+    '最小健康樣本數：',
+    'Taille minimale de l’échantillon de santé :',
+    '最小ヘルスサンプル数：',
+    'Минимальный размер выборки для проверки здоровья:',
+    'Số mẫu sức khỏe tối thiểu:',
   ],
 ]
 
