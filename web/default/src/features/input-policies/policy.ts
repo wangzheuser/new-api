@@ -100,6 +100,32 @@ export const systemPromptPolicySchema = z.object({
 
 export type SystemPromptPolicy = z.input<typeof systemPromptPolicySchema>
 
+/** Validate a draft before replacing or adding one model prompt. */
+export function updateGlobalModelSystemPrompts(
+  value: Record<string, string>,
+  previousModel: string | null,
+  model: string,
+  prompt: string
+): Record<string, string> | null {
+  const id = model.trim()
+  if (
+    !id ||
+    !prompt.trim() ||
+    (id !== previousModel && Object.hasOwn(value, id))
+  ) {
+    return null
+  }
+
+  const next = { ...value, [id]: prompt }
+  if (previousModel !== null && previousModel !== id) delete next[previousModel]
+  return validateInputPolicies(
+    JSON.stringify({ system_prompt: { models: next } }),
+    false
+  )
+    ? next
+    : null
+}
+
 export const DEFAULT_CACHE: CachePolicy = {
   enabled: false,
   creation_trigger_percent: 20,
