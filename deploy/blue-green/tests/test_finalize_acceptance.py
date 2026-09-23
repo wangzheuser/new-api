@@ -14,7 +14,7 @@ class FinalizeAcceptanceTest(unittest.TestCase):
     """Keep statistical evidence immutable while allowing audited operator disposition."""
 
     def invoke(self, observation="inconclusive", args=("--dry-run",), accept=False,
-               reason="低流量但健康和硬门禁均通过"):
+               reason="低流量但健康和硬门禁均通过", missing=None, http_errors=0):
         """Run action_finalize with deterministic Docker and release state fixtures."""
         with tempfile.TemporaryDirectory(prefix="new-api-finalize-test-") as temp:
             root = Path(temp)
@@ -27,6 +27,18 @@ class FinalizeAcceptanceTest(unittest.TestCase):
                 f"observation={observation} release_id=fixture production=candidate "
                 "version=fixture-version requested_seconds=600 elapsed_seconds=600\n"
             )
+            artifacts = {
+                "gate.result": "gate=passed candidate=candidate version=fixture-version\n",
+                "bounded.result": "result=evidence_inconclusive observation_exit=3 action=hold\n",
+                "public-browser.exit": "0\n",
+                "observation.metrics": (
+                    "protocol_stability_rc=3\n"
+                    f"actionable_errors_5xx={http_errors} actionable_allowed_errors_5xx=1\n"
+                ),
+            }
+            for name, content in artifacts.items():
+                if name != missing:
+                    (state / name).write_text(content)
             definitions = SCRIPT.read_text().split('ACTION="${1:-}"')[0]
             (root / "definitions.sh").write_text(definitions)
             harness = r'''source "$1/definitions.sh"
@@ -115,6 +127,26 @@ action_finalize "$@"
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("accept_reason_required", result.stderr)
+        self.assertFalse(decision)
+        self.assertFalse(final)
+
+    def test_inconclusive_hard_gates_cannot_be_skipped(self):
+        """Absent gate evidence or an unexplained HTTP error blocks risk acceptance."""
+        for missing in ("gate.result", "bounded.result", "public-browser.exit", "observation.metrics"):
+            with self.subTest(missing=missing):
+                result, _, decision, final = self.invoke(
+                    args=("--accept-inconclusive", "--dry-run"), accept=True, missing=missing
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("inconclusive_hard_gates", result.stderr)
+                self.assertFalse(decision)
+                self.assertFalse(final)
+
+        result, _, decision, final = self.invoke(
+            args=("--accept-inconclusive", "--dry-run"), accept=True, http_errors=1
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("inconclusive_hard_gates", result.stderr)
         self.assertFalse(decision)
         self.assertFalse(final)
 

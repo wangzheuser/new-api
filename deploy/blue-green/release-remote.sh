@@ -21,6 +21,7 @@ Observation gate:
   observe [--seconds N] [--interval N] defaults to 600 seconds / 30 seconds
   finalize requires a successful observation of at least 600 seconds
   --accept-inconclusive requires ACCEPT_INCONCLUSIVE=1 and a non-empty ACCEPT_REASON;
+  it requires the candidate gate, public browser check, bounded hold and zero unexplained HTTP 5xx;
   it records an explicit release decision without rewriting observation.result
   an inconclusive observation requires ALLOW_INCONCLUSIVE_ROLLBACK=1 for an explicit rollback
 EOF
@@ -624,6 +625,18 @@ action_finalize() {
       accept_reason="${ACCEPT_REASON:-}"
       if [[ -z "$accept_reason" || ${#accept_reason} -gt 256 || "$accept_reason" == *$'\n'* || "$accept_reason" == *$'\r'* ]]; then
         printf 'finalize_blocked=accept_reason_required max_length=256\n' >&2
+        return 1
+      fi
+      # A missing comparison is acceptable only when the deterministic release checks passed.
+      if [[ "$(cat "$STATE_DIR/gate.result" 2>/dev/null || true)" != "gate=passed candidate=$NEW version=$VERSION" ]] ||
+        [[ "$(cat "$STATE_DIR/bounded.result" 2>/dev/null || true)" != 'result=evidence_inconclusive observation_exit=3 action=hold' ]] ||
+        [[ ! -s "$STATE_DIR/public-browser.exit" ]] ||
+        [[ "$(cat "$STATE_DIR/public-browser.exit")" != 0 ]] ||
+        [[ -e "$STATE_DIR/public-browser.exit.pending" ]] ||
+        [[ ! -s "$STATE_DIR/observation.metrics" ]] ||
+        ! grep -qx 'protocol_stability_rc=3' "$STATE_DIR/observation.metrics" ||
+        ! grep -Eq '^actionable_errors_5xx=0 actionable_allowed_errors_5xx=[0-9]+$' "$STATE_DIR/observation.metrics"; then
+        printf 'finalize_blocked=inconclusive_hard_gates\n' >&2
         return 1
       fi
       decision_mode=accepted_inconclusive
