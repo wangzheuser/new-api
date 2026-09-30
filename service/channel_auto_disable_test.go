@@ -147,6 +147,7 @@ func TestChannelHealthErrorClassification(t *testing.T) {
 		"You exceeded your current quota",
 		"quota exceeded",
 		"Your credit balance is too low",
+		"Cline Credits balance is too low",
 	} {
 		err := types.NewOpenAIError(errors.New(message), types.ErrorCodeBadResponseStatusCode, http.StatusForbidden, types.ErrOptionWithUpstreamStatusCode(http.StatusForbidden))
 		assert.True(t, isTemporaryQuotaError(err, http.StatusForbidden), message)
@@ -163,6 +164,9 @@ func TestChannelHealthErrorClassification(t *testing.T) {
 		err := types.NewOpenAIError(errors.New("upstream failure"), types.ErrorCodeBadResponseStatusCode, statusCode, types.ErrOptionWithUpstreamStatusCode(statusCode))
 		assert.False(t, ShouldDisableChannel(err), statusCode)
 	}
+	kimiCredentialError := types.NewOpenAIError(errors.New("Kimi Code access denied"), types.ErrorCodeBadResponseStatusCode, http.StatusForbidden, types.ErrOptionWithUpstreamStatusCode(http.StatusForbidden))
+	assert.False(t, ShouldDisableChannel(kimiCredentialError))
+	assert.True(t, IsTemporaryQuotaError(kimiCredentialError))
 	clientError := types.NewOpenAIError(errors.New("context_length_exceeded"), types.ErrorCodeBadResponseStatusCode, http.StatusBadRequest, types.ErrOptionWithUpstreamStatusCode(http.StatusBadRequest))
 	assert.False(t, ShouldDisableChannel(clientError))
 	timeoutError := types.NewError(errors.New("context deadline exceeded"), types.ErrorCodeDoRequestFailed)

@@ -174,7 +174,7 @@ func recordChannelUpstreamError(channel *model.Channel, apiErr *types.NewAPIErro
 
 // isRealUpstreamTimeout identifies transport timeouts that represent an upstream health failure.
 func isRealUpstreamTimeout(apiErr *types.NewAPIError) bool {
-	if apiErr == nil {
+	if apiErr == nil || types.IsLocalBillingError(apiErr) {
 		return false
 	}
 	message := strings.ToLower(apiErr.Error())
@@ -289,7 +289,7 @@ func isTemporaryQuotaError(apiErr *types.NewAPIError, statusCode int) bool {
 
 // isTemporaryQuotaMessage recognizes provider quota and rate-limit wording before generic disable keywords.
 func isTemporaryQuotaMessage(message string) bool {
-	return isProviderQuotaMessage(message) || isAccountQuotaMessage(message)
+	return isProviderQuotaMessage(message) || isAccountQuotaMessage(message) || isTemporaryAccessMessage(message)
 }
 
 // isProviderQuotaMessage recognizes provider-specific rolling limits.
@@ -310,9 +310,20 @@ func isAccountQuotaMessage(message string) bool {
 		strings.Contains(message, "quota exceeded") ||
 		strings.Contains(message, "exceeded your current quota") ||
 		strings.Contains(message, "credit balance is too low") ||
+		strings.Contains(message, "credits balance is too low") ||
+		strings.Contains(message, "insufficient credits balance") ||
+		strings.Contains(message, "insufficient credit balance") ||
 		strings.Contains(message, "insufficient_quota") ||
 		strings.Contains(message, "token plan entitlement exhausted") ||
 		strings.Contains(message, "workspace allocated quota exceeded")
+}
+
+// isTemporaryAccessMessage 将套餐权限和上游凭据池不可用视为可恢复故障。
+func isTemporaryAccessMessage(message string) bool {
+	return strings.Contains(message, "kimi code access denied") ||
+		strings.Contains(message, "all credentials disabled") ||
+		strings.Contains(message, "all credentials are disabled") ||
+		strings.Contains(message, "所有凭据均已禁用")
 }
 
 // IsTemporaryQuotaError reports whether an upstream error should be isolated temporarily.
@@ -320,8 +331,8 @@ func IsTemporaryQuotaError(apiErr *types.NewAPIError) bool {
 	if apiErr == nil {
 		return false
 	}
-	statusCode, _ := apiErr.GetUpstreamStatusCode()
-	return isTemporaryQuotaError(apiErr, statusCode)
+	statusCode, upstream := apiErr.GetUpstreamStatusCode()
+	return upstream && isTemporaryQuotaError(apiErr, statusCode)
 }
 
 // blockSingleKeyChannelTemporarily creates an immediate quota block for a single-key channel.

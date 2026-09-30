@@ -97,9 +97,12 @@ func (m Properties) Value() (driver.Value, error) {
 }
 
 type TaskPrivateData struct {
-	Key            string `json:"key,omitempty"`
-	UpstreamTaskID string `json:"upstream_task_id,omitempty"` // 上游真实 task ID
-	ResultURL      string `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）
+	BillingSettlementState string `json:"billing_settlement_state,omitempty"`
+	BillingSettlementError string `json:"billing_settlement_error,omitempty"`
+	BillingSettlementQuota int    `json:"billing_settlement_quota,omitempty"`
+	Key                    string `json:"key,omitempty"`
+	UpstreamTaskID         string `json:"upstream_task_id,omitempty"` // 上游真实 task ID
+	ResultURL              string `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）
 	// 计费上下文：用于异步退款/差额结算（轮询阶段读取）
 	BillingSource  string              `json:"billing_source,omitempty"`  // "wallet" 或 "subscription"
 	SubscriptionId int                 `json:"subscription_id,omitempty"` // 订阅 ID，用于订阅退款
@@ -170,9 +173,14 @@ type SyncTaskQueryParams struct {
 	UserIDs        []int
 }
 
+// InitTask 初始化任务与结算快照，失败时只把实际预扣计入可退额度。
 func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) *Task {
 	properties := Properties{}
-	privateData := TaskPrivateData{}
+	privateData := TaskPrivateData{
+		BillingSettlementState: relayInfo.BillingSettlementState,
+		BillingSettlementError: relayInfo.BillingSettlementError,
+		BillingSettlementQuota: relayInfo.BillingSettlementQuota,
+	}
 	if relayInfo != nil && relayInfo.ChannelMeta != nil {
 		if relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeGemini ||
 			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeVertexAi {
@@ -196,6 +204,7 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 
 	t := &Task{
 		TaskID:      taskID,
+		Quota:       relayInfo.BillingSettlementQuota,
 		UserId:      relayInfo.UserId,
 		Group:       relayInfo.UsingGroup,
 		SubmitTime:  time.Now().Unix(),
@@ -205,6 +214,10 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 		Platform:    platform,
 		Properties:  properties,
 		PrivateData: privateData,
+	}
+	if relayInfo.BillingSettlementState == "failed" {
+		// 后续退款只退已预扣额度，避免退还尚未结算的差额。
+		t.Quota = relayInfo.FinalPreConsumedQuota
 	}
 	return t
 }

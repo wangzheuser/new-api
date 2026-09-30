@@ -179,7 +179,7 @@ func reserveInputPolicy(c *gin.Context, info *relaycommon.RelayInfo, request dto
 		amount = max(amount, extra)
 	}
 	if err = info.Billing.Reserve(amount); err != nil {
-		return types.NewErrorWithStatusCode(err, types.ErrorCodePreConsumeTokenQuotaFailed, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 	}
 	return nil
 }

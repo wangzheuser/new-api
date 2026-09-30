@@ -106,6 +106,23 @@ func TestClassifyMultiKeyFailureUsesOnlyRealUpstreamStatus(t *testing.T) {
 	assert.Equal(t, MultiKeyFailureNone, action)
 }
 
+// TestClassifyProviderSpecificCredentialFailures 区分临时权限、余额和永久凭据失效。
+func TestClassifyProviderSpecificCredentialFailures(t *testing.T) {
+	autoBan := 1
+	channel := &model.Channel{AutoBan: &autoBan, ChannelInfo: model.ChannelInfo{IsMultiKey: true}}
+	previous := common.AutomaticDisableChannelEnabled
+	common.AutomaticDisableChannelEnabled = true
+	t.Cleanup(func() { common.AutomaticDisableChannelEnabled = previous })
+
+	cline := upstreamStatusError(http.StatusPaymentRequired, "Cline Credits balance is too low")
+	action, _ := ClassifyMultiKeyFailure(channel, cline)
+	assert.Equal(t, MultiKeyFailureTemporary, action)
+
+	kimi := upstreamStatusError(http.StatusForbidden, "Kimi Code access denied")
+	action, _ = ClassifyMultiKeyFailure(channel, kimi)
+	assert.Equal(t, MultiKeyFailureTemporary, action)
+}
+
 func TestTemporaryMultiKeyDisableSkipsKeyAndExpires(t *testing.T) {
 	server := setupMultiKeyHealthRedis(t)
 	db := setupChannelSelectProtocolTestDB(t)

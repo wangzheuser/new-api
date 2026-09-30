@@ -1,67 +1,52 @@
 package service
 
 import (
-	"net/http"
-	"net/http/httptest"
-	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-type refundTestFunding struct {
-	refunded atomic.Int32
-	done     chan struct{}
-}
-
-// Source returns the wallet funding identifier used by the billing session.
-func (f *refundTestFunding) Source() string { return BillingSourceWallet }
-
-// PreConsume is already represented by the session fixture state.
-func (f *refundTestFunding) PreConsume(int) error {
-	return nil
-}
-
-// Settle is unused by the failure-path fixture.
-func (f *refundTestFunding) Settle(int) error {
-	return nil
-}
-
-// Refund records the asynchronous refund invocation.
-func (f *refundTestFunding) Refund() error {
-	f.refunded.Add(1)
-	close(f.done)
-	return nil
-}
-
+// TestBillingSessionRefundsPreConsumeAfterStreamFailure 验证钱包及订阅退款同时恢复令牌且不会重复入账。
 func TestBillingSessionRefundsPreConsumeAfterStreamFailure(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	funding := &refundTestFunding{done: make(chan struct{})}
-	session := &BillingSession{
-		relayInfo:        &relaycommon.RelayInfo{IsPlayground: true},
-		funding:          funding,
-		preConsumedQuota: 40,
-		tokenConsumed:    40,
+	for _, source := range []string{BillingSourceWallet, BillingSourceSubscription} {
+		t.Run(source, func(t *testing.T) {
+			truncate(t)
+			seedUser(t, 9451, 900)
+			seedToken(t, 9452, 9451, "stream-refund-token", 900)
+			require.NoError(t, model.DB.Model(&model.Token{}).Where("id = ?", 9452).Update("used_quota", 100).Error)
+			var funding FundingSource = &WalletFunding{userId: 9451}
+			if source == BillingSourceSubscription {
+				seedSubscription(t, 9453, 9451, 1000, 100)
+				require.NoError(t, model.DB.Create(&model.SubscriptionPreConsumeRecord{
+					RequestId: "stream-refund", UserId: 9451, UserSubscriptionId: 9453, PreConsumed: 100, Status: "consumed",
+				}).Error)
+				funding = &SubscriptionFunding{requestId: "stream-refund", subscriptionId: 9453, preConsumed: 100}
+			}
+			session := &BillingSession{
+				relayInfo: &relaycommon.RelayInfo{UserId: 9451, TokenId: 9452, TokenKey: "stream-refund-token"},
+				funding:   funding, preConsumedQuota: 100, tokenConsumed: 100,
+			}
+			ctx := newEntitlementBillingContext()
+			require.True(t, session.NeedsRefund())
+			session.Refund(ctx)
+			session.Refund(ctx)
+			var token model.Token
+			require.Eventually(t, func() bool {
+				return model.DB.First(&token, 9452).Error == nil && token.RemainQuota == 1000
+			}, 2*time.Second, time.Millisecond)
+			assert.Zero(t, token.UsedQuota)
+			assert.False(t, session.NeedsRefund())
+			if source == BillingSourceWallet {
+				assert.Equal(t, 1000, getUserQuota(t, 9451))
+			} else {
+				var sub model.UserSubscription
+				require.NoError(t, model.DB.First(&sub, 9453).Error)
+				assert.Zero(t, sub.AmountUsed)
+			}
+		})
 	}
-
-	require.True(t, session.NeedsRefund())
-	session.Refund(c)
-
-	select {
-	case <-funding.done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for refund")
-	}
-	assert.Equal(t, int32(1), funding.refunded.Load())
-	assert.False(t, session.NeedsRefund())
-
-	// 退款幂等：重复调用不会再次触发资金源退款。
-	session.Refund(c)
-	assert.Equal(t, int32(1), funding.refunded.Load())
 }

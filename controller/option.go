@@ -155,6 +155,7 @@ func UpdateOption(c *gin.Context) {
 	case "channel_auto_disable_setting.status_codes",
 		"channel_auto_disable_setting.sample_size",
 		"channel_auto_disable_setting.minimum_sample_size",
+		"channel_auto_disable_setting.min_requests",
 		"channel_auto_disable_setting.error_rate_percent",
 		"channel_auto_disable_setting.disable_minutes":
 		normalized, normalizeErr := operation_setting.NormalizeChannelAutoDisableOption(option.Key, option.Value.(string))
@@ -166,6 +167,9 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 		option.Value = normalized
+		if option.Key == "channel_auto_disable_setting.min_requests" {
+			option.Key = "channel_auto_disable_setting.minimum_sample_size"
+		}
 		if validateErr := operation_setting.ValidateChannelAutoDisableOption(option.Key, option.Value.(string)); validateErr != nil {
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": validateErr.Error()})
 			return

@@ -30,6 +30,7 @@ const (
 	BillingSettled        BillingFinalization = "settled"
 	BillingSettledPartial BillingFinalization = "settled_partial"
 	BillingRefunded       BillingFinalization = "refunded"
+	BillingFailed         BillingFinalization = "failed"
 )
 
 const (
@@ -237,6 +238,18 @@ func (s *StreamStatus) SetBillingFinalization(finalization BillingFinalization) 
 	}
 	s.billingFinalization = finalization
 	return true
+}
+
+// MarkBillingFailed 将已选择的结算结果标记为失败，保留副作用只执行一次的状态。
+func (s *StreamStatus) MarkBillingFailed() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.billingFinalization == BillingSettled || s.billingFinalization == BillingSettledPartial {
+		s.billingFinalization = BillingFailed
+	}
 }
 
 // GetBillingFinalization returns the selected billing outcome.

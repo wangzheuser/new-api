@@ -297,13 +297,17 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		relayInfo.LastError = newAPIError
 
 		willRetry := shouldRetry(c, relayInfo, newAPIError, common.RetryTimes-retryParam.GetRetry())
+		localBillingError := types.IsLocalBillingError(newAPIError)
+		if localBillingError {
+			willRetry = false
+		}
 		if relayInfo.IsContextFallbackActive() && relayInfo.ContextFallback.RouteMode == dto.ContextFallbackModeSame {
 			willRetry = false
 		}
 		endpointMismatch := relayInfo.ProtocolEndpointMismatch &&
 			relayInfo.ChannelRoutePlan != nil &&
 			relayInfo.ChannelRoutePlan.RouteMode != types.ChannelRouteModeLegacy
-		if endpointMismatch {
+		if !localBillingError && endpointMismatch {
 			if retryParam.ExcludedChannelIDs == nil {
 				retryParam.ExcludedChannelIDs = make(map[int]struct{})
 			}
@@ -311,7 +315,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			willRetry = common.RetryTimes-retryParam.GetRetry() > 0 &&
 				!retryBlockedByClientCommit(c, relayInfo) && !service.ShouldSkipRetryAfterChannelAffinityFailure(c) &&
 				!(relayInfo.IsContextFallbackActive() && relayInfo.ContextFallback.RouteMode == dto.ContextFallbackModeSame)
-		} else {
+		} else if !localBillingError {
 			usingKey := common.GetContextKeyString(c, constant.ContextKeyChannelKey)
 			if _, real := newAPIError.GetUpstreamStatusCode(); real && channel.ChannelInfo.IsMultiKey {
 				retryParam.ExcludeChannelKey(channel.Id, usingKey)
@@ -783,6 +787,10 @@ func retryBlockedByClientCommit(c *gin.Context, relayInfo *relaycommon.RelayInfo
 
 // resolveConfiguredFinalRelayError applies channel and system final_error rules after retries finish.
 func resolveConfiguredFinalRelayError(c *gin.Context, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
+	if relayInfo != nil && types.IsLocalBillingError(relayInfo.LastError) {
+		// 本地额度和数据故障保留各自状态码，避免被渠道 final_error 覆盖。
+		return relayInfo.LastError
+	}
 	// Pre-send truncation failures are local request errors, not an upstream outage.
 	// Keep the classification so unmatched errors can use a safe client message
 	// after channel and global final_error overrides have had a chance to apply.
@@ -1181,7 +1189,6 @@ func RelayTask(c *gin.Context) {
 			OriginModelName: relayInfo.OriginModelName,
 			PerCallBilling:  common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice,
 		}
-		task.Quota = result.Quota
 		task.Data = result.TaskData
 		task.Action = relayInfo.Action
 		if insertErr := task.Insert(); insertErr != nil {

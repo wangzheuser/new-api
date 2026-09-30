@@ -90,3 +90,15 @@ func TestLocalTruncationErrorsApplyGlobalOverride(t *testing.T) {
 	assert.Equal(t, types.ErrorCode("global_context_error"), result.GetErrorCode())
 	assert.Equal(t, "全局上下文错误", result.ToOpenAIError().Message)
 }
+
+// TestLocalBillingErrorsKeepForbiddenResponse prevents quota failures from becoming channel 502s.
+func TestLocalBillingErrorsKeepForbiddenResponse(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	local := types.NewErrorWithStatusCode(errors.New("订阅额度不足或未配置订阅"), types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry())
+	info := &relaycommon.RelayInfo{LastError: local}
+
+	result := resolveConfiguredFinalRelayError(c, info)
+	assert.Same(t, local, result)
+	assert.Equal(t, http.StatusForbidden, result.StatusCode)
+	assert.Equal(t, types.ErrorCodeInsufficientUserQuota, result.GetErrorCode())
+}

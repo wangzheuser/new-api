@@ -404,6 +404,22 @@ func IsSkipRetryError(err *NewAPIError) bool {
 	return err.skipRetry
 }
 
+// IsLocalBillingError 区分本地额度/数据故障与真实上游同名错误。
+func IsLocalBillingError(err *NewAPIError) bool {
+	if err == nil {
+		return false
+	}
+	if _, upstream := err.GetUpstreamStatusCode(); upstream || err.GetErrorType() != ErrorTypeNewAPIError {
+		return false
+	}
+	switch err.GetErrorCode() {
+	case ErrorCodeInsufficientUserQuota, ErrorCodePreConsumeTokenQuotaFailed, ErrorCodeUpdateDataError, ErrorCodeQueryDataError:
+		return true
+	default:
+		return false
+	}
+}
+
 // IsClientErrorWritten reports whether the stream already forwarded an upstream error event.
 func IsClientErrorWritten(err *NewAPIError) bool {
 	if err == nil {

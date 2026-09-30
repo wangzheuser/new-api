@@ -2,9 +2,11 @@ package aws
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -52,4 +54,22 @@ func TestDoAwsClientRequest_AppliesRuntimeHeaderOverrideToAnthropicBeta(t *testi
 	values, ok := anthropicBeta.([]any)
 	require.True(t, ok)
 	require.Equal(t, []any{"computer-use-2025-01-24"}, values)
+}
+
+// TestAwsInvokeContextInheritsCancellation 验证 AWS 请求继承客户端取消与更早的截止时间。
+func TestAwsInvokeContextInheritsCancellation(t *testing.T) {
+	oldTimeout := common.RelayTimeout
+	t.Cleanup(func() { common.RelayTimeout = oldTimeout })
+	for _, timeout := range []int{0, 180} {
+		common.RelayTimeout = timeout
+		deadline := time.Now().Add(time.Minute)
+		parent, cancelParent := context.WithDeadline(context.Background(), deadline)
+		ctx, cancel := newAwsInvokeContext(parent)
+		gotDeadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		require.Equal(t, deadline, gotDeadline)
+		cancelParent()
+		require.ErrorIs(t, ctx.Err(), context.Canceled)
+		cancel()
+	}
 }

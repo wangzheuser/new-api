@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,6 +41,9 @@ const (
 var (
 	ErrSubscriptionOrderNotFound      = errors.New("subscription order not found")
 	ErrSubscriptionOrderStatusInvalid = errors.New("subscription order status invalid")
+	ErrNoActiveSubscription           = errors.New("no active subscription")
+	ErrSubscriptionQuotaInsufficient  = errors.New("subscription quota insufficient")
+	ErrSubscriptionUsedExceedsTotal   = errors.New("subscription used exceeds total")
 )
 
 const (
@@ -1939,10 +1943,10 @@ func PreConsumeUserSubscriptionForGroup(requestId string, userId int, modelName 
 			Where("user_id = ? AND status = ? AND start_time <= ? AND end_time > ?", userId, "active", now, now).
 			Order("end_time asc, id asc").
 			Find(&subs).Error; err != nil {
-			return errors.New("no active subscription")
+			return fmt.Errorf("query active subscriptions: %w", err)
 		}
 		if len(subs) == 0 {
-			return errors.New("no active subscription")
+			return ErrNoActiveSubscription
 		}
 		for _, candidate := range subs {
 			sub := candidate
@@ -1996,38 +2000,12 @@ func PreConsumeUserSubscriptionForGroup(requestId string, userId int, modelName 
 			returnValue.AmountUsedAfter = sub.AmountUsed
 			return nil
 		}
-		return fmt.Errorf("subscription quota insufficient, need=%d", amount)
+		return fmt.Errorf("%w, need=%d", ErrSubscriptionQuotaInsufficient, amount)
 	})
 	if err != nil {
 		return nil, err
 	}
 	return returnValue, nil
-}
-
-// RefundSubscriptionPreConsume is idempotent and refunds pre-consumed subscription quota by requestId.
-func RefundSubscriptionPreConsume(requestId string) error {
-	if strings.TrimSpace(requestId) == "" {
-		return errors.New("requestId is empty")
-	}
-	return DB.Transaction(func(tx *gorm.DB) error {
-		var record SubscriptionPreConsumeRecord
-		if err := lockForUpdate(tx).
-			Where("request_id = ?", requestId).First(&record).Error; err != nil {
-			return err
-		}
-		if record.Status == "refunded" {
-			return nil
-		}
-		if record.PreConsumed <= 0 {
-			record.Status = "refunded"
-			return tx.Save(&record).Error
-		}
-		if err := PostConsumeUserSubscriptionDelta(record.UserSubscriptionId, -record.PreConsumed); err != nil {
-			return err
-		}
-		record.Status = "refunded"
-		return tx.Save(&record).Error
-	})
 }
 
 // ResetDueSubscriptions resets subscriptions whose next_reset_time has passed.
@@ -2159,20 +2137,23 @@ func PostConsumeUserSubscriptionDelta(userSubscriptionId int, delta int64) error
 		return nil
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
-		var sub UserSubscription
-		if err := lockForUpdate(tx).
-			Where("id = ?", userSubscriptionId).
-			First(&sub).Error; err != nil {
-			return err
-		}
-		newUsed := sub.AmountUsed + delta
-		if newUsed < 0 {
-			newUsed = 0
-		}
-		if sub.AmountTotal > 0 && newUsed > sub.AmountTotal {
-			return fmt.Errorf("subscription used exceeds total, used=%d total=%d", newUsed, sub.AmountTotal)
-		}
-		sub.AmountUsed = newUsed
-		return tx.Save(&sub).Error
+		return postConsumeUserSubscriptionDelta(tx, userSubscriptionId, delta)
 	})
+}
+
+// postConsumeUserSubscriptionDelta 复用调用方事务，并在相加前校验订阅上限。
+func postConsumeUserSubscriptionDelta(tx *gorm.DB, userSubscriptionId int, delta int64) error {
+	var sub UserSubscription
+	if err := lockForUpdate(tx).Where("id = ?", userSubscriptionId).First(&sub).Error; err != nil {
+		return err
+	}
+	if delta > 0 && (sub.AmountUsed > math.MaxInt64-delta ||
+		(sub.AmountTotal > 0 && (sub.AmountUsed > sub.AmountTotal || delta > sub.AmountTotal-sub.AmountUsed))) {
+		return fmt.Errorf("%w, used=%d delta=%d total=%d", ErrSubscriptionUsedExceedsTotal, sub.AmountUsed, delta, sub.AmountTotal)
+	}
+	newUsed := int64(0)
+	if delta >= 0 || delta >= -sub.AmountUsed {
+		newUsed = sub.AmountUsed + delta
+	}
+	return tx.Model(&sub).UpdateColumn("amount_used", newUsed).Error
 }

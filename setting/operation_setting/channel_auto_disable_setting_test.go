@@ -55,3 +55,26 @@ func TestChannelAutoDisableInvalidThresholdPairIsNormalized(t *testing.T) {
 	assert.Equal(t, 2, setting.SampleSize)
 	assert.Equal(t, 2, setting.MinimumSampleSize)
 }
+
+// TestChannelAutoDisableLegacyMigration 保证显式默认值、新旧并存和小窗口行为确定。
+func TestChannelAutoDisableLegacyMigration(t *testing.T) {
+	const prefix = "channel_auto_disable_setting."
+	for _, tc := range []struct {
+		name   string
+		values map[string]string
+		want   string
+	}{
+		{"legacy", map[string]string{prefix + "min_requests": "20"}, "20"},
+		{"explicit default", map[string]string{prefix + "min_requests": "20", prefix + "minimum_sample_size": "3"}, "3"},
+		{"new", map[string]string{prefix + "minimum_sample_size": "10"}, "10"},
+		{"small window", map[string]string{prefix + "min_requests": "20", prefix + "sample_size": "5"}, "5"},
+		{"invalid", map[string]string{prefix + "min_requests": "-1"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := MigrateChannelAutoDisableOptions(tc.values)
+			assert.Equal(t, tc.want, got[prefix+"minimum_sample_size"])
+			assert.NotContains(t, got, prefix+"min_requests")
+			assert.Equal(t, got, MigrateChannelAutoDisableOptions(got))
+		})
+	}
+}

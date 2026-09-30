@@ -50,6 +50,10 @@ func DecideMultiKeyFailure(channel *model.Channel, upstreamModel string, apiErr 
 		return d
 	}
 	quota := false
+	if isTemporaryAccessMessage(message) {
+		d.Action, d.Category, d.Source = MultiKeyFailureTemporary, "access_unavailable", d.Source+":provider"
+		return d
+	}
 	if match := dailyModelLimit.FindStringSubmatch(message); len(match) == 4 && upstreamModel != "" {
 		d.Scope, d.Model, d.Category = "model", upstreamModel, "daily_quota"
 		hours, e1 := strconv.ParseInt(match[2], 10, 32)

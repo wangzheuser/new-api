@@ -207,6 +207,11 @@ type RelayInfo struct {
 	// BillingSource indicates whether this request is billed from wallet quota or subscription.
 	// "" or "wallet" => wallet; "subscription" => subscription
 	BillingSource string
+	// BillingSettlementState records whether post-request quota settlement completed.
+	BillingSettlementQuota int
+	BillingSettlementState string
+	// BillingSettlementError keeps a masked diagnostic when settlement needs compensation.
+	BillingSettlementError string
 	// SubscriptionEntitlementGroup is the group scope selected for subscription billing.
 	SubscriptionEntitlementGroup string
 	// SubscriptionId is the user_subscriptions.id used when BillingSource == "subscription"

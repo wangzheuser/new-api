@@ -49,7 +49,7 @@ func ShouldDisableChannel(err *types.NewAPIError) bool {
 	if !common.AutomaticDisableChannelEnabled {
 		return false
 	}
-	if err == nil {
+	if err == nil || types.IsLocalBillingError(err) {
 		return false
 	}
 	if statusCode, realUpstream := err.GetUpstreamStatusCode(); realUpstream && statusCode == http.StatusUnauthorized {

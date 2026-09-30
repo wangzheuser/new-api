@@ -66,6 +66,32 @@ func GetChannelAutoDisableSetting() ChannelAutoDisableSetting {
 	return setting
 }
 
+// MigrateChannelAutoDisableOptions 在加载边界迁移旧字段；显式新字段始终优先。
+// 返回副本，避免批量更新时修改调用方的配置集合。
+func MigrateChannelAutoDisableOptions(values map[string]string) map[string]string {
+	result := make(map[string]string, len(values))
+	for key, value := range values {
+		result[key] = value
+	}
+	const legacyKey = "channel_auto_disable_setting.min_requests"
+	const minimumKey = "channel_auto_disable_setting.minimum_sample_size"
+	legacy, exists := values[legacyKey]
+	delete(result, legacyKey)
+	if _, explicit := values[minimumKey]; explicit || !exists {
+		return result
+	}
+	minimum, err := strconv.Atoi(legacy)
+	if err != nil || minimum < 1 || minimum > ChannelAutoDisableMaxSampleSize {
+		return result
+	}
+	sampleSize := defaultChannelAutoDisableSetting.SampleSize
+	if value, err := strconv.Atoi(values["channel_auto_disable_setting.sample_size"]); err == nil && value >= 1 && value <= ChannelAutoDisableMaxSampleSize {
+		sampleSize = value
+	}
+	result[minimumKey] = strconv.Itoa(min(minimum, sampleSize))
+	return result
+}
+
 // ShouldCountChannelAutoDisableStatusCode reports whether an upstream status belongs to the configured error ranges.
 func ShouldCountChannelAutoDisableStatusCode(code int) bool {
 	setting := GetChannelAutoDisableSetting()
@@ -92,6 +118,8 @@ func NormalizeChannelAutoDisableOption(key string, value string) (string, error)
 		return normalizeChannelAutoDisableInt(value, ChannelAutoDisableMinSampleSize, ChannelAutoDisableMaxSampleSize, "sample size")
 	case "channel_auto_disable_setting.minimum_sample_size":
 		return normalizeChannelAutoDisableInt(value, ChannelAutoDisableMinMinimumSamples, ChannelAutoDisableMaxSampleSize, "minimum sample size")
+	case "channel_auto_disable_setting.min_requests":
+		return normalizeChannelAutoDisableInt(value, ChannelAutoDisableMinMinimumSamples, ChannelAutoDisableMaxSampleSize, "minimum sample size")
 	case "channel_auto_disable_setting.error_rate_percent":
 		return normalizeChannelAutoDisableInt(value, ChannelAutoDisableMinErrorRate, ChannelAutoDisableMaxErrorRate, "error rate percent")
 	case "channel_auto_disable_setting.disable_minutes":
@@ -103,7 +131,7 @@ func NormalizeChannelAutoDisableOption(key string, value string) (string, error)
 
 // ValidateChannelAutoDisableOption checks one update against the current pair of sample thresholds.
 func ValidateChannelAutoDisableOption(key, value string) error {
-	if key != "channel_auto_disable_setting.sample_size" && key != "channel_auto_disable_setting.minimum_sample_size" {
+	if key != "channel_auto_disable_setting.sample_size" && key != "channel_auto_disable_setting.minimum_sample_size" && key != "channel_auto_disable_setting.min_requests" {
 		return nil
 	}
 	candidate, err := strconv.Atoi(value)
@@ -111,7 +139,7 @@ func ValidateChannelAutoDisableOption(key, value string) error {
 		return err
 	}
 	label := "sample size"
-	if key == "channel_auto_disable_setting.minimum_sample_size" {
+	if key == "channel_auto_disable_setting.minimum_sample_size" || key == "channel_auto_disable_setting.min_requests" {
 		label = "minimum sample size"
 	}
 	if _, err := normalizeChannelAutoDisableInt(value, ChannelAutoDisableMinSampleSize, ChannelAutoDisableMaxSampleSize, label); err != nil {

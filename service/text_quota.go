@@ -355,14 +355,14 @@ func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 	return "openai"
 }
 
-func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {
+func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) error {
 	if relayInfo != nil && relayInfo.IsStream && relayInfo.StreamStatus != nil {
 		if relayInfo.StreamStatus.GetBillingFinalization() == "" {
 			relayInfo.StreamStatus.SetBillingFinalization(relaycommon.BillingSettled)
 		}
 		if relayInfo.StreamStatus.GetBillingFinalization() == relaycommon.BillingRefunded ||
 			!relayInfo.StreamStatus.TryBeginBillingApplication() {
-			return
+			return nil
 		}
 	}
 	EvaluateResponseOverrideBeforeSettlement(ctx, relayInfo, usage, http.StatusOK)
@@ -414,13 +414,18 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	if summary.TotalTokens == 0 {
 		extraContent = append(extraContent, "上游没有返回计费信息，无法扣费（可能是上游超时）")
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
-	} else {
-		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, summary.Quota)
-		model.UpdateChannelUsedQuota(relayInfo.ChannelId, summary.Quota)
 	}
 
-	if err := SettleBilling(ctx, relayInfo, summary.Quota); err != nil {
-		logger.LogError(ctx, "error settling billing: "+err.Error())
+	settleErr := SettleBilling(ctx, relayInfo, summary.Quota)
+	if settleErr != nil {
+		logger.LogError(ctx, "error settling billing: "+settleErr.Error())
+		extraContent = append(extraContent, "计费结算失败，保留预扣待对账")
+		if relayInfo.StreamStatus != nil {
+			relayInfo.StreamStatus.MarkBillingFailed()
+		}
+	} else if summary.TotalTokens > 0 {
+		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, summary.Quota)
+		model.UpdateChannelUsedQuota(relayInfo.ChannelId, summary.Quota)
 	}
 
 	logModel := relayInfo.GetRequestedModelName()
@@ -510,6 +515,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		InjectTieredBillingInfo(other, relayInfo, tieredResult)
 	}
 
+	appendBillingSettlementInfo(other, relayInfo)
 	attachQuotaSaturation(ctx, relayInfo, other)
 
 	logChannelID := relayInfo.ChannelId
@@ -536,6 +542,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	gopool.Go(func() {
 		perfmetrics.RecordRelaySample(relayInfo, true, int64(summary.CompletionTokens))
 	})
+	return settleErr
 }
 
 func textBillingFinalization(
@@ -565,19 +572,26 @@ func FinalizeTextBilling(
 	status := relayInfo.StreamStatus
 	finalization := textBillingFinalization(relayInfo, relayErr)
 	if status != nil && !status.SetBillingFinalization(finalization) {
+		if status.GetBillingFinalization() == relaycommon.BillingFailed {
+			return relaycommon.BillingFailed, fmt.Errorf("billing settlement failed: %s", relayInfo.BillingSettlementError)
+		}
 		return status.GetBillingFinalization(), nil
 	}
 	partialUsageEstimated := false
 	if status != nil {
 		_, _, partialUsageEstimated = status.PartialUsageSnapshot()
 	}
-	defer logger.LogInfo(ctx, fmt.Sprintf(
-		"text billing finalized: result=%s partial_usage_estimated=%t",
-		finalization,
-		partialUsageEstimated,
-	))
+	defer func() {
+		if status != nil {
+			finalization = status.GetBillingFinalization()
+		}
+		logger.LogInfo(ctx, fmt.Sprintf("text billing finalized: result=%s partial_usage_estimated=%t", finalization, partialUsageEstimated))
+	}()
 	if finalization == relaycommon.BillingSettled {
-		PostTextConsumeQuota(ctx, relayInfo, finalUsage, nil)
+		if err := PostTextConsumeQuota(ctx, relayInfo, finalUsage, nil); err != nil {
+			finalization = relaycommon.BillingFailed
+			return finalization, err
+		}
 		return relaycommon.BillingSettled, nil
 	}
 
@@ -593,8 +607,8 @@ func FinalizeTextBilling(
 			}
 			status.ObservePartialUsage(usage, false, true)
 		}
-		PostTextConsumeQuota(ctx, relayInfo, usage, []string{"部分流失败结算"})
-		return status.GetBillingFinalization(), nil
+		err := PostTextConsumeQuota(ctx, relayInfo, usage, []string{"部分流失败结算"})
+		return status.GetBillingFinalization(), err
 	}
 
 	if status != nil {

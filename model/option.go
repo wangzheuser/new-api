@@ -195,11 +195,19 @@ func InitOptionMap() {
 	loadOptionsFromDatabase()
 }
 
+// loadOptionsFromDatabase 先按持久化字段的存在性迁移，再更新运行时配置。
 func loadOptionsFromDatabase() {
-	options, _ := AllOption()
+	options, err := AllOption()
+	if err != nil {
+		common.SysLog("failed to load options: " + err.Error())
+		return
+	}
+	values := make(map[string]string, len(options))
 	for _, option := range options {
-		err := updateOptionMap(option.Key, option.Value)
-		if err != nil {
+		values[option.Key] = option.Value
+	}
+	for key, value := range operation_setting.MigrateChannelAutoDisableOptions(values) {
+		if err := updateOptionMap(key, value); err != nil {
 			common.SysLog("failed to update option map: " + err.Error())
 		}
 	}
@@ -214,6 +222,9 @@ func SyncOptions(frequency int) {
 }
 
 func UpdateOption(key string, value string) error {
+	if key == "channel_auto_disable_setting.min_requests" {
+		key = "channel_auto_disable_setting.minimum_sample_size"
+	}
 	if err := model_setting.ValidateInputPolicyOption(key, value); err != nil {
 		return err
 	}
@@ -242,6 +253,7 @@ func UpdateOption(key string, value string) error {
 // is touched — safe for callers that must commit a set of related options
 // atomically (e.g. payment gateway binding).
 func UpdateOptionsBulk(values map[string]string) error {
+	values = operation_setting.MigrateChannelAutoDisableOptions(values)
 	for k, v := range values {
 		if err := model_setting.ValidateInputPolicyOption(k, v); err != nil {
 			return err

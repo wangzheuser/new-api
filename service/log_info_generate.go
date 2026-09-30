@@ -49,6 +49,24 @@ func attachQuotaSaturation(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, o
 		clamp.Op, clamp.Kind, clamp.Original, clamp.Clamped, relayInfo.UserId, relayInfo.GetBillingModelName()))
 }
 
+// appendBillingSettlementInfo records a failed settlement for admin reconciliation.
+func appendBillingSettlementInfo(other map[string]interface{}, relayInfo *relaycommon.RelayInfo) {
+	if other == nil || relayInfo == nil || relayInfo.BillingSettlementState == "" {
+		return
+	}
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	if !ok || adminInfo == nil {
+		adminInfo = map[string]interface{}{}
+		other["admin_info"] = adminInfo
+	}
+	adminInfo["billing_settlement"] = map[string]interface{}{
+		"state":              relayInfo.BillingSettlementState,
+		"error":              relayInfo.BillingSettlementError,
+		"actual_quota":       relayInfo.BillingSettlementQuota,
+		"pre_consumed_quota": relayInfo.FinalPreConsumedQuota,
+	}
+}
+
 func appendRequestPath(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
 	if other == nil {
 		return

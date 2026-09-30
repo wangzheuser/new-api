@@ -24,7 +24,9 @@ import (
 type rejectedPolicyReserve struct{ reserveCapture }
 
 // Reserve rejects funding without producing any upstream side effect.
-func (r *rejectedPolicyReserve) Reserve(int) error { return errors.New("insufficient balance") }
+func (r *rejectedPolicyReserve) Reserve(int) error {
+	return types.NewErrorWithStatusCode(errors.New("insufficient balance"), types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry())
+}
 
 // TestInputPolicyPreSendGates covers counting-off, post-conversion budget, overrides and insufficient quota.
 func TestInputPolicyPreSendGates(t *testing.T) {
@@ -66,6 +68,10 @@ func TestInputPolicyPreSendGates(t *testing.T) {
 			switch scenario {
 			case "protected", "override", "balance", "unsupported-media":
 				require.NotNil(t, err)
+				if scenario == "balance" {
+					assert.Equal(t, types.ErrorCodeInsufficientUserQuota, err.GetErrorCode())
+					assert.Equal(t, http.StatusForbidden, err.StatusCode)
+				}
 				assert.Equal(t, 0, calls)
 				assert.Len(t, request.Messages, map[bool]int{true: 1, false: 3}[scenario == "protected"])
 			case "pass-through":
