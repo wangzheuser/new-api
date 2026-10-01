@@ -26,7 +26,7 @@ import { Button } from '@/components/ui/button'
 import { manageMultiKeys } from '../../api'
 import type { MultiKeyCooldown } from '../../types'
 
-/** Show per-model restrictions without presenting the whole credential as disabled. */
+/** Show whole-key cooldowns and allow an operator to clear the key state. */
 export function MultiKeyCooldowns(props: {
   channelId: number
   keyIndex: number
@@ -35,22 +35,20 @@ export function MultiKeyCooldowns(props: {
   onChange: () => void
 }) {
   const { t } = useTranslation()
-  const [selectedModel, setSelectedModel] = useState<string | null>(null)
+  const [selected, setSelected] = useState(false)
   const [busy, setBusy] = useState(false)
 
-  /** Clear only the model confirmed by the administrator. */
-  const clearModel = async () => {
-    if (!selectedModel || !props.canEdit || busy) return
+  const clearKey = async () => {
+    if (!props.canEdit || busy) return
     setBusy(true)
     try {
       const response = await manageMultiKeys({
         channel_id: props.channelId,
         key_index: props.keyIndex,
-        action: 'clear_model_cooldown',
-        model: selectedModel,
+        action: 'clear_key_cooldown',
       })
       if (!response.success) throw new Error(response.message)
-      setSelectedModel(null)
+      setSelected(false)
       props.onChange()
     } catch (error) {
       toast.error(
@@ -66,11 +64,13 @@ export function MultiKeyCooldowns(props: {
     <div className='space-y-2 whitespace-normal'>
       {props.cooldowns.map((item) => (
         <div
-          key={`${item.scope}:${item.model ?? ''}`}
+          key={`${item.scope}:${item.disabled_until}`}
           className='space-y-1 text-xs'
         >
           <div>
-            {item.scope === 'model' ? item.model : t('Whole key cooldown')}
+            {item.scope === 'channel'
+              ? t('Temporary Disabled')
+              : t('Whole key cooldown')}
           </div>
           <div>
             {item.state === 'pending_probe'
@@ -78,27 +78,27 @@ export function MultiKeyCooldowns(props: {
               : new Date(item.disabled_until * 1000).toLocaleString()}
           </div>
           <div className='text-muted-foreground'>{item.reason}</div>
-          {item.scope === 'model' && item.model && props.canEdit && (
+          {item.scope === 'key' && props.canEdit && (
             <Button
               size='sm'
               variant='outline'
-              onClick={() => setSelectedModel(item.model ?? null)}
+              onClick={() => setSelected(true)}
             >
-              {t('Clear model cooldown')}
+              {t('Clear')}
             </Button>
           )}
         </div>
       ))}
       <ConfirmDialog
-        open={selectedModel !== null}
+        open={selected}
         onOpenChange={(open) => {
-          if (!open && !busy) setSelectedModel(null)
+          if (!open && !busy) setSelected(false)
         }}
-        title={t('Clear model cooldown')}
-        desc={t('Allow this model to use this key again?')}
+        title={t('Are you sure?')}
+        desc={t('Whole key cooldown')}
         isLoading={busy}
         handleConfirm={() => {
-          void clearModel()
+          void clearKey()
         }}
       />
     </div>

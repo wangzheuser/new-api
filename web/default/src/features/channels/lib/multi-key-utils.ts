@@ -48,12 +48,6 @@ export function getMultiKeyEffectiveStatusConfig(key: KeyStatus) {
   ) {
     return { variant: 'warning' as const, label: 'Pending recovery probe' }
   }
-  if (
-    !key.temporary_disabled &&
-    key.cooldowns?.some((item) => item.scope === 'model')
-  ) {
-    return { variant: 'warning' as const, label: 'Some models restricted' }
-  }
   if (key.temporary_disabled) {
     return {
       variant: 'warning' as const,

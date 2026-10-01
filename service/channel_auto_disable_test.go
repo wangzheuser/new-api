@@ -175,7 +175,7 @@ func TestChannelHealthErrorClassification(t *testing.T) {
 	assert.True(t, isRealUpstreamTimeout(streamTimeout))
 }
 
-func TestMultiKeyRollingSamplesAreIsolatedByKeyAndModel(t *testing.T) {
+func TestMultiKeyRollingSamplesUseChannelScope(t *testing.T) {
 	server, err := miniredis.Run()
 	require.NoError(t, err)
 	t.Cleanup(server.Close)
@@ -203,13 +203,11 @@ func TestMultiKeyRollingSamplesAreIsolatedByKeyAndModel(t *testing.T) {
 	for range 3 {
 		recordChannelUpstreamResponse(channel, http.StatusServiceUnavailable, true, "KEY_A", "MODEL_A")
 	}
-	assert.False(t, IsMultiKeyModelPoolBlocked(channel, "MODEL_A"), "the other key remains available")
-	assert.False(t, IsMultiKeyModelPoolBlocked(channel, "MODEL_B"), "a different model remains isolated")
-	require.Len(t, LoadMultiKeyCooldowns(channel.Id, "KEY_A"), 1)
+	assert.True(t, IsChannelTemporarilyDisabled(channel.Id))
+	assert.Empty(t, LoadMultiKeyCooldowns(channel.Id, "KEY_A"), "rolling provider failures are channel-scoped")
 
 	for range 3 {
 		recordChannelUpstreamResponse(channel, http.StatusServiceUnavailable, true, "KEY_B", "MODEL_A")
 	}
-	assert.True(t, IsMultiKeyModelPoolBlocked(channel, "MODEL_A"))
-	assert.False(t, IsMultiKeyModelPoolBlocked(channel, "MODEL_B"))
+	assert.True(t, IsChannelTemporarilyDisabled(channel.Id), "model names do not split channel health")
 }

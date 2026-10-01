@@ -32,14 +32,14 @@ func TestMultiKeyPolicyScopesAndRecovery(t *testing.T) {
 		delay                            int64
 	}{
 		{"credential", 401, "invalid key", "", "key", "credential", MultiKeyFailurePersistent, 0},
-		{"usage limit is model cooldown", 403, "Permission denied usage limit", "", "model", "account_quota", MultiKeyFailureTemporary, 0},
-		{"model quota", 429, "Error 429: Daily free limit reached on model z-ai/glm-5.3-flash. Try again in 2h 16m", "60", "model", "daily_quota", MultiKeyFailureTemporary, 8160},
-		{"later header", 429, "Error 429: Daily free limit reached on model z-ai/glm-5.3-flash. Try again in 2h 16m", "9000", "model", "daily_quota", MultiKeyFailureTemporary, 9000},
-		{"workspace", 429, "Workspace allocated quota exceeded, please increase your quota limit.", "", "model", "account_quota", MultiKeyFailureTemporary, 0},
-		{"entitlement", 403, "token plan entitlement exhausted", "", "model", "account_quota", MultiKeyFailureTemporary, 0},
-		{"generic quota text", 403, "quota exceeded", "", "model", "account_quota", MultiKeyFailureTemporary, 0},
-		{"http date", 429, "limited", now.Add(time.Hour).Format(http.TimeFormat), "model", "rate_limit", MultiKeyFailureTemporary, 3600},
-		{"invalid delay", 429, "limited", "999999999999999999999", "model", "rate_limit", MultiKeyFailureTemporary, 0},
+		{"usage limit is key cooldown", 403, "Permission denied usage limit", "", "key", "account_quota", MultiKeyFailureTemporary, 0},
+		{"key quota", 429, "Error 429: Daily free limit reached on model z-ai/glm-5.3-flash. Try again in 2h 16m", "60", "key", "daily_quota", MultiKeyFailureTemporary, 8160},
+		{"later header", 429, "Error 429: Daily free limit reached on model z-ai/glm-5.3-flash. Try again in 2h 16m", "9000", "key", "daily_quota", MultiKeyFailureTemporary, 9000},
+		{"workspace", 429, "Workspace allocated quota exceeded, please increase your quota limit.", "", "key", "account_quota", MultiKeyFailureTemporary, 0},
+		{"entitlement", 403, "token plan entitlement exhausted", "", "key", "account_quota", MultiKeyFailureTemporary, 0},
+		{"generic quota text", 403, "quota exceeded", "", "key", "account_quota", MultiKeyFailureTemporary, 0},
+		{"http date", 429, "limited", now.Add(time.Hour).Format(http.TimeFormat), "channel", "rate_limit", MultiKeyFailureTemporary, 3600},
+		{"invalid delay", 429, "limited", "999999999999999999999", "channel", "rate_limit", MultiKeyFailureTemporary, 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			err := upstreamStatusError(test.status, test.message)
@@ -66,8 +66,8 @@ func TestMultiKeyProbeLeaseLifecycle(t *testing.T) {
 	server := setupMultiKeyHealthRedis(t)
 	db := setupChannelSelectProtocolTestDB(t)
 	channel := createMultiKeyHealthChannel(t, db, constant.MultiKeyModeRandom)
-	name := multiKeyModelDisableKey(channel.Id, "KEY_A", "MODEL_A")
-	raw := `{"scope":"model","model":"MODEL_A","disabled_until":1,"version":"v1"}`
+	name := multiKeyTemporaryDisableKey(channel.Id, "KEY_A")
+	raw := `{"scope":"key","model":"MODEL_A","disabled_until":1,"version":"v1"}`
 	require.NoError(t, common.RDB.Set(context.Background(), name, raw, 24*time.Hour).Err())
 	var wg sync.WaitGroup
 	results := make(chan *gin.Context, 8)
@@ -117,12 +117,12 @@ func TestMultiKeyProbeLeaseLifecycle(t *testing.T) {
 }
 
 // TestMultiKeyModelIsolationAndHalfOpen verifies one recovery lease across independent request contexts.
-func TestMultiKeyModelIsolationAndHalfOpen(t *testing.T) {
+func TestMultiKeyKeyIsolationAndHalfOpen(t *testing.T) {
 	server := setupMultiKeyHealthRedis(t)
 	db := setupChannelSelectProtocolTestDB(t)
 	channel := createMultiKeyHealthChannel(t, db, constant.MultiKeyModeRandom)
-	keyName := multiKeyModelDisableKey(channel.Id, "KEY_A", "MODEL_A")
-	info := dto.MultiKeyTemporaryDisableInfo{Scope: "model", Model: "MODEL_A", DisabledUntil: time.Now().Add(time.Hour).Unix(), Version: "v1", Failures: 1}
+	keyName := multiKeyTemporaryDisableKey(channel.Id, "KEY_A")
+	info := dto.MultiKeyTemporaryDisableInfo{Scope: "key", Model: "MODEL_A", DisabledUntil: time.Now().Add(time.Hour).Unix(), Version: "v1", Failures: 1}
 	raw, err := common.Marshal(info)
 	require.NoError(t, err)
 	require.NoError(t, common.RDB.Set(context.Background(), keyName, raw, 25*time.Hour).Err())
@@ -131,14 +131,13 @@ func TestMultiKeyModelIsolationAndHalfOpen(t *testing.T) {
 	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
 	_, _, apiErr := SelectChannelKeyForRequest(c, channel, "MODEL_A", excluded)
 	require.NotNil(t, apiErr)
-	key, _, apiErr := SelectChannelKeyForRequest(c, channel, "MODEL_B", excluded)
-	require.Nil(t, apiErr)
-	assert.Equal(t, "KEY_A", key)
+	_, _, apiErr = SelectChannelKeyForRequest(c, channel, "MODEL_B", excluded)
+	require.NotNil(t, apiErr)
 	info.DisabledUntil = time.Now().Add(-time.Second).Unix()
 	raw, err = common.Marshal(info)
 	require.NoError(t, err)
 	require.NoError(t, common.RDB.Set(context.Background(), keyName, raw, time.Hour).Err())
-	_, _, apiErr = SelectChannelKeyForRequest(c, channel, "MODEL_A", excluded)
+	_, _, apiErr = SelectChannelKeyForRequest(c, channel, "MODEL_B", excluded)
 	require.Nil(t, apiErr)
 	t.Cleanup(func() { FinishChannelKeyProbe(c, false) })
 	c2, _ := gin.CreateTestContext(httptest.NewRecorder())

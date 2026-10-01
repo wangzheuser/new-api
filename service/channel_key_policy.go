@@ -22,11 +22,16 @@ type MultiKeyDecision struct {
 	RecoverAt                      int64
 }
 
+const (
+	multiKeyScopeKey     = "key"
+	multiKeyScopeChannel = "channel"
+)
+
 var dailyModelLimit = regexp.MustCompile(`(?i)daily free limit reached on model ([^ .]+(?:\.[^ .]+)*)\. try again in ([0-9]+)h ([0-9]+)m`)
 
 // DecideMultiKeyFailure separates credential failures from provider quota scopes.
 func DecideMultiKeyFailure(channel *model.Channel, upstreamModel string, apiErr *types.NewAPIError, now time.Time) MultiKeyDecision {
-	d := MultiKeyDecision{Action: MultiKeyFailureNone, Scope: "key", Source: "global"}
+	d := MultiKeyDecision{Action: MultiKeyFailureNone, Scope: multiKeyScopeKey, Source: "global"}
 	if channel == nil || apiErr == nil || !channel.ChannelInfo.IsMultiKey || !common.AutomaticDisableChannelEnabled || !channel.GetAutoBan() {
 		return d
 	}
@@ -55,7 +60,7 @@ func DecideMultiKeyFailure(channel *model.Channel, upstreamModel string, apiErr 
 		return d
 	}
 	if match := dailyModelLimit.FindStringSubmatch(message); len(match) == 4 && upstreamModel != "" {
-		d.Scope, d.Model, d.Category = "model", upstreamModel, "daily_quota"
+		d.Scope, d.Model, d.Category = multiKeyScopeKey, upstreamModel, "daily_quota"
 		hours, e1 := strconv.ParseInt(match[2], 10, 32)
 		minutes, e2 := strconv.ParseInt(match[3], 10, 32)
 		if e1 == nil && e2 == nil && minutes < 60 && hours < 168 {
@@ -63,19 +68,20 @@ func DecideMultiKeyFailure(channel *model.Channel, upstreamModel string, apiErr 
 		}
 		quota = true
 	} else if providerCode == "INFERENCE_CAP_ERROR" && upstreamModel != "" {
-		d.Scope, d.Model, d.Category, quota = "model", upstreamModel, "model_quota", true
+		d.Scope, d.Model, d.Category, quota = multiKeyScopeKey, upstreamModel, "model_quota", true
 	} else if isProviderQuotaMessage(message) {
-		d.Scope, d.Model, d.Category, quota = "model", upstreamModel, "provider_quota", true
+		d.Scope, d.Model, d.Category, quota = multiKeyScopeKey, upstreamModel, "provider_quota", true
 		if d.Model == "" {
 			d.Model = "unknown"
 		}
 	} else if isAccountQuotaMessage(message) || providerCode == "insufficient_quota" {
-		d.Scope, d.Model, d.Category, quota = "model", upstreamModel, "account_quota", true
+		d.Scope, d.Model, d.Category, quota = multiKeyScopeKey, upstreamModel, "account_quota", true
 		if d.Model == "" {
 			d.Model = "unknown"
 		}
 	} else if status == http.StatusTooManyRequests {
-		d.Scope, d.Model, d.Category, quota = "model", upstreamModel, "rate_limit", true
+		// Unknown 429 responses represent provider pressure until the body identifies a key.
+		d.Scope, d.Model, d.Category, quota = multiKeyScopeChannel, upstreamModel, "rate_limit", true
 	}
 	if quota {
 		if d.Model == "" {
@@ -98,15 +104,16 @@ func DecideMultiKeyFailure(channel *model.Channel, upstreamModel string, apiErr 
 		d.Action, d.Category = MultiKeyFailurePersistent, "credential"
 		return d
 	}
-	// 408 and 5xx are statistical health failures; they must not be converted into key cooldowns.
-	if !quota && (status == http.StatusRequestTimeout || status >= 500) {
+	// Transport and upstream server failures are channel health signals, not key failures.
+	if status == http.StatusRequestTimeout || status >= 500 {
+		d.Action, d.Scope, d.Category = MultiKeyFailureTemporary, multiKeyScopeChannel, "upstream_health"
+		d.Source += ":provider"
 		return d
 	}
 	if !quota && !operation_setting.MatchMultiKeyStatusCode(setting.TemporaryStatusCodes, status) {
 		return d
 	}
-	d.Action = MultiKeyFailureTemporary
-	d.Category = "rate_limit"
+	d.Action, d.Scope, d.Category = MultiKeyFailureTemporary, multiKeyScopeChannel, "upstream_status"
 	if header := apiErr.GetUpstreamRetryAfter(); header != "" {
 		at, valid := parseMultiKeyRetryAfter(header, now)
 		if valid && at > d.RecoverAt {

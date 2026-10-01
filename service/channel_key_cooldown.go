@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -61,30 +60,13 @@ type channelKeyProbe struct {
 	done    chan struct{}
 }
 
-// multiKeyModelDisableKey keeps immediate cooldowns isolated by key and model.
-func multiKeyModelDisableKey(channelID int, key, upstreamModel string) string {
-	return multiKeyTemporaryDisableKey(channelID, key) + ":model:" + MultiKeyFingerprint(normalizeMultiKeyHealthModel(upstreamModel))
-}
-
-// normalizeMultiKeyHealthModel keeps unresolved model names in one isolated bucket.
-func normalizeMultiKeyHealthModel(upstreamModel string) string {
-	upstreamModel = strings.TrimSpace(upstreamModel)
-	if upstreamModel == "" {
-		return "unknown"
-	}
-	return upstreamModel
-}
-
 // writeMultiKeyCooldown atomically advances failure history without shortening a provider reset hint.
 func writeMultiKeyCooldown(channel *model.Channel, key string, d MultiKeyDecision, reason string) {
 	if !common.RedisEnabled || common.RDB == nil {
 		return
 	}
 	name := multiKeyTemporaryDisableKey(channel.Id, key)
-	if d.Scope == "model" {
-		name = multiKeyModelDisableKey(channel.Id, key, d.Model)
-	}
-	info := dto.MultiKeyTemporaryDisableInfo{StatusCode: d.StatusCode, Reason: reason, Scope: d.Scope, Model: d.Model, Category: d.Category, Source: d.Source, Version: common.NewRequestId(), KeyFingerprint: MultiKeyFingerprint(key)}
+	info := dto.MultiKeyTemporaryDisableInfo{StatusCode: d.StatusCode, Reason: reason, Scope: multiKeyScopeKey, Model: d.Model, Category: d.Category, Source: d.Source, Version: common.NewRequestId(), KeyFingerprint: MultiKeyFingerprint(key)}
 	raw, err := common.Marshal(info)
 	if err != nil {
 		common.SysError("failed to encode key cooldown")
@@ -96,19 +78,15 @@ func writeMultiKeyCooldown(channel *model.Channel, key string, d MultiKeyDecisio
 	}
 }
 
-// loadKeyCooldownRecords reads immediate quota cooldowns and the current rolling-health block.
-func loadKeyCooldownRecords(channel *model.Channel, key, upstreamModel string) ([]keyCooldownRecord, error) {
+// loadKeyCooldownRecords reads the whole-key cooldown for one credential.
+func loadKeyCooldownRecords(channel *model.Channel, key string) ([]keyCooldownRecord, error) {
 	if !common.RedisEnabled || common.RDB == nil {
 		return nil, nil
 	}
 	if channel == nil {
 		return nil, nil
 	}
-	upstreamModel = normalizeMultiKeyHealthModel(upstreamModel)
 	names := []string{multiKeyTemporaryDisableKey(channel.Id, key)}
-	names = append(names, multiKeyModelDisableKey(channel.Id, key, upstreamModel))
-	healthBlockKey, _, _ := channelAutoDisableScopeKeys(channel.Id, "key:"+MultiKeyFingerprint(key), upstreamModel, effectiveChannelAutoDisableConfig(channel))
-	names = append(names, healthBlockKey)
 	values, err := common.RDB.MGet(context.Background(), names...).Result()
 	if err != nil {
 		logChannelAutoDisableRedisError(err)
@@ -121,26 +99,7 @@ func loadKeyCooldownRecords(channel *model.Channel, key, upstreamModel string) (
 			continue
 		}
 		var info dto.MultiKeyTemporaryDisableInfo
-		if strings.Contains(names[i], ":scope:") {
-			var healthInfo dto.TemporaryAutoDisableInfo
-			if common.UnmarshalJsonStr(raw, &healthInfo) != nil {
-				continue
-			}
-			info = dto.MultiKeyTemporaryDisableInfo{
-				DisabledUntil:     healthInfo.DisabledUntil,
-				StatusCode:        healthInfo.StatusCode,
-				Reason:            healthInfo.Reason,
-				Scope:             healthInfo.Scope,
-				Model:             healthInfo.Model,
-				Category:          "statistical_health",
-				Source:            "rolling_sample",
-				SampleSize:        healthInfo.SampleSize,
-				MinimumSampleSize: healthInfo.MinimumSampleSize,
-				Requests:          healthInfo.Requests,
-				Errors:            healthInfo.Errors,
-				ErrorRate:         healthInfo.ErrorRate,
-			}
-		} else if common.UnmarshalJsonStr(raw, &info) != nil {
+		if common.UnmarshalJsonStr(raw, &info) != nil {
 			continue
 		}
 		if info.Scope == "" {
@@ -172,7 +131,7 @@ func SelectChannelKeyForRequest(c *gin.Context, channel *model.Channel, upstream
 		if apiErr != nil {
 			return "", 0, apiErr
 		}
-		records, readErr := loadKeyCooldownRecords(channel, key, upstreamModel)
+		records, readErr := loadKeyCooldownRecords(channel, key)
 		if readErr != nil || len(records) == 0 {
 			return key, index, nil
 		}
@@ -268,16 +227,13 @@ func FinishChannelKeyProbe(c *gin.Context, success bool) {
 	c.Set(string(constant.ContextKeyChannelKeyProbe), nil)
 }
 
-// LoadMultiKeyCooldowns returns all scopes for management, without putting SCAN on the relay path.
+// LoadMultiKeyCooldowns returns whole-key cooldowns for management.
 func LoadMultiKeyCooldowns(channelID int, key string) []dto.MultiKeyTemporaryDisableInfo {
 	if !common.RedisEnabled || common.RDB == nil {
 		return nil
 	}
 	var out []dto.MultiKeyTemporaryDisableInfo
-	patterns := []string{
-		multiKeyTemporaryDisableKey(channelID, key) + "*",
-		fmt.Sprintf("newapi:channel-auto-disable:v2:{%d}:scope:key:%s:*", channelID, MultiKeyFingerprint(key)),
-	}
+	patterns := []string{multiKeyTemporaryDisableKey(channelID, key) + "*"}
 	for _, pattern := range patterns {
 		var cursor uint64
 		for {
@@ -290,35 +246,16 @@ func LoadMultiKeyCooldowns(channelID int, key string) []dto.MultiKeyTemporaryDis
 				if strings.HasSuffix(name, ":probe") {
 					continue
 				}
+				// Legacy key:model entries are intentionally ignored by the two-scope policy.
+				if strings.Contains(name, ":model:") {
+					continue
+				}
 				raw, err := common.RDB.Get(context.Background(), name).Result()
 				if err != nil {
 					continue
 				}
 				var info dto.MultiKeyTemporaryDisableInfo
-				if strings.Contains(name, ":scope:") {
-					var healthInfo dto.TemporaryAutoDisableInfo
-					if common.UnmarshalJsonStr(raw, &healthInfo) != nil {
-						continue
-					}
-					if healthInfo.KeyFingerprint != MultiKeyFingerprint(key) {
-						continue
-					}
-					info = dto.MultiKeyTemporaryDisableInfo{
-						DisabledUntil:     healthInfo.DisabledUntil,
-						StatusCode:        healthInfo.StatusCode,
-						Reason:            healthInfo.Reason,
-						Scope:             healthInfo.Scope,
-						Model:             healthInfo.Model,
-						KeyFingerprint:    healthInfo.KeyFingerprint,
-						Category:          "statistical_health",
-						Source:            "rolling_sample",
-						SampleSize:        healthInfo.SampleSize,
-						MinimumSampleSize: healthInfo.MinimumSampleSize,
-						Requests:          healthInfo.Requests,
-						Errors:            healthInfo.Errors,
-						ErrorRate:         healthInfo.ErrorRate,
-					}
-				} else if common.UnmarshalJsonStr(raw, &info) != nil {
+				if common.UnmarshalJsonStr(raw, &info) != nil {
 					continue
 				}
 				if info.Scope == "" {
@@ -339,65 +276,11 @@ func LoadMultiKeyCooldowns(channelID int, key string) []dto.MultiKeyTemporaryDis
 	return out
 }
 
-// ClearMultiKeyModelCooldown clears only one model and its recovery lease.
+// ClearMultiKeyModelCooldown remains as a compatibility alias and clears the whole key.
 func ClearMultiKeyModelCooldown(channelID int, key, upstreamModel string) error {
 	if !common.RedisEnabled || common.RDB == nil {
 		return fmt.Errorf("Redis is unavailable")
 	}
-	upstreamModel = normalizeMultiKeyHealthModel(upstreamModel)
-	name := multiKeyModelDisableKey(channelID, key, upstreamModel)
-	names := []string{name, name + ":probe"}
-	modelFingerprint := fmt.Sprintf("%x", sha256.Sum256([]byte(upstreamModel)))[:16]
-	pattern := fmt.Sprintf("newapi:channel-auto-disable:v2:{%d}:scope:key:%s:model:%s:*", channelID, MultiKeyFingerprint(key), modelFingerprint)
-	var cursor uint64
-	for {
-		healthNames, next, scanErr := common.RDB.Scan(context.Background(), cursor, pattern, 100).Result()
-		if scanErr != nil {
-			return scanErr
-		}
-		names = append(names, healthNames...)
-		cursor = next
-		if cursor == 0 {
-			break
-		}
-	}
-	return common.RDB.Del(context.Background(), names...).Err()
-}
-
-// IsMultiKeyModelPoolBlocked checks model eligibility without reserving a recovery probe.
-func IsMultiKeyModelPoolBlocked(channel *model.Channel, upstreamModel string) bool {
-	if channel == nil || !channel.ChannelInfo.IsMultiKey || !channel.GetAutoBan() || !common.AutomaticDisableChannelEnabled || !common.RedisEnabled || common.RDB == nil {
-		return false
-	}
-	upstreamModel = normalizeMultiKeyHealthModel(upstreamModel)
-	snapshot := channel.Snapshot()
-	for index, key := range snapshot.GetKeys() {
-		if status, ok := snapshot.ChannelInfo.MultiKeyStatusList[index]; ok && status != common.ChannelStatusEnabled {
-			continue
-		}
-		records, err := loadKeyCooldownRecords(channel, key, upstreamModel)
-		if err != nil {
-			return false
-		}
-		blocked := false
-		for _, r := range records {
-			if r.info.DisabledUntil > time.Now().Unix() {
-				blocked = true
-				break
-			}
-			exists, err := common.RDB.Exists(context.Background(), r.name+":probe").Result()
-			if err != nil {
-				logChannelAutoDisableRedisError(err)
-				return false
-			}
-			if exists > 0 {
-				blocked = true
-				break
-			}
-		}
-		if !blocked {
-			return false
-		}
-	}
-	return true
+	clearMultiKeyKeyCooldown(channelID, key)
+	return nil
 }

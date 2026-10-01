@@ -356,7 +356,7 @@ export interface CopyChannelResponse {
 // ============================================================================
 
 export interface MultiKeyCooldown {
-  scope: 'key' | 'model'
+  scope: 'key' | 'channel'
   model?: string
   category?: string
   reason?: string
@@ -482,11 +482,10 @@ export interface CopyChannelParams {
 }
 
 export interface MultiKeyManageParams {
-  model?: string
   channel_id: number
   action:
     | 'get_key_status'
-    | 'clear_model_cooldown'
+    | 'clear_key_cooldown'
     | 'disable_key'
     | 'enable_key'
     | 'enable_all_keys'

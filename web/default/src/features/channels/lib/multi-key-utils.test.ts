@@ -134,26 +134,23 @@ describe('multi-key effective health status', () => {
   })
 })
 
-describe('model-scoped key cooldowns', () => {
-  it('keeps a partially restricted key enabled and identifies half-open recovery', () => {
+describe('key and channel cooldowns', () => {
+	it('marks whole-key recovery and does not expose model-only state', () => {
     const key = {
       index: 0,
       status: 1,
       effective_status: 'enabled' as const,
-      temporary_disabled: false,
+      temporary_disabled: true,
       cooldowns: [
         {
-          scope: 'model' as const,
+          scope: 'key' as const,
           model: 'MODEL_A',
           disabled_until: 123,
           state: 'cooling' as const,
         },
       ],
     }
-    assert.equal(
-      getMultiKeyEffectiveStatusConfig(key).label,
-      'Some models restricted'
-    )
+    assert.equal(getMultiKeyEffectiveStatusConfig(key).label, 'Temporary Disabled')
     assert.equal(key.status, 1)
     const recovering = {
       ...key,

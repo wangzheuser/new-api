@@ -1641,12 +1641,12 @@ func ManageMultiKeys(c *gin.Context) {
 	defer lock.Unlock()
 
 	switch request.Action {
-	case "clear_model_cooldown":
-		if request.KeyIndex == nil || *request.KeyIndex < 0 || *request.KeyIndex >= len(channel.GetKeys()) || strings.TrimSpace(request.Model) == "" {
-			common.ApiError(c, fmt.Errorf("invalid key index or model"))
+	case "clear_key_cooldown", "clear_model_cooldown":
+		if request.KeyIndex == nil || *request.KeyIndex < 0 || *request.KeyIndex >= len(channel.GetKeys()) {
+			common.ApiError(c, fmt.Errorf("invalid key index"))
 			return
 		}
-		if err := service.ClearMultiKeyModelCooldown(channel.Id, channel.GetKeys()[*request.KeyIndex], request.Model); err != nil {
+		if err := service.ClearMultiKeyModelCooldown(channel.Id, channel.GetKeys()[*request.KeyIndex], ""); err != nil {
 			common.ApiError(c, err)
 			return
 		}
@@ -2118,7 +2118,7 @@ func ManageMultiKeys(c *gin.Context) {
 }
 
 func multiKeyActionRequiresSensitiveWrite(action string) bool {
-	return action == "delete_key" || action == "delete_disabled_keys" || action == "clear_model_cooldown"
+	return action == "delete_key" || action == "delete_disabled_keys" || action == "clear_key_cooldown" || action == "clear_model_cooldown"
 }
 
 // OllamaPullModel 拉取 Ollama 模型

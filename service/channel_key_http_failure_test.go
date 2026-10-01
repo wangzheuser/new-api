@@ -24,8 +24,8 @@ func TestMultiKeyHTTPFailureOverride(t *testing.T) {
 		upstream int
 		want     MultiKeyFailureAction
 	}{
-		{"upstream failure", 500, MultiKeyFailureNone},
-		{"gateway failure", 502, MultiKeyFailureNone},
+		{"upstream failure", 500, MultiKeyFailureTemporary},
+		{"gateway failure", 502, MultiKeyFailureTemporary},
 		{"rate limited", 429, MultiKeyFailureTemporary},
 		{"local conversion failure", 0, MultiKeyFailureNone},
 		{"mapped client error", 400, MultiKeyFailureNone},
@@ -42,5 +42,5 @@ func TestMultiKeyHTTPFailureOverride(t *testing.T) {
 	}
 	channel.OtherSettings = ""
 	action, _ := ClassifyMultiKeyFailure(channel, upstreamStatusError(500, "failure"))
-	assert.Equal(t, MultiKeyFailureNone, action, "other channels retain the default policy")
+	assert.Equal(t, MultiKeyFailureTemporary, action, "5xx failures are channel-scoped")
 }

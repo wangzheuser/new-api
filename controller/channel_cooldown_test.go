@@ -20,7 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestMultiKeyCooldownManagement protects scope isolation, legacy counts and sensitive writes.
+// TestMultiKeyCooldownManagement protects two-scope visibility and sensitive writes.
 func TestMultiKeyCooldownManagement(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
 	server := miniredis.RunT(t)
@@ -34,11 +34,9 @@ func TestMultiKeyCooldownManagement(t *testing.T) {
 	})
 	channel := &model.Channel{Name: "management-fixture", Key: "KEY_A\nKEY_B", Status: 1, ChannelInfo: model.ChannelInfo{IsMultiKey: true, MultiKeySize: 2}}
 	require.NoError(t, db.Create(channel).Error)
-	prefix := fmt.Sprintf("newapi:channel-auto-disable:v2:{%d}:cooldown:key:%s:model:", channel.Id, service.MultiKeyFingerprint("KEY_A"))
-	for _, name := range []string{"MODEL_A", "MODEL_B"} {
-		raw := fmt.Sprintf(`{"scope":"model","model":%q,"disabled_until":1,"version":"v1"}`, name)
-		require.NoError(t, common.RDB.Set(context.Background(), prefix+service.MultiKeyFingerprint(name), raw, time.Hour).Err())
-	}
+	keyName := fmt.Sprintf("newapi:channel-auto-disable:v2:{%d}:cooldown:key:%s", channel.Id, service.MultiKeyFingerprint("KEY_A"))
+	raw := `{"scope":"key","disabled_until":1,"version":"v1"}`
+	require.NoError(t, common.RDB.Set(context.Background(), keyName, raw, time.Hour).Err())
 	for _, role := range []int{0, common.RoleRootUser} {
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
@@ -54,15 +52,14 @@ func TestMultiKeyCooldownManagement(t *testing.T) {
 		assert.Equal(t, 2, response.Data.EnabledCount)
 		assert.Zero(t, response.Data.TemporaryDisabledCount)
 		require.Len(t, response.Data.Keys, 2)
-		assert.Len(t, response.Data.Keys[0].Cooldowns, 2)
+		assert.Len(t, response.Data.Keys[0].Cooldowns, 1)
 		assert.Equal(t, role == common.RoleRootUser, response.Data.CanManageCooldowns)
 		w = httptest.NewRecorder()
 		c, _ = gin.CreateTestContext(w)
 		c.Set("role", role)
-		c.Request = httptest.NewRequest(http.MethodPost, "/api/channel/multi_key", strings.NewReader(fmt.Sprintf(`{"channel_id":%d,"key_index":0,"action":"clear_model_cooldown","model":"MODEL_A"}`, channel.Id)))
+		c.Request = httptest.NewRequest(http.MethodPost, "/api/channel/multi_key", strings.NewReader(fmt.Sprintf(`{"channel_id":%d,"key_index":0,"action":"clear_key_cooldown"}`, channel.Id)))
 		ManageMultiKeys(c)
-		assert.Equal(t, role != common.RoleRootUser, server.Exists(prefix+service.MultiKeyFingerprint("MODEL_A")), w.Body.String())
-		assert.True(t, server.Exists(prefix+service.MultiKeyFingerprint("MODEL_B")))
+		assert.Equal(t, role != common.RoleRootUser, server.Exists(keyName), w.Body.String())
 	}
 }
 

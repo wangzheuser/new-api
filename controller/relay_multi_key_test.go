@@ -89,7 +89,11 @@ func TestMultiKeyRelayHTTP(t *testing.T) {
 						mu.Unlock()
 						w.Header().Set("Content-Type", "application/json")
 						w.WriteHeader(status)
-						_, _ = io.WriteString(w, `{"error":{"message":"limited","type":"rate_limit_error"}}`)
+						message := "invalid credential"
+						if status == 429 {
+							message = "quota exceeded"
+						}
+						_, _ = io.WriteString(w, fmt.Sprintf(`{"error":{"message":%q,"type":"rate_limit_error"}}`, message))
 					}))
 					defer upstream.Close()
 					channel := &model.Channel{Type: constant.ChannelTypeOpenAI, Name: "http-fixture", Key: "KEY_A\nKEY_B", Status: 1, AutoBan: common.GetPointer(1), BaseURL: &upstream.URL, Group: "default", Models: "MODEL_X", ChannelInfo: model.ChannelInfo{IsMultiKey: true, MultiKeySize: 2, MultiKeyMode: mode}}

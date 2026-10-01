@@ -143,6 +143,27 @@ func RecordChannelUpstreamErrorAsync(channel *model.Channel, apiErr *types.NewAP
 	})
 }
 
+// RecordChannelScopedFailureAsync records a classified channel-scope failure without cooling a key.
+func RecordChannelScopedFailureAsync(channel *model.Channel, apiErr *types.NewAPIError) {
+	if channel == nil || apiErr == nil || !common.AutomaticDisableChannelEnabled || !channel.GetAutoBan() || !common.RedisEnabled || common.RDB == nil {
+		return
+	}
+	statusCode, realUpstream := apiErr.GetUpstreamStatusCode()
+	if !realUpstream {
+		return
+	}
+	snapshot := &model.Channel{
+		Id:            channel.Id,
+		Name:          channel.Name,
+		AutoBan:       common.GetPointer(1),
+		OtherSettings: channel.OtherSettings,
+		ChannelInfo:   channel.ChannelInfo,
+	}
+	gopool.Go(func() {
+		recordChannelUpstreamResponse(snapshot, statusCode, true, "", "")
+	})
+}
+
 // recordChannelUpstreamError applies the priority order for persistent, temporary and statistical failures.
 func recordChannelUpstreamError(channel *model.Channel, apiErr *types.NewAPIError, usingKey, upstreamModel string) {
 	statusCode, realUpstream := apiErr.GetUpstreamStatusCode()
@@ -191,16 +212,9 @@ func recordChannelUpstreamResponse(channel *model.Channel, upstreamStatusCode in
 	}
 	setting := effectiveChannelAutoDisableConfig(channel)
 	now := time.Now()
+	// Rolling health is channel-scoped for multi-key channels; model failures do not split the pool.
 	scope, modelName := "channel", ""
 	scopeLabel := "channel"
-	if channel.ChannelInfo.IsMultiKey {
-		scope = "key:" + MultiKeyFingerprint(usingKey)
-		scopeLabel = "key_model"
-		modelName = upstreamModel
-		if modelName == "" {
-			modelName = "unknown"
-		}
-	}
 	if modelName == "" {
 		modelName = "-"
 	}
@@ -221,9 +235,6 @@ func recordChannelUpstreamResponse(channel *model.Channel, upstreamStatusCode in
 		modelName,
 		channelAutoDisableConfigFingerprint(setting),
 		func() string {
-			if channel.ChannelInfo.IsMultiKey {
-				return MultiKeyFingerprint(usingKey)
-			}
 			return ""
 		}(),
 		upstreamStatusCode,
@@ -243,14 +254,8 @@ func recordChannelUpstreamResponse(channel *model.Channel, upstreamStatusCode in
 	errorsCount := redisResultInt64(values[2])
 	errorRate := float64(errorsCount) * 100 / float64(requests)
 	disabledUntil := now.Add(time.Duration(setting.DisableMinutes) * time.Minute)
-	if channel.ChannelInfo.IsMultiKey {
-		refreshMultiKeyPoolBlock(channel.Id, modelName)
-	}
 	subject := fmt.Sprintf("通道「%s」（#%d）已被临时禁用", channel.Name, channel.Id)
 	scopeText := "渠道"
-	if channel.ChannelInfo.IsMultiKey {
-		scopeText = fmt.Sprintf("密钥 #%s / 模型 %s", MultiKeyFingerprint(usingKey)[:8], modelName)
-	}
 	content := fmt.Sprintf(
 		"通道「%s」（#%d）的%s在最近 %d 次有效上游响应中有 %d 次错误，错误率 %.1f%%，已临时禁用 %d 分钟，将于 %s 自动恢复。",
 		channel.Name,
@@ -390,7 +395,11 @@ func IsChannelTemporarilyDisabled(channelId int) bool {
 	if channelId <= 0 || !common.AutomaticDisableChannelEnabled || !common.RedisEnabled || common.RDB == nil {
 		return false
 	}
-	value, err := common.RDB.Get(context.Background(), channelAutoDisableBlockedKey(channelId)).Result()
+	ctx := context.Background()
+	value, err := common.RDB.Get(ctx, channelAutoDisableBlockedKey(channelId)).Result()
+	if errors.Is(err, redis.Nil) {
+		value, err = common.RDB.Get(ctx, multiKeyPoolBlockedKey(channelId)).Result()
+	}
 	if errors.Is(err, redis.Nil) {
 		return false
 	}
@@ -409,22 +418,15 @@ func IsChannelTemporarilyDisabled(channelId int) bool {
 	return info.DisabledUntil > time.Now().Unix()
 }
 
-// IsChannelRoutingBlocked reports whether a channel or its selected key-model scope must be excluded.
+// IsChannelRoutingBlocked reports whether the whole channel is temporarily unavailable.
 func IsChannelRoutingBlocked(channel *model.Channel, modelName string) bool {
 	if channel == nil || !channel.GetAutoBan() {
 		return false
 	}
-	healthModel, err := common.ResolveMappedModel(channel.GetModelMapping(), modelName)
-	if err != nil {
-		return true
-	}
 	if IsChannelTemporarilyDisabled(channel.Id) {
 		return true
 	}
-	if !channel.ChannelInfo.IsMultiKey {
-		return false
-	}
-	return IsMultiKeyPoolTemporarilyDisabled(channel.Id, healthModel) || IsMultiKeyModelPoolBlocked(channel, healthModel)
+	return channel.ChannelInfo.IsMultiKey && IsMultiKeyPoolTemporarilyDisabled(channel.Id)
 }
 
 // LoadChannelTemporaryAutoDisable returns the current temporary disable details for administrators.
@@ -432,7 +434,11 @@ func LoadChannelTemporaryAutoDisable(channelId int) *dto.TemporaryAutoDisableInf
 	if channelId <= 0 || !common.AutomaticDisableChannelEnabled || !common.RedisEnabled || common.RDB == nil {
 		return nil
 	}
-	value, err := common.RDB.Get(context.Background(), channelAutoDisableBlockedKey(channelId)).Result()
+	ctx := context.Background()
+	value, err := common.RDB.Get(ctx, channelAutoDisableBlockedKey(channelId)).Result()
+	if errors.Is(err, redis.Nil) {
+		value, err = common.RDB.Get(ctx, multiKeyPoolBlockedKey(channelId)).Result()
+	}
 	if errors.Is(err, redis.Nil) {
 		return nil
 	}
@@ -455,12 +461,20 @@ func AttachChannelTemporaryAutoDisable(channels []*model.Channel) {
 	}
 	ctx := context.Background()
 	pipeline := common.RDB.Pipeline()
-	commands := make(map[int]*redis.StringCmd, len(channels))
+	type temporaryDisableCommands struct {
+		direct *redis.StringCmd
+		pool   *redis.StringCmd
+	}
+	commands := make(map[int]temporaryDisableCommands, len(channels))
 	for _, channel := range channels {
 		if channel == nil || !channel.GetAutoBan() {
 			continue
 		}
-		commands[channel.Id] = pipeline.Get(ctx, channelAutoDisableBlockedKey(channel.Id))
+		entry := temporaryDisableCommands{direct: pipeline.Get(ctx, channelAutoDisableBlockedKey(channel.Id))}
+		if channel.ChannelInfo.IsMultiKey {
+			entry.pool = pipeline.Get(ctx, multiKeyPoolBlockedKey(channel.Id))
+		}
+		commands[channel.Id] = entry
 	}
 	if len(commands) == 0 {
 		return
@@ -473,11 +487,14 @@ func AttachChannelTemporaryAutoDisable(channels []*model.Channel) {
 		if channel == nil {
 			continue
 		}
-		command := commands[channel.Id]
-		if command == nil {
+		entry, exists := commands[channel.Id]
+		if !exists {
 			continue
 		}
-		value, err := command.Result()
+		value, err := entry.direct.Result()
+		if errors.Is(err, redis.Nil) && entry.pool != nil {
+			value, err = entry.pool.Result()
+		}
 		if errors.Is(err, redis.Nil) {
 			continue
 		}
@@ -560,20 +577,11 @@ func effectiveChannelAutoDisableConfig(channel *model.Channel) effectiveChannelA
 	return setting
 }
 
-// channelAutoDisableScopeKeys builds Redis-cluster-safe keys for one channel or key-model scope.
+// channelAutoDisableScopeKeys builds Redis-cluster-safe keys for the channel scope.
 func channelAutoDisableScopeKeys(channelId int, scope, modelName string, setting effectiveChannelAutoDisableSetting) (string, string, string) {
 	configFingerprint := channelAutoDisableConfigFingerprint(setting)
-	scopeFingerprint := fmt.Sprintf("%x", sha256.Sum256([]byte(scope+":"+modelName)))[:16]
-	prefix := fmt.Sprintf("newapi:channel-auto-disable:v2:{%d}:scope:%s:config:%s", channelId, scopeFingerprint, configFingerprint)
-	if strings.HasPrefix(scope, "key:") {
-		keyFingerprint := strings.TrimPrefix(scope, "key:")
-		modelFingerprint := fmt.Sprintf("%x", sha256.Sum256([]byte(modelName)))[:16]
-		prefix = fmt.Sprintf("newapi:channel-auto-disable:v2:{%d}:scope:key:%s:model:%s:config:%s", channelId, keyFingerprint, modelFingerprint, configFingerprint)
-	}
-	if scope == "channel" {
-		return channelAutoDisableBlockedKey(channelId), prefix + ":samples", prefix + ":counts"
-	}
-	return prefix + ":blocked", prefix + ":samples", prefix + ":counts"
+	prefix := fmt.Sprintf("newapi:channel-auto-disable:v2:{%d}:scope:channel:config:%s", channelId, configFingerprint)
+	return channelAutoDisableBlockedKey(channelId), prefix + ":samples", prefix + ":counts"
 }
 
 // channelAutoDisableConfigFingerprint identifies the complete statistical policy used by a sample bucket.

@@ -358,7 +358,7 @@ type MultiKeyAutoDisableOverride struct {
 	TemporaryDisableMinutes int    `json:"temporary_disable_minutes"`
 }
 
-// MultiKeyTemporaryDisableInfo describes one TTL-backed key cooldown.
+// MultiKeyTemporaryDisableInfo describes one TTL-backed key or channel cooldown.
 type MultiKeyTemporaryDisableInfo struct {
 	DisabledUntil     int64   `json:"disabled_until"`
 	StatusCode        int     `json:"last_status_code"`

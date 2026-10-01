@@ -366,14 +366,13 @@ const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
     }
   };
 
-  // Model recovery changes only the selected key/model pair.
-  const clearModelCooldown = async (keyIndex, model) => {
+  // Recovery clears the selected key as a whole.
+  const clearKeyCooldown = async (keyIndex) => {
     try {
       const res = await API.post('/api/channel/multi_key/manage', {
         channel_id: channel.id,
         key_index: keyIndex,
-        model,
-        action: 'clear_model_cooldown',
+        action: 'clear_key_cooldown',
       });
       if (!res.data.success) {
         showError(res.data.message);
@@ -415,8 +414,6 @@ const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
           return <Tag color='orange'>{t('Pending recovery probe')}</Tag>;
         if (record.temporary_disabled)
           return <Tag color='orange'>{t('Whole key cooldown')}</Tag>;
-        if (record.cooldowns?.some((item) => item.scope === 'model'))
-          return <Tag color='orange'>{t('Some models restricted')}</Tag>;
         return renderStatusTag(status);
       },
     },
@@ -430,8 +427,8 @@ const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
               {record.cooldowns.map((item) => (
                 <div key={item.scope + ':' + (item.model || '')}>
                   <Text>
-                    {item.scope === 'model'
-                      ? item.model
+                    {item.scope === 'channel'
+                      ? t('Temporary Disabled')
                       : t('Whole key cooldown')}
                   </Text>
                   <div>
@@ -440,17 +437,16 @@ const MultiKeyManageModal = ({ visible, onCancel, channel, onRefresh }) => {
                       : timestamp2string(item.disabled_until)}
                   </div>
                   <div>{item.reason}</div>
-                  {item.scope === 'model' &&
-                    item.model &&
+                  {item.scope === 'key' &&
                     canManageCooldowns && (
                       <Popconfirm
-                        title={t('Allow this model to use this key again?')}
+                        title={t('Are you sure?')}
                         onConfirm={() =>
-                          clearModelCooldown(record.index, item.model)
+                          clearKeyCooldown(record.index)
                         }
                       >
                         <Button size='small'>
-                          {t('Clear model cooldown')}
+                          {t('Clear')}
                         </Button>
                       </Popconfirm>
                     )}

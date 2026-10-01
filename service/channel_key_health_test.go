@@ -103,7 +103,7 @@ func TestClassifyMultiKeyFailureUsesOnlyRealUpstreamStatus(t *testing.T) {
 		types.ErrOptionWithUpstreamStatusCode(http.StatusInternalServerError),
 	)
 	action, _ = ClassifyMultiKeyFailure(channel, mapped429)
-	assert.Equal(t, MultiKeyFailureNone, action)
+	assert.Equal(t, MultiKeyFailureTemporary, action)
 }
 
 // TestClassifyProviderSpecificCredentialFailures 区分临时权限、余额和永久凭据失效。
@@ -136,7 +136,7 @@ func TestTemporaryMultiKeyDisableSkipsKeyAndExpires(t *testing.T) {
 	require.Contains(t, temporary, 0)
 	assert.Equal(t, http.StatusTooManyRequests, temporary[0].StatusCode)
 	assert.NotContains(t, temporary[0].Reason, "KEY_A")
-	assert.Contains(t, server.Keys(), multiKeyModelDisableKey(channel.Id, "KEY_A", "unknown"))
+	assert.Contains(t, server.Keys(), multiKeyTemporaryDisableKey(channel.Id, "KEY_A"))
 	for _, redisKey := range server.Keys() {
 		assert.NotContains(t, redisKey, "KEY_A")
 	}
@@ -173,7 +173,7 @@ func TestAllCoolingKeysBlockPoolUntilEarliestExpiry(t *testing.T) {
 	server := setupMultiKeyHealthRedis(t)
 	db := setupChannelSelectProtocolTestDB(t)
 	channel := createMultiKeyHealthChannel(t, db, constant.MultiKeyModeRandom)
-	limited := upstreamStatusError(http.StatusTooManyRequests, "limited")
+	limited := upstreamStatusError(http.StatusTooManyRequests, "quota exceeded")
 
 	_, handled := HandleMultiKeyFailure(channel, 0, "KEY_A", limited)
 	assert.True(t, handled)
@@ -181,8 +181,16 @@ func TestAllCoolingKeysBlockPoolUntilEarliestExpiry(t *testing.T) {
 	_, handled = HandleMultiKeyFailure(channel, 1, "KEY_B", limited)
 	assert.True(t, handled)
 	assert.True(t, IsMultiKeyPoolTemporarilyDisabled(channel.Id))
+	assert.True(t, IsChannelTemporarilyDisabled(channel.Id))
+	poolInfo := LoadChannelTemporaryAutoDisable(channel.Id)
+	require.NotNil(t, poolInfo)
+	assert.Equal(t, "all keys temporarily unavailable", poolInfo.Reason)
+	assert.True(t, IsChannelRoutingBlocked(channel, "MODEL_A"))
+	assert.True(t, ClearMultiKeyTemporaryDisable(channel.Id, "KEY_A"))
+	assert.False(t, IsMultiKeyPoolTemporarilyDisabled(channel.Id))
+	assert.False(t, IsChannelRoutingBlocked(channel, "MODEL_B"))
 
-	server.FastForward(server.TTL(multiKeyPoolBlockedKey(channel.Id, "unknown")) + time.Second)
+	server.FastForward(server.TTL(multiKeyTemporaryDisableKey(channel.Id, "KEY_B")) + time.Second)
 	assert.False(t, IsMultiKeyPoolTemporarilyDisabled(channel.Id))
 }
 
