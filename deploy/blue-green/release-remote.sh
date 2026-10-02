@@ -51,8 +51,8 @@ load_config() {
   for name in RELEASE_ID COMMIT_SHA VERSION IMAGE_TAG IMAGE_ARCHIVE IMAGE_SHA256 \
     BACKUP_ROOT APP_NETWORK PROXY_NETWORK PROXY_ALIAS PROXY_CONTAINER PUBLIC_STATUS_URL \
     POSTGRES_CONTAINER POSTGRES_USER POSTGRES_DB REDIS_CONTAINER NGINX_ACCESS_LOG \
-    BLUE_PORT BLUE_DATA_DIR BLUE_LOG_DIR BLUE_NODE_NAME BLUE_PROJECT BLUE_RUNTIME_ENV_FILE \
-    GREEN_PORT GREEN_DATA_DIR GREEN_LOG_DIR GREEN_NODE_NAME GREEN_PROJECT GREEN_RUNTIME_ENV_FILE; do
+    BLUE_DATA_DIR BLUE_LOG_DIR BLUE_NODE_NAME BLUE_PROJECT BLUE_RUNTIME_ENV_FILE \
+    GREEN_DATA_DIR GREEN_LOG_DIR GREEN_NODE_NAME GREEN_PROJECT GREEN_RUNTIME_ENV_FILE; do
     require_variable "$name"
   done
   RELEASE_DIR="$(cd "$(dirname "$RELEASE_ENV")" && pwd)"
@@ -102,16 +102,33 @@ slot_value() {
   printf '%s' "${!name}"
 }
 
+# Read the application network address without publishing a slot on the host.
+container_url() {
+  local ip
+  ip="$(docker inspect "$1" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["NetworkSettings"]["Networks"][sys.argv[1]]["IPAddress"])' "$APP_NETWORK")"
+  [[ -n "$ip" ]]
+  printf 'http://%s:3000' "$ip"
+}
+
 container_version() {
-  local container="$1" port
-  port="$(slot_value "$(slot_name "$container")" PORT)"
-  curl -fsS --max-time 10 "http://127.0.0.1:$port/api/status" |
+  docker exec "$1" wget -qO- --timeout=10 http://127.0.0.1:3000/api/status |
     python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["version"])'
 }
 
+# Legacy standby containers must not reclaim the gateway's permanent port.
+check_rollback_port() {
+  docker inspect "$1" | python3 -c 'import json,sys; c=json.load(sys.stdin)[0]; assert not any(p.get("HostPort") == "19001" for ps in (c["HostConfig"].get("PortBindings") or {}).values() for p in (ps or [])), "legacy rollback slot owns gateway port; migrate it first"'
+}
+
+# Both stable entrances must reach the same release before a transition succeeds.
 proxy_version() {
-  docker exec "$PROXY_CONTAINER" wget -qO- --timeout=10 "http://$PROXY_ALIAS:3000/api/status" |
-    python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["version"])'
+  local version gateway
+  version="$(docker exec "$PROXY_CONTAINER" wget -qO- --timeout=10 "http://$PROXY_ALIAS:3000/api/status" |
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["version"])')" || return 1
+  gateway="$(curl --noproxy '*' -fsS --max-time 10 "${INTERNAL_GATEWAY_URL:-http://127.0.0.1:19001}/api/status" |
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["version"])')" || return 1
+  [[ "$gateway" == "$version" ]] || return 1
+  printf '%s' "$version"
 }
 
 public_version() {
@@ -183,7 +200,6 @@ disconnect_if_connected() {
 render_compose() {
   local slot="$1" service="new-api-$1"
   export SLOT="$slot"
-  export HOST_PORT="$(slot_value "$slot" PORT)"
   export DATA_DIR="$(slot_value "$slot" DATA_DIR)"
   export LOG_DIR="$(slot_value "$slot" LOG_DIR)"
   export NODE_NAME="$(slot_value "$slot" NODE_NAME)"
@@ -202,13 +218,11 @@ action_self_check() {
   python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SCRIPT_DIR/low-traffic-evidence.py"
   python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SCRIPT_DIR/retention.py"
   load_config
-  local rendered_blue rendered_green
-  rendered_blue="$(render_compose blue)"
-  rendered_green="$(render_compose green)"
-  grep -q 'host_ip: 0\.0\.0\.0' <<<"$rendered_blue"
-  grep -q 'host_ip: 0\.0\.0\.0' <<<"$rendered_green"
-  ! grep -q 'host_ip: 127\.0\.0\.1' <<<"$rendered_blue"
-  ! grep -q 'host_ip: 127\.0\.0\.1' <<<"$rendered_green"
+  local slot
+  for slot in blue green; do
+    render_compose "$slot" | docker compose -f - config --format json |
+      python3 -c 'import json,sys; c=json.load(sys.stdin); assert all(not s.get("ports") for s in c["services"].values()), "slot must not publish host ports"'
+  done
   printf 'self_check=passed release=%s version=%s\n' "$RELEASE_ID" "$VERSION"
 }
 
@@ -321,7 +335,7 @@ action_stage() {
   render_compose "$slot" > "$compose_file"
   mkdir -p "$DATA_DIR" "$LOG_DIR"
   # Compose recreates the slot when its image or configuration changed; retries keep an already-correct candidate running.
-  docker compose -p "$project" -f "$compose_file" up -d --no-deps "$service"
+  docker compose -p "$project" -f "$compose_file" up -d --no-deps --no-build "$service"
   wait_healthy "$candidate"
   [[ "$(container_version "$candidate")" == "$VERSION" ]]
   networks="$(docker inspect "$candidate" | python3 -c 'import json,sys; print(",".join(sorted(json.load(sys.stdin)[0]["NetworkSettings"]["Networks"])))')"
@@ -330,8 +344,6 @@ action_stage() {
   cat > "$STATE_DIR/stage.env" <<EOF
 PRODUCTION=$production
 CANDIDATE=$candidate
-PRODUCTION_PORT=$(slot_value "$(slot_name "$production")" PORT)
-CANDIDATE_PORT=$(slot_value "$slot" PORT)
 EOF
   chmod 600 "$STATE_DIR/stage.env"
   printf 'stage=passed production=%s candidate=%s version=%s networks=%s\n' "$production" "$candidate" "$VERSION" "$networks"
@@ -343,15 +355,15 @@ action_gate() {
   python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SCRIPT_DIR/low-traffic-evidence.py"
   python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SCRIPT_DIR/retention.py"
   load_config
-  local candidate_host_ip
+  local candidate_url
   # shellcheck disable=SC1090
   source "$STATE_DIR/stage.env"
   [[ "$(docker inspect -f '{{.State.Health.Status}}' "$CANDIDATE")" == healthy ]]
   [[ "$(docker inspect -f '{{.RestartCount}}' "$CANDIDATE")" == 0 ]]
   [[ "$(docker inspect -f '{{.State.OOMKilled}}' "$CANDIDATE")" == false ]]
   [[ "$(container_version "$CANDIDATE")" == "$VERSION" ]]
-  candidate_host_ip="$(docker inspect "$CANDIDATE" | python3 -c 'import json,sys; p=json.load(sys.stdin)[0]["HostConfig"]["PortBindings"]["3000/tcp"]; print(p[0]["HostIp"] if p else "")')"
-  [[ "$candidate_host_ip" == 0.0.0.0 ]]
+  docker inspect "$CANDIDATE" | python3 -c 'import json,sys; assert not json.load(sys.stdin)[0]["HostConfig"].get("PortBindings"), "slot must not publish host ports"'
+  candidate_url="$(container_url "$CANDIDATE")"
   [[ -z "$(container_ip "$CANDIDATE")" ]]
   [[ "$(docker inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$CANDIDATE")" == "$COMMIT_SHA" ]]
   [[ "$(docker exec "$CANDIDATE" printenv NODE_NAME)" != "$(docker exec "$PRODUCTION" printenv NODE_NAME)" ]]
@@ -360,11 +372,11 @@ action_gate() {
   done
   docker exec "$CANDIDATE" getent hosts "$POSTGRES_CONTAINER" >/dev/null
   docker exec "$CANDIDATE" getent hosts "$REDIS_CONTAINER" >/dev/null
-  curl -fsS --max-time 10 "http://127.0.0.1:$CANDIDATE_PORT/" -o "$STATE_DIR/candidate-index.html"
+  curl --noproxy '*' -fsS --max-time 10 "$candidate_url/" -o "$STATE_DIR/candidate-index.html"
   grep -q 'id="root"' "$STATE_DIR/candidate-index.html"
   python3 -c 'import re,sys; print("\n".join(re.findall(r"(?:src|href)=\"(/static/[^\"?#]+)",open(sys.argv[1]).read())))' "$STATE_DIR/candidate-index.html" |
-    while IFS= read -r asset; do [[ -z "$asset" ]] || curl -fsS --max-time 10 -o /dev/null "http://127.0.0.1:$CANDIDATE_PORT$asset"; done
-  headers="$(curl -sS --max-time 10 -D - -o /dev/null "http://127.0.0.1:$CANDIDATE_PORT/static/deploy-missing-$RELEASE_ID.js")"
+    while IFS= read -r asset; do [[ -z "$asset" ]] || curl --noproxy '*' -fsS --max-time 10 -o /dev/null "$candidate_url$asset"; done
+  headers="$(curl --noproxy '*' -sS --max-time 10 -D - -o /dev/null "$candidate_url/static/deploy-missing-$RELEASE_ID.js")"
   grep -qE '^HTTP/[^ ]+ 404' <<<"$headers"
   grep -qiE '^Cache-Control:.*no-store' <<<"$headers"
   baseline_hash="$(awk '{print $1}' "$BACKUP_ROOT/$RELEASE_ID/nginx-config.sha256")"
@@ -729,6 +741,7 @@ action_rollback() {
       printf 'rollback_blocked=assets_retired\n' >&2
       return 1
     fi
+    check_rollback_port "$OLD"
     printf 'rollback_dry_run=passed old=%s old_version=%s\n' "$OLD" "$OLD_VERSION"
     return
   fi
@@ -759,6 +772,7 @@ action_rollback() {
     printf 'rollback_failed line=%s command=%s rc=%s\n' "$LINENO" "$BASH_COMMAND" "$rc" >&2
     exit "$rc"
   }
+  check_rollback_port "$OLD"
   trap restore_new_on_error ERR
   docker start "$OLD" >/dev/null
   wait_healthy "$OLD"

@@ -1,0 +1,22 @@
+services:
+  gateway:
+    image: ${GATEWAY_IMAGE:?Use an immutable nginx image digest}
+    container_name: new-api-internal-gateway
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_BIND_IP:-0.0.0.0}:${GATEWAY_PORT:-19001}:3000"
+    volumes:
+      - ./gateway.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - proxy-network
+    healthcheck:
+      test: [CMD-SHELL, "wget -qO- http://127.0.0.1:3000/api/status | grep -q '\"success\":true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    mem_limit: 128m
+    pids_limit: 64
+networks:
+  proxy-network:
+    external: true
+    name: ${PROXY_NETWORK:?PROXY_NETWORK is required}
