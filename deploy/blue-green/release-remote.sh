@@ -202,8 +202,13 @@ action_self_check() {
   python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SCRIPT_DIR/low-traffic-evidence.py"
   python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SCRIPT_DIR/retention.py"
   load_config
-  render_compose blue >/dev/null
-  render_compose green >/dev/null
+  local rendered_blue rendered_green
+  rendered_blue="$(render_compose blue)"
+  rendered_green="$(render_compose green)"
+  grep -q 'host_ip: 0\.0\.0\.0' <<<"$rendered_blue"
+  grep -q 'host_ip: 0\.0\.0\.0' <<<"$rendered_green"
+  ! grep -q 'host_ip: 127\.0\.0\.1' <<<"$rendered_blue"
+  ! grep -q 'host_ip: 127\.0\.0\.1' <<<"$rendered_green"
   printf 'self_check=passed release=%s version=%s\n' "$RELEASE_ID" "$VERSION"
 }
 
@@ -338,12 +343,15 @@ action_gate() {
   python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SCRIPT_DIR/low-traffic-evidence.py"
   python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SCRIPT_DIR/retention.py"
   load_config
+  local candidate_host_ip
   # shellcheck disable=SC1090
   source "$STATE_DIR/stage.env"
   [[ "$(docker inspect -f '{{.State.Health.Status}}' "$CANDIDATE")" == healthy ]]
   [[ "$(docker inspect -f '{{.RestartCount}}' "$CANDIDATE")" == 0 ]]
   [[ "$(docker inspect -f '{{.State.OOMKilled}}' "$CANDIDATE")" == false ]]
   [[ "$(container_version "$CANDIDATE")" == "$VERSION" ]]
+  candidate_host_ip="$(docker inspect "$CANDIDATE" | python3 -c 'import json,sys; p=json.load(sys.stdin)[0]["HostConfig"]["PortBindings"]["3000/tcp"]; print(p[0]["HostIp"] if p else "")')"
+  [[ "$candidate_host_ip" == 0.0.0.0 ]]
   [[ -z "$(container_ip "$CANDIDATE")" ]]
   [[ "$(docker inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$CANDIDATE")" == "$COMMIT_SHA" ]]
   [[ "$(docker exec "$CANDIDATE" printenv NODE_NAME)" != "$(docker exec "$PRODUCTION" printenv NODE_NAME)" ]]

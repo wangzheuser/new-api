@@ -32,7 +32,9 @@ Dockerfile                               runtime-local 镜像目标
 - **target-runtime-dist**：target-clean-dist 加上一代 source-production-clean-dist，最终嵌入二进制。
 
 两个槽位必须共享 PostgreSQL、Redis、`SESSION_SECRET`、业务配置和应用网络；必须使用
-不同容器名、端口、日志目录、数据目录和 `NODE_NAME`。候选端口只绑定 `127.0.0.1`。
+不同容器名、端口、日志目录、数据目录和 `NODE_NAME`。槽位端口绑定 `0.0.0.0`，使同机其他
+容器可以通过宿主机地址访问；生产防火墙和云安全组必须限制这些端口的外部来源，避免绕过
+Nginx 直接暴露应用入口。候选槽位启动后必须验证宿主机和实际调用方容器均可访问其端口。
 槽位容器统一使用 `unless-stopped` 重启策略，确保生产容器异常退出时自动恢复，同时让已经
 完成观察并由发布脚本主动停止的旧槽位在 Docker daemon 重启后仍保持停止。
 

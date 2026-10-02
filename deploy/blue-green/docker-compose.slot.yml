@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     command: --log-dir /app/logs
     ports:
-      - "127.0.0.1:${HOST_PORT:?HOST_PORT is required}:3000"
+      - "0.0.0.0:${HOST_PORT:?HOST_PORT is required}:3000"
     env_file:
       - ${RUNTIME_ENV_FILE:?RUNTIME_ENV_FILE is required}
     environment:
