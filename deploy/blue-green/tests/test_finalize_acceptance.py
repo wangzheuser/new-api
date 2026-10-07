@@ -50,6 +50,8 @@ RELEASE_ID=fixture
 VERSION=fixture-version
 load_config() { :; }
 proxy_version() { echo fixture-version; }
+production_container() { echo candidate; }
+gateway_control() { :; }
 public_version() { echo fixture-version; }
 sleep() { :; }
 docker() {
@@ -59,8 +61,8 @@ docker() {
     "inspect -f {{.State.Status}}") echo exited ;;
     "inspect -f {{.RestartCount}}") echo 0 ;;
     "inspect -f {{.State.OOMKilled}}") echo false ;;
-    "update --restart=unless-stopped") : > "$1-update" ;;
-    "stop --time 30") : > "$1-stop" ;;
+    "update --restart=unless-stopped") : > "$STATE_DIR/update" ;;
+    "stop --time 30") : > "$STATE_DIR/stop" ;;
     *) return 0 ;;
   esac
 }

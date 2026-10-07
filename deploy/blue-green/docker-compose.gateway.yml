@@ -7,8 +7,10 @@ services:
       - "${GATEWAY_BIND_IP:-0.0.0.0}:${GATEWAY_PORT:-19001}:3000"
     volumes:
       - ./gateway.conf:/etc/nginx/nginx.conf:ro
+      # Mount the directory so atomic target.conf replacement is visible to Nginx.
+      - ./active:/etc/nginx/active:ro
     networks:
-      - proxy-network
+      - app-network
     healthcheck:
       test: [CMD-SHELL, "wget -qO- http://127.0.0.1:3000/api/status | grep -q '\"success\":true'"]
       interval: 10s
@@ -17,6 +19,6 @@ services:
     mem_limit: 128m
     pids_limit: 64
 networks:
-  proxy-network:
+  app-network:
     external: true
-    name: ${PROXY_NETWORK:?PROXY_NETWORK is required}
+    name: ${APP_NETWORK:?APP_NETWORK is required}

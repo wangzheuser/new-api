@@ -8,7 +8,7 @@
 
 - 不使用 GitHub Actions 或 GHCR 产物，不依赖浮动 Tag。
 - 只替换应用容器；PostgreSQL、Redis、日志库及其卷保持共享且不重建。
-- Nginx Proxy 不 reload；切流只交接 Docker 网络地址和历史稳定别名 `new-api-green`。
+- 日常切流不 reload 共享 Nginx Proxy；只对项目独立网关 graceful reload，不移动 IP 或网络别名。
 - 生产切流、停止旧槽位和生产回滚分别需要明确确认。
 - 服务器地址、域名、账号、密码、Token、Cookie 和 DSN 只保存在受限配置中。
 
@@ -26,7 +26,7 @@ Dockerfile                               runtime-local 镜像目标
 
 - **物理槽位**：`blue`、`green`。
 - **逻辑角色**：`production`、`candidate`、`standby`；不得根据颜色猜角色。
-- **稳定代理别名**：`new-api-green`，名称是历史约定，不表示物理 Green 永远承载生产。
+- **生产选择**：独立网关 `active/target.conf` 中的物理槽位；以响应头和实际版本确认接管，不根据颜色或历史别名推断。
 - **source-production-clean-dist**：切流前线上版本最初构建的干净前端资源。
 - **target-clean-dist**：本次构建且尚未合并历史资源的前端资源。
 - **target-runtime-dist**：target-clean-dist 加上一代 source-production-clean-dist，最终嵌入二进制。
@@ -34,16 +34,16 @@ Dockerfile                               runtime-local 镜像目标
 两个槽位必须共享 PostgreSQL、Redis、`SESSION_SECRET`、业务配置和应用网络；必须使用
 不同容器名、日志目录、数据目录和 `NODE_NAME`。应用槽位不发布宿主机端口；
 Linux 发布主机通过应用网络地址检查候选，版本检查在容器内执行。
-独立网关 `new-api-internal-gateway` 独占 `0.0.0.0:19001`，接入 `PROXY_NETWORK`，
-使用该网络上唯一生产别名 `new-api-green:3000`。不要让网关通过 `APP_NETWORK` 解析
-这个名字：该网络的物理 Green 容器可能是候选或旧版本。
+独立网关 `new-api-internal-gateway` 独占 `0.0.0.0:19001`，与两个物理槽位接入 `APP_NETWORK`，
+明确选择 `new-api-blue:3000` 或 `new-api-green:3000`，使用 Docker DNS 动态解析。
+共享 Nginx 仅连接 `host.docker.internal:19001`；应用退出不得阻止共享入口启动。
 `19001` 默认允许所有 IPv4 来源，鉴权沿用应用；局域网机器使用服务器可路由地址，
 同机容器可继续使用 `172.17.0.1:19001`。
 槽位容器统一使用 `unless-stopped` 重启策略，确保生产容器异常退出时自动恢复，同时让已经
 完成观察并由发布脚本主动停止的旧槽位在 Docker daemon 重启后仍保持停止。
 
-槽位 Compose 只能加入应用网络，禁止声明 Nginx Proxy 网络。代理网络仅由
-`release-remote.sh cutover|rollback` 管理。发布流程禁止执行：
+槽位及独立网关都只加入应用网络。Compose 是网络成员关系的完整来源；日常发布、回滚均不
+执行 `docker network connect/disconnect`，不使用 `--ip`，不继承历史 `OLD_IP`。发布流程禁止执行：
 
 ```text
 docker compose down
@@ -89,11 +89,21 @@ NEW
 `server.env` 必须提供：
 
 ```text
-BACKUP_ROOT APP_NETWORK PROXY_NETWORK PROXY_ALIAS PROXY_CONTAINER PUBLIC_STATUS_URL
+BACKUP_ROOT APP_NETWORK PROXY_NETWORK PROXY_CONTAINER PUBLIC_STATUS_URL
 POSTGRES_CONTAINER POSTGRES_USER POSTGRES_DB REDIS_CONTAINER NGINX_ACCESS_LOG
 BLUE_DATA_DIR BLUE_LOG_DIR BLUE_NODE_NAME BLUE_PROJECT BLUE_RUNTIME_ENV_FILE
 GREEN_DATA_DIR GREEN_LOG_DIR GREEN_NODE_NAME GREEN_PROJECT GREEN_RUNTIME_ENV_FILE
 ```
+
+`PROXY_ALIAS` 已废弃，历史配置可保留但不再读取。`PROXY_NETWORK` 仅用于只读备份。
+`GATEWAY_CONFIG` 默认 `/opt/docker_projects/new-api-internal-gateway/gateway.conf`；
+`GATEWAY_CONTAINER` 默认 `new-api-internal-gateway`；`NGINX_PROJECT_DIR` 指向共享 Nginx 项目。
+网关目录的 `active/` 整目录只读挂载到 `/etc/nginx/active`，禁止单文件挂载 `target.conf`，
+否则原子替换后容器可能仍使用旧 inode。`target.conf` 初始化必须明确选择当前实际生产槽位。
+将仓库 `trusted-proxies.conf` 复制到 `active/`，只将实际共享代理来源 CIDR 加入
+`set_real_ip_from` 和 `geo` 两处；宿主机 DNAT 可能呈现应用网桥网关地址，必须从真实请求核实，
+不能直接假定为共享代理自身网络。未配置时不信任转发头。公网经共享代理的原始客户端 IP/HTTPS
+语义必须保留；直接访问 19001 的非受信客户端伪造转发头不得影响这两项。
 
 蓝绿槽位复用同一份 `docker-compose.slot.yml`，通过上述变量区分。运行配置、Compose
 模板和发布脚本不得包含明文凭据。
@@ -156,7 +166,7 @@ deploy/blue-green/build-local.sh prepare \
 
 - `release.env`；
 - 镜像 `.tar.zst`；
-- `release-remote.sh`、`protocol-stability-gate.sh`、`low-traffic-evidence.py`、`retention.py`（必须同提交、同目录上传）；
+- `release-remote.sh`、`gateway_control.py`、`protocol-stability-gate.sh`、`low-traffic-evidence.py`、`retention.py`（必须同提交、同目录上传）；
 - `docker-compose.slot.yml`；
 - 两套 target-clean-dist 归档。
 
@@ -167,6 +177,7 @@ deploy/blue-green/build-local.sh prepare \
 
 ```bash
 ./release-remote.sh self-check
+./release-remote.sh doctor
 ./release-remote.sh status
 ```
 
@@ -223,19 +234,21 @@ deploy/blue-green/build-local.sh prepare \
 CONFIRM_CUTOVER=<release-id> ./release-remote.sh cutover --execute
 ```
 
-脚本使用 `flock`、动态生产 IP、角色状态文件、有界 IPAM 重试和错误恢复。正常切流和
-回滚复用相同网络函数。若目标版本已经持有稳定代理别名，脚本复核状态后返回
-`already-complete`，不会重复网络交接。
+脚本使用发布锁和网关事务锁，先持久化角色状态，再验证完整候选网关配置，原子替换
+`active/target.conf` 并平滑 reload 独立网关。HTTP 响应中的 `X-New-API-Slot` 和版本必须同时
+匹配，避免同版本双槽位迁移误判。正常切流和回滚复用 `gateway_control.py`，失败会恢复原选择并
+验证原入口；恢复失败单独记录，不吞掉错误。重复执行复核真实生产归属后返回 `already-complete`。
 
 切流后必须验证：
 
-- 候选持有原生产 IP 和稳定别名；
-- 旧槽位保持运行但断开代理网络，避免物理槽位名与稳定别名同名时出现 Docker DNS 轮询；
+- 两个槽位的容器 ID、网络成员和地址均未因切流改变；
+- 新请求指向目标物理槽位，旧槽位保持运行和网络连接；
 - Nginx 内部和公网均返回目标版本；
 - Nginx 配置哈希未变；
 - 真实公网浏览器门禁通过。
 
-网络地址交接会中断仍连接旧容器的长连接或流式请求，应在低峰执行。
+旧网关 worker 保留已有 SSE/WebSocket 连接；观察结束后还必须确认旧 worker 已排空，才能停止
+旧槽位。`DRAIN_TIMEOUT_SECONDS` 默认 60 秒，超时保留旧槽位，稍后重试 finalize；不强制中断长请求。
 
 ## 9. 观察与完成
 
@@ -297,7 +310,7 @@ GATE_TEST_POSTGRES=<隔离测试容器> python3 -m unittest discover -s deploy/b
 CONFIRM_FINALIZE=<release-id> ./release-remote.sh finalize --execute
 ```
 
-`finalize` 首先把旧槽位重启策略校正为 `unless-stopped`，再停止旧槽位容器，立即释放其
+`finalize` 首先验证实际生产归属并等待网关旧 worker 排空，再把旧槽位重启策略校正为 `unless-stopped`，停止旧槽位容器，释放其
 CPU 和内存占用，并确保 Docker daemon 重启后不会意外拉起；容器元数据、可写层和旧镜像
 继续保留用于快速回滚。停止后连续验证新槽位健康、零重启、未 OOM、Nginx 内部版本和
 公网版本。验证通过后，`finalize` 暂时保留两个槽位镜像，再按第 12 节执行服务器保留策略。
@@ -362,12 +375,22 @@ CONFIRM_ROLLBACK=<release-id> ./release-remote.sh rollback --execute
 ```
 
 回滚读取切流时的角色状态文件，不根据颜色猜测。旧槽位已停止时自动启动并等待健康，
-再恢复原生产 IP 和稳定别名。PostgreSQL、Redis 和 Nginx 配置始终不回滚。
+再切换独立网关目标、校验槽位响应头和原版本；不操作网络。PostgreSQL、Redis 和共享 Nginx 配置不回滚。
 
 ## 11. 发布记录与恢复
 
 每次发布保留：提交 SHA、版本、工具链、镜像 ID、OCI revision、各归档 SHA、备份目录、
-阶段结果、角色/IP 状态、浏览器门禁、观察区间、旧槽位状态和回滚命令。所有记录脱敏。
+阶段结果、槽位身份、网关事务、浏览器门禁、观察区间、旧槽位状态和回滚命令。所有记录脱敏。
+
+网关切流的 `active/transaction.json` 记录 prepared/switched/restored/restore_failed。
+中断后先运行 `doctor`；prepared 或磁盘/响应归属不一致时停止后续发布和清理，执行：
+
+```bash
+CONFIRM_RECOVER=<release-id> ./release-remote.sh recover --execute
+```
+
+恢复只处理网关未完成事务，核对旧容器 ID 和版本后恢复旧选择，不自动删除资源或回滚数据库。
+目标文件通过 fsync + 同目录 rename 写入，因此主机重启时始终读取完整的旧选择或新选择。
 
 失败后先执行 `status`，从最近已验证阶段继续。禁止重新执行已经验证的数据库备份、镜像
 导入或生产切流。发布脚本、Compose 模板、`release.env`、阶段结果和 SHA 都作为本次制品
@@ -430,7 +453,7 @@ verified-upstream-counts.txt只统计真实HTTP503，避免从零HTTP5xx中错�
 
 这是 new-api 的项目专属保留策略：发布、观察和故障归因期间保留新旧两套；
 完成发布决策并明确授权删除旧回滚资产后，只保留实际生产版本和最新一份已验证备份。
-“镜像最新”按代理网络实际生产归属和镜像身份判断，不按镜像创建时间判断。
+“镜像最新”按网关实际生产归属和镜像身份判断，不按镜像创建时间判断。
 本节取代发布结束后继续保留旧镜像的默认约定，不改变观察期间的保护要求。
 
 固定保留数量为 1，不增加后台 UI、保留天数或数量配置。执行入口：
@@ -452,7 +475,7 @@ CONFIRM_CLEANUP=<release-id> ./release-remote.sh cleanup --execute
 
 清理与 backup/stage/gate/cutover/observe/finalize/rollback 共用服务发布锁，备份还使用原备份锁；
 锁忙时退出，不打断正在执行的发布。先写 `state/cleanup.plan.json`，重新核对身份和文件清单后，
-依次停止旧槽位、复查生产、删除旧容器、删除旧镜像及旧备份和旧制品。禁止 force/prune 和卷删除。
+先核对网关生产归属并确认旧 worker 排空，再依次停止旧槽位、复查生产、删除旧容器、删除旧镜像及旧备份和旧制品。禁止 force/prune 和卷删除。
 
 只处理受管资源：精确 `new-api` 镜像仓库、两种槽位名、`new-api-backups` 下标准 release 目录、
 `new-api-artifacts` 下标准 release 的镜像及两主题 clean-dist 归档。拒绝符号链接和路径越界；
@@ -492,12 +515,19 @@ deploy/blue-green/cleanup-local.sh --release-dir "$HOME/.cache/new-api-deploy/re
 远端 `cleanup` 与本地清理互不替代；不执行 `docker system prune`、全局 Buildx prune、
 卷删除或共享 Go 模块缓存清理。下一次发布需要的 clean-dist 由远端已校验制品恢复。
 
-## 13. 稳定内网入口
+## 14. 网关路由迁移与冷启动验收（2026-10-07）
 
 网关配置单独部署，不随应用槽位更新、停止或清理。文件为
 `deploy/blue-green/docker-compose.gateway.yml` 和 `gateway.conf`。
 在网关目录的受控 `.env` 中指定 `GATEWAY_IMAGE=nginx@sha256:<已验证摘要>`
-及 `PROXY_NETWORK=<现有代理网络>`，执行：
+及 `APP_NETWORK=<现有应用网络>`。先在 `active/target.conf` 中写入经过核实的当前槽位，例如：
+
+```nginx
+set $deployment_slot new-api-blue;
+```
+
+首次迁移需备份网关配置和容器身份，因增加目录挂载、改接应用网络而只重建本项目网关，保留原
+镜像摘要、端口、资源限额和重启策略；共享 Nginx、应用、数据库及 Redis 不重建。执行前验证：
 
 ```bash
 docker compose -f docker-compose.gateway.yml config --quiet
@@ -506,25 +536,23 @@ docker compose -f docker-compose.gateway.yml up -d --no-build
 ```
 
 发布主机默认为 `INTERNAL_GATEWAY_URL=http://127.0.0.1:19001`。
-`proxy_version` 同时验证原代理路径与稳定网关版本，错误或版本不一致会阻断切流、
-观察、完成发布与清理，回滚也必须恢复两个入口。原固定生产 IP 交接保持不变，
-网关使用 Docker DNS 动态解析作为容器地址变更后的补充。网关关闭响应缓冲与请求缓冲、
+`proxy_version` 从共享 Nginx 容器连接稳定网关，并交叉核对宿主机入口的实际槽位与版本。
+`doctor` 同时检查配置源漂移、遗留应用直连、固定 IP、网关目录挂载和生产健康。
+网关使用物理槽位名动态解析，不依赖任何容器 IP。网关关闭响应缓冲与请求缓冲，
 保留 URI/查询参数、Authorization、WebSocket 和长时间 SSE，不自动重试推理请求。
+显式 rollback 允许当前失败槽位的状态接口不可用：依据持久目标和镜像版本标记识别来源，
+仍要求恢复目标健康、版本匹配；不因后续公网探测失败又切回已失败的新版本。
 
-首次迁移复用已验证的生产镜像，无业务代码或数据库变更，不重建应用镜像：
-1. 获取同一 `/var/lock/new-api-cutover.lock`，备份两个槽位配置、网络身份和精确临时 DNAT 规则。
-2. 在本机临时端口验证网关；用新模板启动同版本候选（无发布端口），运行候选门禁。
-3. 切换生产别名及原生产 IP 到候选；记录角色状态，验证公网与临时网关入口。
-4. 旧槽位排空请求后，用同一镜像及原运行配置重建成无宿主机端口的备用容器。
-5. 网关绑定 `0.0.0.0:19001`；精确删除旧临时 PREROUTING/OUTPUT DNAT，
-   不恢复整张防火墙表，不操作其他项目规则。
-6. 验证宿主机、各正在使用的 Docker bridge 网络、服务器可路由地址、
-   应用鉴权和版本，以及两个无关控制域名。真实局域网机器的路径需在该机器验证。
-7. 演练切流和回滚的入口归属；观察至少 600 秒，记录断连和错误，
-   不将版本/健康成功等同于真实推理或长连接完全无损。
-8. 正常发布只更新应用槽位；旧的发布脚本不得再次用 `19001` 重建旧槽位。
-   回滚前门禁拒绝仍占用 `19001` 的遗留容器，先迁移其端口配置。
-   保留受限恢复配置，清理本次上传文件和临时测试资源。
+首次迁移顺序：
+1. 获取应用发布锁，保存原网关、共享 Nginx 配置源与线上配置、网络元数据及哈希。
+2. 在本机临时端口验证新网关，随后迁移原 19001 网关；此时公网仍保留原路径。
+3. 使用共享 Nginx 发布事务把本项目域名统一指向 `host.docker.internal:19001`；漂移须先逐项核实。
+4. 验证公网/内部入口及无关域名，等待共享 Nginx 旧 worker 排空后，才移除应用的遗留代理网络连接。
+5. 部署同一套发布工具，运行 doctor；旧的 IP/别名脚本因不再存在代理网络生产别名而停止准入。
+6. 使用隔离 Docker 环境验证真实 cutover/rollback 函数、长 SSE 跨切流、未完成事务恢复、
+   网关先启动/后端缺席/后端重新出现，以及网络地址改变后的恢复。
+7. 线上复核容器、镜像、挂载、数据库身份不变和实际入口响应；主机重启演练需维护窗口，
+   不把隔离冷启动测试表述为已经重启生产主机。
 
-切流仍有网络地址交接窗口，正在进行的连接可能中断；调用方按自己的幂等和重试策略处理。
-稳定端口解决入口随物理槽位消失的问题，不承诺绝对零中断。
+日常发布不再产生网络交接窗口。网关 graceful reload 也不等于端到端绝对零中断：客户端、
+Cloudflare 超时及上游失败仍分别验证，不自动重放推理请求。

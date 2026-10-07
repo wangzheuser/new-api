@@ -57,8 +57,8 @@ def public_version(url):
         return json.load(response)["data"]["version"]
 
 
-def cleanup(release, backups, production, version, network, alias, postgres, old_version, decision,
-            public_url, proxy, execute):
+def cleanup(release, backups, production, version, network, postgres, old_version, decision,
+            public_url, execute):
     """Plan and apply one-version retention without touching data volumes or other services."""
     release, backups = Path(release), Path(backups)
     root = release.parent
@@ -85,11 +85,11 @@ def cleanup(release, backups, production, version, network, alias, postgres, old
             if ((c["Id"], c["Image"]) != expected or not c["State"]["Running"]
                     or c["State"].get("Health", {}).get("Status") != "healthy"
                     or c["State"].get("OOMKilled") or c["RestartCount"] != 0
-                    or alias not in c["NetworkSettings"]["Networks"].get(network, {}).get("Aliases", [])):
+                    or set(c["NetworkSettings"]["Networks"]) != {network}
+                    or (c["NetworkSettings"]["Networks"][network].get("IPAMConfig") or {}).get("IPv4Address")):
                 raise ValueError("cleanup_blocked=production_changed_or_unhealthy")
-            internal = json.loads(run("docker", "exec", proxy, "wget", "-qO-", "--timeout=10",
-                                      f"http://{alias}:3000/api/status"))["data"]["version"]
-            if internal != version or public_version(public_url) != version:
+            gateway = json.loads(run("python3", str(Path(__file__).with_name("gateway_control.py")), "status"))
+            if gateway != {"slot": production, "version": version} or public_version(public_url) != version:
                 raise ValueError("cleanup_blocked=serving_version_mismatch")
 
         verify_production()
@@ -131,7 +131,7 @@ def cleanup(release, backups, production, version, network, alias, postgres, old
         standby = next((c for c in containers if c["Name"] in ("/new-api-blue", "/new-api-green") and c != current), None)
         if standby:
             standby_version = metadata(release)["VERSION"] if decision == "rolled_back" else old_version
-            if network in standby["NetworkSettings"]["Networks"] or standby["Config"]["Image"] != "new-api:" + standby_version:
+            if set(standby["NetworkSettings"]["Networks"]) != {network} or standby["Config"]["Image"] != "new-api:" + standby_version:
                 raise ValueError("cleanup_blocked=standby_changed")
         retire = [i for i in images if i["Id"] != current["Image"]]
         for image in retire:
@@ -172,6 +172,8 @@ def cleanup(release, backups, production, version, network, alias, postgres, old
             if any(fingerprint(Path(p)) != snapshot for p, snapshot in snapshots.items()):
                 raise ValueError("cleanup_blocked=files_changed")
             if standby:
+                run("python3", str(Path(__file__).with_name("gateway_control.py")), "drain", "--seconds", "60")
+                verify_production()
                 run("docker", "stop", "--time", "30", standby["Id"])
                 verify_production()
                 run("docker", "rm", standby["Id"])

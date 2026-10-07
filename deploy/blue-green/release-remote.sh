@@ -8,7 +8,7 @@ COMPOSE_TEMPLATE="${COMPOSE_TEMPLATE:-$SCRIPT_DIR/docker-compose.slot.yml}"
 
 usage() {
   cat <<'EOF'
-Usage: release-remote.sh <self-check|status|backup|stage|gate|cutover|observe|finalize|rollback|cleanup> [options]
+Usage: release-remote.sh <self-check|doctor|recover|status|backup|stage|gate|cutover|observe|finalize|rollback|cleanup> [options]
 
 Mutating production actions require:
   cutover  --execute   CONFIRM_CUTOVER=<release-id>
@@ -49,13 +49,17 @@ load_config() {
   # shellcheck disable=SC1090
   source "$SERVER_ENV"
   for name in RELEASE_ID COMMIT_SHA VERSION IMAGE_TAG IMAGE_ARCHIVE IMAGE_SHA256 \
-    BACKUP_ROOT APP_NETWORK PROXY_NETWORK PROXY_ALIAS PROXY_CONTAINER PUBLIC_STATUS_URL \
+    BACKUP_ROOT APP_NETWORK PROXY_NETWORK PROXY_CONTAINER PUBLIC_STATUS_URL \
     POSTGRES_CONTAINER POSTGRES_USER POSTGRES_DB REDIS_CONTAINER NGINX_ACCESS_LOG \
     BLUE_DATA_DIR BLUE_LOG_DIR BLUE_NODE_NAME BLUE_PROJECT BLUE_RUNTIME_ENV_FILE \
     GREEN_DATA_DIR GREEN_LOG_DIR GREEN_NODE_NAME GREEN_PROJECT GREEN_RUNTIME_ENV_FILE; do
     require_variable "$name"
   done
   RELEASE_DIR="$(cd "$(dirname "$RELEASE_ENV")" && pwd)"
+  export APP_NETWORK
+  export GATEWAY_CONTAINER="${GATEWAY_CONTAINER:-new-api-internal-gateway}"
+  export GATEWAY_CONFIG="${GATEWAY_CONFIG:-/opt/docker_projects/new-api-internal-gateway/gateway.conf}"
+  export INTERNAL_GATEWAY_URL="${INTERNAL_GATEWAY_URL:-http://127.0.0.1:19001}"
   IMAGE_PATH="$RELEASE_DIR/$IMAGE_ARCHIVE"
   STATE_DIR="$RELEASE_DIR/state"
   mkdir -p "$STATE_DIR"
@@ -66,26 +70,12 @@ sha256_file() {
   sha256sum "$1" | awk '{print $1}'
 }
 
-container_ip() {
-  docker inspect "$1" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["NetworkSettings"]["Networks"].get(sys.argv[1],{}).get("IPAddress",""))' "$PROXY_NETWORK"
-}
-
-container_has_alias() {
-  docker inspect "$1" | python3 -c 'import json,sys; c=json.load(sys.stdin)[0]; print("true" if sys.argv[2] in c["NetworkSettings"]["Networks"].get(sys.argv[1],{}).get("Aliases",[]) else "false")' "$PROXY_NETWORK" "$PROXY_ALIAS"
+gateway_control() {
+  python3 "$SCRIPT_DIR/gateway_control.py" "$@"
 }
 
 production_container() {
-  local blue=false green=false
-  blue="$(container_has_alias new-api-blue 2>/dev/null || true)"
-  green="$(container_has_alias new-api-green 2>/dev/null || true)"
-  if [[ "$blue" == true && "$green" != true ]]; then
-    printf 'new-api-blue'
-  elif [[ "$green" == true && "$blue" != true ]]; then
-    printf 'new-api-green'
-  else
-    printf 'invalid_production_alias blue=%s green=%s\n' "$blue" "$green" >&2
-    return 1
-  fi
+  gateway_control status | python3 -c 'import json,sys; print(json.load(sys.stdin)["slot"])'
 }
 
 other_container() {
@@ -123,10 +113,10 @@ check_rollback_port() {
 # Both stable entrances must reach the same release before a transition succeeds.
 proxy_version() {
   local version gateway
-  version="$(docker exec "$PROXY_CONTAINER" wget -qO- --timeout=10 "http://$PROXY_ALIAS:3000/api/status" |
+  version="$(docker exec "$PROXY_CONTAINER" wget -qO- --timeout=10 "http://host.docker.internal:19001/api/status" |
     python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["version"])')" || return 1
-  gateway="$(curl --noproxy '*' -fsS --max-time 10 "${INTERNAL_GATEWAY_URL:-http://127.0.0.1:19001}/api/status" |
-    python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["version"])')" || return 1
+  gateway="$(gateway_control status |
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')" || return 1
   [[ "$gateway" == "$version" ]] || return 1
   printf '%s' "$version"
 }
@@ -179,22 +169,35 @@ nginx_hash_matches() {
   return 1
 }
 
-connect_with_retry() {
-  local container="$1" ip="$2" alias="$3" i
-  for i in $(seq 1 20); do
-    if [[ -n "$ip" ]]; then
-      docker network connect --ip "$ip" --alias "$alias" "$PROXY_NETWORK" "$container" >/dev/null 2>&1 || true
-    else
-      docker network connect --alias "$alias" "$PROXY_NETWORK" "$container" >/dev/null 2>&1 || true
-    fi
-    [[ -n "$(container_ip "$container")" ]] && return 0
-    sleep 1
-  done
-  return 1
+check_ingress() {
+  local project="${NGINX_PROJECT_DIR:-/opt/docker_projects/nginx-proxy}" rendered
+  # Hash equality alone cannot bless an unsafe historical baseline.
+  rendered="$(cd "$project" && python3 tools/render-nginx-conf.py)"
+  if ! grep -qx 'compare=identical' <<<"$rendered"; then
+    printf 'ingress_blocked=config_source_drift\n' >&2
+    return 1
+  fi
+  docker exec "$PROXY_CONTAINER" nginx -T 2>/dev/null | python3 -c '
+import re,sys
+s=sys.stdin.read()
+assert not re.search(r"(?:proxy_pass\s+https?://|server\s+)new-api-(?:blue|green)(?=[:;/\s])",s), "legacy_application_upstream"
+assert "proxy_pass http://host.docker.internal:19001;" in s, "stable_gateway_route_missing"
+'
 }
 
-disconnect_if_connected() {
-  [[ -z "$(container_ip "$1")" ]] || docker network disconnect "$PROXY_NETWORK" "$1"
+action_doctor() {
+  load_config
+  check_ingress
+  gateway_control doctor
+  [[ "$(proxy_version)" == "$(public_version)" ]]
+  printf 'doctor=passed\n'
+}
+
+action_recover() {
+  load_config
+  [[ "${1:-}" == --execute && "${CONFIRM_RECOVER:-}" == "$RELEASE_ID" ]]
+  gateway_control recover
+  action_doctor
 }
 
 render_compose() {
@@ -217,6 +220,7 @@ action_self_check() {
   bash -n "$SCRIPT_DIR/protocol-stability-gate.sh"
   python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SCRIPT_DIR/low-traffic-evidence.py"
   python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SCRIPT_DIR/retention.py"
+  python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SCRIPT_DIR/gateway_control.py"
   load_config
   local slot
   for slot in blue green; do
@@ -356,6 +360,8 @@ action_gate() {
   python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SCRIPT_DIR/retention.py"
   load_config
   local candidate_url
+  check_ingress
+  gateway_control doctor >/dev/null
   # shellcheck disable=SC1090
   source "$STATE_DIR/stage.env"
   [[ "$(docker inspect -f '{{.State.Health.Status}}' "$CANDIDATE")" == healthy ]]
@@ -364,7 +370,7 @@ action_gate() {
   [[ "$(container_version "$CANDIDATE")" == "$VERSION" ]]
   docker inspect "$CANDIDATE" | python3 -c 'import json,sys; assert not json.load(sys.stdin)[0]["HostConfig"].get("PortBindings"), "slot must not publish host ports"'
   candidate_url="$(container_url "$CANDIDATE")"
-  [[ -z "$(container_ip "$CANDIDATE")" ]]
+  docker inspect "$CANDIDATE" | python3 -c 'import json,sys; n=json.load(sys.stdin)[0]["NetworkSettings"]["Networks"]; assert set(n)=={sys.argv[1]} and not (n[sys.argv[1]].get("IPAMConfig") or {}).get("IPv4Address"), "candidate_network_invalid"' "$APP_NETWORK"
   [[ "$(docker inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$CANDIDATE")" == "$COMMIT_SHA" ]]
   [[ "$(docker exec "$CANDIDATE" printenv NODE_NAME)" != "$(docker exec "$PRODUCTION" printenv NODE_NAME)" ]]
   for field in Memory MemorySwap PidsLimit NanoCpus; do
@@ -393,20 +399,19 @@ action_cutover() {
   local mode="${1:---dry-run}"
   # shellcheck disable=SC1090
   source "$STATE_DIR/stage.env"
-  [[ -s "$STATE_DIR/gate.result" ]]
-  if [[ "$(container_has_alias "$CANDIDATE")" == true && "$(proxy_version)" == "$VERSION" ]]; then
+  [[ "$(cat "$STATE_DIR/gate.result")" == "gate=passed candidate=$CANDIDATE version=$VERSION" ]]
+  check_ingress
+  if [[ "$(production_container)" == "$CANDIDATE" && "$(proxy_version)" == "$VERSION" ]]; then
+    [[ -r "$STATE_DIR/role-state.env" ]]
     printf 'cutover=already-complete production=%s version=%s\n' "$CANDIDATE" "$VERSION"
     return
   fi
   [[ "$(production_container)" == "$PRODUCTION" ]]
   [[ "$(docker inspect -f '{{.State.Health.Status}}' "$CANDIDATE")" == healthy ]]
   [[ "$(container_version "$CANDIDATE")" == "$VERSION" ]]
-  [[ -z "$(container_ip "$CANDIDATE")" ]]
-  local production_ip production_version baseline_hash
-  production_ip="$(container_ip "$PRODUCTION")"
+  local production_version baseline_hash
   production_version="$(container_version "$PRODUCTION")"
   baseline_hash="$(awk '{print $1}' "$BACKUP_ROOT/$RELEASE_ID/nginx-config.sha256")"
-  [[ -n "$production_ip" ]]
   nginx_hash_matches "$baseline_hash"
   if [[ "$mode" == --dry-run ]]; then
     printf 'cutover_dry_run=passed production=%s candidate=%s production_version=%s target_version=%s\n' "$PRODUCTION" "$CANDIDATE" "$production_version" "$VERSION"
@@ -417,41 +422,35 @@ action_cutover() {
   cutover_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   cutover_epoch="$(date +%s)"
   umask 077
-  cat > "$STATE_DIR/role-state.env" <<EOF
+  cat > "$STATE_DIR/role-state.env.pending" <<EOF
+ROUTING_SCHEMA=2
 OLD=$PRODUCTION
 NEW=$CANDIDATE
-OLD_IP=$production_ip
 OLD_VERSION=$production_version
 NEW_VERSION=$VERSION
-NETWORK=$PROXY_NETWORK
-ALIAS=$PROXY_ALIAS
 CUTOVER_AT=$cutover_at
 CUTOVER_EPOCH=$cutover_epoch
 EOF
+  mv "$STATE_DIR/role-state.env.pending" "$STATE_DIR/role-state.env"
   chmod 600 "$STATE_DIR/role-state.env"
-  local switched=0
   restore_on_error() {
     local rc=$?
-    if [[ "$switched" -ne 1 ]]; then
-      disconnect_if_connected "$CANDIDATE" || true
-      disconnect_if_connected "$PRODUCTION" || true
-      connect_with_retry "$PRODUCTION" "$production_ip" "$PROXY_ALIAS" || true
+    trap - ERR INT TERM
+    if gateway_control recover >/dev/null && gateway_control switch --slot "$PRODUCTION" --version "$production_version" &&
+       [[ "$(proxy_version)" == "$production_version" && "$(public_version)" == "$production_version" ]]; then
+      printf 'cutover_recovery=restored\n' >&2
+    else
+      printf 'cutover_recovery=failed standby_preserved=1\n' >&2
     fi
-    printf 'cutover_failed line=%s command=%s rc=%s\n' "$LINENO" "$BASH_COMMAND" "$rc" >&2
-    exit "$rc"
+    printf 'cutover_failed rc=%s\n' "$rc" >&2
+    exit 1
   }
-  trap restore_on_error ERR
-  disconnect_if_connected "$CANDIDATE"
-  disconnect_if_connected "$PRODUCTION"
-  connect_with_retry "$CANDIDATE" "$production_ip" "$PROXY_ALIAS"
-  # Only production joins the proxy network. A physical slot name may equal the
-  # stable alias, so connecting standby would make Docker DNS resolve both slots.
-  [[ "$(container_ip "$CANDIDATE")" == "$production_ip" && -z "$(container_ip "$PRODUCTION")" ]]
+  trap restore_on_error ERR INT TERM
+  gateway_control switch --slot "$CANDIDATE" --version "$VERSION"
   [[ "$(proxy_version)" == "$VERSION" ]]
   [[ "$(public_version)" == "$VERSION" ]]
   nginx_hash_matches "$baseline_hash"
-  switched=1
-  trap - ERR
+  trap - ERR INT TERM
   printf 'cutover=passed production=%s standby=%s version=%s\n' "$CANDIDATE" "$PRODUCTION" "$VERSION"
 }
 
@@ -686,6 +685,7 @@ action_finalize() {
     return 1
   fi
   [[ "$(docker inspect -f '{{.State.Health.Status}}' "$NEW")" == healthy ]]
+  [[ "$(production_container)" == "$NEW" ]]
   [[ "$(proxy_version)" == "$VERSION" ]]
   if [[ "$mode" == --dry-run ]]; then
     printf 'finalize_dry_run=passed decision=%s production=%s old=%s\n' "$decision_mode" "$NEW" "$OLD"
@@ -696,6 +696,9 @@ action_finalize() {
   printf 'release_decision=%s state=planned release_id=%s production=%s version=%s reason=%s\n' \
     "$decision_mode" "$RELEASE_ID" "$NEW" "$VERSION" "${accept_reason:-statistical_observation_passed}" > "$decision_plan"
   chmod 600 "$decision_plan"
+  # Do not kill in-flight SSE/WebSocket clients just because the observation window ended.
+  gateway_control drain --seconds "${DRAIN_TIMEOUT_SECONDS:-60}"
+  [[ "$(production_container)" == "$NEW" ]]
   # Preserve the manual standby stop across Docker daemon restarts.
   docker update --restart=unless-stopped "$OLD" >/dev/null
   [[ "$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$OLD")" == unless-stopped ]]
@@ -732,10 +735,9 @@ action_rollback() {
       source "$STATE_DIR/stage.env"
       OLD="$PRODUCTION"
       NEW="$CANDIDATE"
-      OLD_IP="$(container_ip "$OLD")"
       OLD_VERSION="$(container_version "$OLD")"
     fi
-    [[ -n "$OLD_IP" && -n "$OLD_VERSION" ]]
+    [[ -n "$OLD_VERSION" ]]
     if ! docker inspect "$OLD" >/dev/null 2>&1 ||
       ! docker image inspect "$(docker inspect -f '{{.Image}}' "$OLD")" >/dev/null 2>&1; then
       printf 'rollback_blocked=assets_retired\n' >&2
@@ -762,23 +764,20 @@ action_rollback() {
     printf 'rollback_blocked=assets_retired\n' >&2
     return 1
   fi
-  local current_ip
-  current_ip="$(container_ip "$NEW")"
-  restore_new_on_error() {
+  rollback_error() {
     local rc=$?
-    disconnect_if_connected "$OLD" || true
-    disconnect_if_connected "$NEW" || true
-    connect_with_retry "$NEW" "$current_ip" "$PROXY_ALIAS" || true
-    printf 'rollback_failed line=%s command=%s rc=%s\n' "$LINENO" "$BASH_COMMAND" "$rc" >&2
-    exit "$rc"
+    trap - ERR INT TERM
+    # The controller owns rollback of its routing transaction. Do not send traffic
+    # back to a failed candidate merely because a later public probe failed.
+    printf 'rollback_failed rc=%s both_slots_preserved=1 inspect_gateway_transaction=1\n' "$rc" >&2
+    exit 1
   }
   check_rollback_port "$OLD"
-  trap restore_new_on_error ERR
+  check_ingress
+  trap rollback_error ERR INT TERM
   docker start "$OLD" >/dev/null
   wait_healthy "$OLD"
-  disconnect_if_connected "$NEW"
-  disconnect_if_connected "$OLD"
-  connect_with_retry "$OLD" "$OLD_IP" "$PROXY_ALIAS"
+  gateway_control rollback --slot "$OLD" --version "$OLD_VERSION"
   local i internal public
   for i in $(seq 1 12); do
     internal="$(proxy_version 2>/dev/null || true)"
@@ -787,7 +786,7 @@ action_rollback() {
     sleep 5
   done
   [[ "$internal" == "$OLD_VERSION" && "$public" == "$OLD_VERSION" ]]
-  trap - ERR
+  trap - ERR INT TERM
   printf 'rollback=passed release_id=%s production=%s version=%s\n' "$RELEASE_ID" "$OLD" "$OLD_VERSION" |
     tee "$STATE_DIR/rollback.result"
 }
@@ -835,16 +834,19 @@ action_cleanup() {
   fi
   [[ "$(proxy_version)" == "$version" && "$(public_version)" == "$version" ]]
   [[ "$mode" != --execute || "${CONFIRM_CLEANUP:-}" == "$RELEASE_ID" ]]
+  if [[ "$mode" == --execute ]]; then
+    gateway_control drain --seconds "${DRAIN_TIMEOUT_SECONDS:-60}"
+  fi
   python3 "$SCRIPT_DIR/retention.py" "$RELEASE_DIR" "$BACKUP_ROOT" "$production" "$version" \
-    "$PROXY_NETWORK" "$PROXY_ALIAS" "$POSTGRES_CONTAINER" "$OLD_VERSION" "$decision" \
-    "$PUBLIC_STATUS_URL" "$PROXY_CONTAINER" "$mode"
+    "$APP_NETWORK" "$POSTGRES_CONTAINER" "$OLD_VERSION" "$decision" \
+    "$PUBLIC_STATUS_URL" "$mode"
 }
 
 ACTION="${1:-}"
 shift || true
 # All state-changing phases share one lock, including observation and asset retirement.
 case "$ACTION" in
-  backup|stage|gate|cutover|observe|finalize|rollback|cleanup)
+  backup|stage|gate|cutover|observe|finalize|rollback|cleanup|recover)
     load_config
     exec 9>"${CUTOVER_LOCK:-/var/lock/new-api-cutover.lock}"
     flock -n 9
@@ -852,6 +854,8 @@ case "$ACTION" in
 esac
 case "$ACTION" in
   self-check) action_self_check "$@" ;;
+  doctor) action_doctor "$@" ;;
+  recover) action_recover "$@" ;;
   status) action_status "$@" ;;
   backup) action_backup "$@" ;;
   stage) action_stage "$@" ;;

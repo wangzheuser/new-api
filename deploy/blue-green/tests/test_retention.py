@@ -55,6 +55,7 @@ class RetentionTest(unittest.TestCase):
         self.inventory_calls = 0
         self.drift = False
         self.fail_after_stop = False
+        self.production = "new-api-green"
         self.addCleanup(patch.stopall)
         patch.object(retention, "inventory", self.inventory).start()
         patch.object(retention, "inspect", self.inspect).start()
@@ -64,8 +65,6 @@ class RetentionTest(unittest.TestCase):
     def container(self, name, image, serving):
         """Represent the identities and references used by the actual deletion checks."""
         networks = {"app": {}}
-        if serving:
-            networks["proxy"] = {"Aliases": ["stable"]}
         return dict(Id=name + "-id", Name="/" + name, Image=image,
                     Config={"Image": self.tags.get(image, "other:latest")}, RestartCount=0,
                     State={"Running": True, "Health": {"Status": "healthy"}, "OOMKilled": False},
@@ -87,8 +86,10 @@ class RetentionTest(unittest.TestCase):
         self.commands.append(args)
         if args[:3] == ("docker", "exec", "-i"):
             return "TABLE public fixture"
-        if args[:4] == ("docker", "exec", "fixture-proxy", "wget"):
-            return json.dumps({"data": {"version": self.public_version("")}})
+        if args[0] == "python3" and args[2] == "status":
+            return json.dumps({"slot": self.production, "version": self.public_version("")})
+        if args[0] == "python3" and args[2] == "drain":
+            return '{"drain":"passed"}'
         if args[:2] == ("docker", "stop"):
             if self.fail_after_stop:
                 self.containers[0]["State"]["Health"]["Status"] = "unhealthy"
@@ -104,17 +105,16 @@ class RetentionTest(unittest.TestCase):
     def cleanup(self, execute=True, rollback=False):
         """Call production retention with fixture scope and already-validated release decision."""
         return retention.cleanup(str(self.new), str(self.backups), "new-api-blue" if rollback else "new-api-green",
-                                 "dev-old" if rollback else "dev-new", "proxy", "stable", "fixture-postgres",
-                                 "dev-old", "rolled_back" if rollback else "passed", "https://fixture/api/status",
-                                 "fixture-proxy", execute)
+                                 "dev-old" if rollback else "dev-new", "app", "fixture-postgres",
+                                 "dev-old", "rolled_back" if rollback else "passed", "https://fixture/api/status", execute)
 
     def public_version(self, url):
         """Serve the actual fixture production version without opening a network connection."""
-        return "dev-" + next(c["Image"] for c in self.containers if "proxy" in c["NetworkSettings"]["Networks"])
+        return "dev-" + next(c["Image"] for c in self.containers if c["Name"] == "/" + self.production)
 
     def mutations(self):
         """Ignore read-only pg_restore inspection when checking fail-closed behavior."""
-        return [c for c in self.commands if c[:2] != ("docker", "exec")]
+        return [c for c in self.commands if c[:2] != ("docker", "exec") and c[0] != "python3"]
 
     def test_cleanup_preserves_production_backup_assets_and_other_service(self):
         """Retain one image and backup, both current clean-dist files, and audit records."""
@@ -132,8 +132,7 @@ class RetentionTest(unittest.TestCase):
 
     def test_rollback_keeps_actual_production_not_newest_image(self):
         """A newer failed candidate must not displace the restored production image."""
-        self.containers[0]["NetworkSettings"]["Networks"].pop("proxy")
-        self.containers[1]["NetworkSettings"]["Networks"]["proxy"] = {"Aliases": ["stable"]}
+        self.production = "new-api-blue"
         result = self.cleanup(rollback=True)
         self.assertEqual(result["image_id"], "old")
         self.assertEqual([i["Id"] for i in self.images], ["old"])
@@ -233,13 +232,14 @@ class RetentionStateMachineTest(unittest.TestCase):
                 (root / "rollback.result").write_text("rollback=passed release_id=fixture production=new-api-blue version=old\n")
             harness = '''source "$1/definitions.sh"
 STATE_DIR="$1"; RELEASE_DIR="$1"; BACKUP_ROOT="$1/backups"; SCRIPT_DIR="$1"
-RELEASE_ID=fixture; VERSION=new; OLD_VERSION=old; PROXY_NETWORK=proxy; PROXY_ALIAS=stable; POSTGRES_CONTAINER=fixture
+RELEASE_ID=fixture; VERSION=new; OLD_VERSION=old; APP_NETWORK=app; POSTGRES_CONTAINER=fixture
 PUBLIC_STATUS_URL=https://fixture/api/status; PROXY_CONTAINER=fixture-proxy
 load_config() { :; }
 production_container() { echo "$TEST_PRODUCTION"; }
 container_version() { [[ "$1" == "$TEST_PRODUCTION" ]] && echo "$TEST_VERSION"; }
 proxy_version() { echo "$TEST_VERSION"; }
 public_version() { echo "$TEST_VERSION"; }
+gateway_control() { :; }
 docker() { printf '\\n'; return 1; }
 python3() { echo "retention_called $*"; }
 if [[ "$TEST_ACTION" == cleanup ]]; then
