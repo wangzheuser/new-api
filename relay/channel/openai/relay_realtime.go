@@ -67,6 +67,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 	sendChan := make(chan []byte, 100)
 	receiveChan := make(chan []byte, 100)
 	errChan := make(chan error, 2)
+	targetErrChan := make(chan error, 2)
 
 	usage := &dto.RealtimeUsage{}
 	localUsage := &dto.RealtimeUsage{}
@@ -142,7 +143,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 	gopool.Go(func() {
 		defer func() {
 			if r := recover(); r != nil {
-				errChan <- fmt.Errorf("panic in target reader: %v", r)
+				targetErrChan <- fmt.Errorf("panic in target reader: %v", r)
 			}
 		}()
 		for {
@@ -153,7 +154,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 				_, message, err := targetConn.ReadMessage()
 				if err != nil {
 					if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-						errChan <- fmt.Errorf("error reading from target: %v", err)
+						targetErrChan <- fmt.Errorf("error reading from target: %v", err)
 					}
 					close(targetClosed)
 					return
@@ -162,7 +163,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 				realtimeEvent := &dto.RealtimeEvent{}
 				err = common.Unmarshal(message, realtimeEvent)
 				if err != nil {
-					errChan <- fmt.Errorf("error unmarshalling message: %v", err)
+					targetErrChan <- fmt.Errorf("error unmarshalling message: %v", err)
 					return
 				}
 
@@ -246,12 +247,17 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 		}
 	})
 
+	var realtimeErr *types.NewAPIError
 	select {
 	case <-clientClosed:
 	case <-targetClosed:
+	case err := <-targetErrChan:
+		realtimeErr = types.NewErrorWithStatusCode(err, types.ErrorCodeBadResponse, http.StatusBadGateway,
+			types.ErrOptionWithUpstreamStatusCode(http.StatusBadGateway))
+		logger.LogError(c, "realtime upstream error: "+err.Error())
 	case err := <-errChan:
-		//return service.OpenAIErrorWrapper(err, "realtime_error", http.StatusInternalServerError), nil
-		logger.LogError(c, "realtime error: "+err.Error())
+		realtimeErr = types.NewErrorWithStatusCode(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		logger.LogError(c, "realtime local error: "+err.Error())
 	case <-c.Done():
 	}
 
@@ -265,7 +271,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 
 	// check usage total tokens, if 0, use local usage
 
-	return nil, sumUsage
+	return realtimeErr, sumUsage
 }
 
 // rewriteRealtimeClientMessage creates the client-visible copy after internal usage processing finishes.

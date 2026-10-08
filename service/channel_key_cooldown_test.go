@@ -168,11 +168,14 @@ func TestMultiKeyCooldownBackoff(t *testing.T) {
 	server := setupMultiKeyHealthRedis(t)
 	now := int64(1000000)
 	name := "newapi:channel-auto-disable:v2:{1}:cooldown:key:test"
-	for _, want := range []int64{600, 1200, 2400} {
+	for i, want := range []int64{600, 1200, 2400} {
 		at, err := common.RDB.Eval(context.Background(), recordKeyCooldown, []string{name}, `{"version":"test"}`, now, 600, 0, 0).Int64()
 		require.NoError(t, err)
 		assert.Equal(t, now+want, at)
 		assert.Equal(t, time.Duration(want+86400)*time.Second, server.TTL(name))
+		if i < 2 {
+			now = at + 1
+		}
 	}
 	at, err := common.RDB.Eval(context.Background(), recordKeyCooldown, []string{name}, `{"version":"new"}`, now, 600, now+10000, 0).Int64()
 	require.NoError(t, err)

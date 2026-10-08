@@ -376,6 +376,7 @@ type MultiKeyTemporaryDisableInfo struct {
 	Requests          int64   `json:"requests,omitempty"`
 	Errors            int64   `json:"errors,omitempty"`
 	ErrorRate         float64 `json:"error_rate_percent,omitempty"`
+	RecoverAt         int64   `json:"recover_at,omitempty"`
 }
 
 // TemporaryAutoDisableInfo describes one Redis-backed temporary channel disable decision.
@@ -393,6 +394,12 @@ type TemporaryAutoDisableInfo struct {
 	Model             string  `json:"model,omitempty"`
 	StatusCode        int     `json:"status_code,omitempty"`
 	Reason            string  `json:"reason,omitempty"`
+	Category          string  `json:"category,omitempty"`
+	Source            string  `json:"source,omitempty"`
+	State             string  `json:"state,omitempty"`
+	Mechanism         string  `json:"mechanism,omitempty"`
+	Version           string  `json:"version,omitempty"`
+	RecoverAt         int64   `json:"recover_at,omitempty"`
 }
 
 type ChannelOtherSettings struct {

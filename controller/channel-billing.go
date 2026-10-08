@@ -471,9 +471,15 @@ func updateAllChannelsBalance() error {
 		if err != nil {
 			continue
 		} else {
-			// err is nil & balance <= 0 means quota is used up
+			// A successful, supported balance response of zero is quota exhaustion.
 			if balance <= 0 {
-				service.DisableChannel(*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, "", channel.GetAutoBan()), "余额不足")
+				apiErr := types.NewOpenAIError(
+					errors.New("balance quota exhausted"),
+					types.ErrorCodeBadResponseStatusCode,
+					http.StatusTooManyRequests,
+					types.ErrOptionWithUpstreamStatusCode(http.StatusTooManyRequests),
+				)
+				service.RecordChannelUpstreamErrorAsync(channel, apiErr, "", "")
 			}
 		}
 		time.Sleep(common.RequestInterval)

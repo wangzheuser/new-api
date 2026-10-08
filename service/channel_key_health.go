@@ -35,6 +35,15 @@ func ClassifyMultiKeyFailure(channel *model.Channel, err *types.NewAPIError) (Mu
 	return d.Action, d.StatusCode
 }
 
+// IsMultiKeyFailureChannelScoped reports whether a failure protects the whole channel
+// rather than only the key that produced it.
+func IsMultiKeyFailureChannelScoped(channel *model.Channel, upstreamModel string, err *types.NewAPIError) bool {
+	if err == nil {
+		return false
+	}
+	return DecideMultiKeyFailure(channel, upstreamModel, err, time.Now()).Scope == multiKeyScopeChannel
+}
+
 // HandleMultiKeyFailure records one classified key failure and reports whether generic channel handling must stop.
 func HandleMultiKeyFailure(channel *model.Channel, keyIndex int, usingKey string, err *types.NewAPIError, upstreamModels ...string) (MultiKeyFailureAction, bool) {
 	upstreamModel := ""

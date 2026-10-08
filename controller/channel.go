@@ -813,6 +813,12 @@ func DisableTagChannels(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if channels, listErr := model.GetChannelsByTag(channelTag.Tag, false, false); listErr == nil {
+		for _, channel := range channels {
+			service.ClearChannelTemporaryAutoDisable(channel.Id)
+			service.ClearAllMultiKeyTemporaryDisable(channel.Id)
+		}
+	}
 	model.InitChannelCache()
 	recordManageAudit(c, "channel.tag_disable", map[string]interface{}{
 		"tag": channelTag.Tag,
@@ -838,6 +844,12 @@ func EnableTagChannels(c *gin.Context) {
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	if channels, listErr := model.GetChannelsByTag(channelTag.Tag, false, false); listErr == nil {
+		for _, channel := range channels {
+			service.ClearChannelTemporaryAutoDisable(channel.Id)
+			service.ClearAllMultiKeyTemporaryDisable(channel.Id)
+		}
 	}
 	model.InitChannelCache()
 	recordManageAudit(c, "channel.tag_enable", map[string]interface{}{
@@ -1248,6 +1260,9 @@ func UpdateChannelStatus(c *gin.Context) {
 	if req.Status == common.ChannelStatusEnabled && service.ClearChannelTemporaryAutoDisable(id) {
 		changed = true
 	}
+	if req.Status == common.ChannelStatusEnabled && service.ClearAllMultiKeyTemporaryDisable(id) {
+		changed = true
+	}
 	if changed {
 		model.InitChannelCache()
 		service.ResetProxyClientCache()
@@ -1274,6 +1289,9 @@ func BatchUpdateChannelStatus(c *gin.Context) {
 	for _, id := range req.Ids {
 		changed := model.UpdateChannelStatus(id, "", req.Status, "manual batch operation")
 		if req.Status == common.ChannelStatusEnabled && service.ClearChannelTemporaryAutoDisable(id) {
+			changed = true
+		}
+		if req.Status == common.ChannelStatusEnabled && service.ClearAllMultiKeyTemporaryDisable(id) {
 			changed = true
 		}
 		if changed {
@@ -1825,7 +1843,7 @@ func ManageMultiKeys(c *gin.Context) {
 		channel.ChannelInfo.MultiKeyDisabledReason[keyIndex] = "manual operation"
 		channel.RecalculateMultiKeyStatus()
 
-		err = channel.Update()
+		err = channel.UpdateWithHealth()
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -1869,7 +1887,7 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 		channel.RecalculateMultiKeyStatus()
 
-		err = channel.Update()
+		err = channel.UpdateWithHealth()
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -1895,7 +1913,7 @@ func ManageMultiKeys(c *gin.Context) {
 		channel.ChannelInfo.MultiKeyDisabledReason = make(map[int]string)
 		channel.RecalculateMultiKeyStatus()
 
-		err = channel.Update()
+		err = channel.UpdateWithHealth()
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -1944,7 +1962,7 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 		channel.RecalculateMultiKeyStatus()
 
-		err = channel.Update()
+		err = channel.UpdateWithHealth()
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -2025,7 +2043,7 @@ func ManageMultiKeys(c *gin.Context) {
 		channel.ChannelInfo.MultiKeyDisabledTime = newDisabledTime
 		channel.ChannelInfo.MultiKeyDisabledReason = newDisabledReason
 
-		err = channel.Update()
+		err = channel.UpdateWithHealth()
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -2094,7 +2112,7 @@ func ManageMultiKeys(c *gin.Context) {
 		channel.ChannelInfo.MultiKeyDisabledTime = newDisabledTime
 		channel.ChannelInfo.MultiKeyDisabledReason = newDisabledReason
 
-		err = channel.Update()
+		err = channel.UpdateWithHealth()
 		if err != nil {
 			common.ApiError(c, err)
 			return

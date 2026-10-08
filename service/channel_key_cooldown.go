@@ -21,14 +21,26 @@ const recordKeyCooldown = `
 local old = redis.call('GET', KEYS[1])
 local n = 1
 local previousUntil = 0
-if old then local ok, v = pcall(cjson.decode, old); if ok then n = math.min((v.failures or 0)+1, 32); previousUntil = v.disabled_until or 0 end end
+local previousFailures = 0
+if old then
+    local ok, v = pcall(cjson.decode, old)
+    if ok then previousFailures = tonumber(v.failures or 0); previousUntil = tonumber(v.disabled_until or 0) end
+end
 local v = cjson.decode(ARGV[1])
 local now = tonumber(ARGV[2])
-local delay = math.min(tonumber(ARGV[3]) * 2^(n-1), 86400)
-if tonumber(ARGV[4]) > now then delay = tonumber(ARGV[4])-now
-else delay = math.min(math.ceil(delay * (1+tonumber(ARGV[5]))), 86400) end
-delay = math.max(delay, previousUntil-now)
-v.failures=n; v.disabled_until=now+delay
+local delay
+if previousUntil > now then
+    n = math.max(previousFailures, 1)
+    delay = previousUntil-now
+    if tonumber(ARGV[4]) > now then delay = math.max(delay, tonumber(ARGV[4])-now) end
+else
+    n = math.min(previousFailures+1, 32)
+    delay = math.min(tonumber(ARGV[3]) * 2^(n-1), 86400)
+    if tonumber(ARGV[4]) > now then delay = tonumber(ARGV[4])-now
+    else delay = math.min(math.ceil(delay * (1+tonumber(ARGV[5]))), 86400) end
+end
+delay = math.max(delay, 1)
+v.failures=n; v.disabled_until=now+delay; v.recover_at=now+delay
 redis.call('SET', KEYS[1], cjson.encode(v), 'EX', delay+86400)
 return v.disabled_until`
 

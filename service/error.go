@@ -213,6 +213,9 @@ func TaskErrorWrapper(err error, code string, statusCode int) *dto.TaskError {
 	}
 	var upstream *types.NewAPIError
 	if errors.As(err, &upstream) {
+		if _, real := upstream.GetUpstreamStatusCode(); !real {
+			upstream = nil
+		}
 		taskError.UpstreamError = upstream
 	}
 
@@ -224,10 +227,14 @@ func TaskErrorFromAPIError(apiErr *types.NewAPIError) *dto.TaskError {
 	if apiErr == nil {
 		return nil
 	}
-	return &dto.TaskError{
+	taskError := &dto.TaskError{
 		Code:       string(apiErr.GetErrorCode()),
-		Message:    apiErr.Err.Error(),
+		Message:    apiErr.Error(),
 		StatusCode: apiErr.StatusCode,
 		Error:      apiErr.Err,
 	}
+	if _, real := apiErr.GetUpstreamStatusCode(); real {
+		taskError.UpstreamError = apiErr
+	}
+	return taskError
 }

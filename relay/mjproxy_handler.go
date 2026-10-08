@@ -3,6 +3,7 @@ package relay
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -591,13 +593,15 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 		Quota:       priceData.Quota,
 	}
 	if midjResponse.Code == 3 {
-		//无实例账号自动禁用渠道（No available account instance）
 		channel, err := model.GetChannelById(midjourneyTask.ChannelId, true)
-		if err != nil {
-			common.SysLog("get_channel_null: " + err.Error())
-		}
-		if channel.GetAutoBan() && common.AutomaticDisableChannelEnabled {
-			model.UpdateChannelStatus(midjourneyTask.ChannelId, "", 2, "No available account instance")
+		if err == nil && channel != nil {
+			apiErr := types.NewOpenAIError(
+				errors.New("No available account instance"),
+				types.ErrorCodeBadResponseStatusCode,
+				http.StatusTooManyRequests,
+				types.ErrOptionWithUpstreamStatusCode(http.StatusTooManyRequests),
+			)
+			service.RecordChannelUpstreamErrorAsync(channel, apiErr, "", "")
 		}
 	}
 	if midjResponse.Code != 1 && midjResponse.Code != 21 && midjResponse.Code != 22 {

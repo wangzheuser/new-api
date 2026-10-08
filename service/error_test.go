@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -62,6 +63,32 @@ func TestResetStatusCode(t *testing.T) {
 			require.Equal(t, tc.expectedCode, newAPIError.StatusCode)
 		})
 	}
+}
+
+func TestTaskErrorWrapperDoesNotPromoteLocalAPIError(t *testing.T) {
+	local := types.NewError(errors.New("request body is invalid"), types.ErrorCodeBadRequestBody)
+	taskErr := TaskErrorWrapper(local, "build_request_failed", http.StatusBadRequest)
+	require.Nil(t, taskErr.UpstreamError)
+
+	upstream := types.NewErrorWithStatusCode(errors.New("quota exceeded"), types.ErrorCodeBadResponseStatusCode,
+		http.StatusTooManyRequests, types.ErrOptionWithUpstreamStatusCode(http.StatusTooManyRequests))
+	taskErr = TaskErrorWrapper(upstream, "upstream", http.StatusBadGateway)
+	require.NotNil(t, taskErr.UpstreamError)
+	require.Equal(t, http.StatusTooManyRequests, taskErr.UpstreamError.StatusCode)
+}
+
+func TestTaskErrorFromAPIErrorPreservesOnlyRealUpstreamEvidence(t *testing.T) {
+	local := types.NewError(errors.New("quota pre-consume failed"), types.ErrorCodePreConsumeTokenQuotaFailed)
+	localTask := TaskErrorFromAPIError(local)
+	require.NotNil(t, localTask)
+	require.Nil(t, localTask.UpstreamError)
+
+	upstream := types.NewErrorWithStatusCode(errors.New("bad gateway"), types.ErrorCodeBadResponse, http.StatusBadGateway,
+		types.ErrOptionWithUpstreamStatusCode(http.StatusBadGateway))
+	upstreamTask := TaskErrorFromAPIError(upstream)
+	require.NotNil(t, upstreamTask)
+	require.NotNil(t, upstreamTask.UpstreamError)
+	require.Equal(t, http.StatusBadGateway, upstreamTask.UpstreamError.StatusCode)
 }
 
 func TestRelayErrorHandlerTruncatesInvalidJSONBodyInLog(t *testing.T) {

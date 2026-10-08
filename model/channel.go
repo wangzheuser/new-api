@@ -607,8 +607,17 @@ func (channel *Channel) Insert() error {
 	return err
 }
 
-// Update persists non-empty channel fields and optionally clears an explicitly supplied empty model list.
+// Update persists editable channel fields without allowing a stale snapshot to overwrite health state.
 func (channel *Channel) Update(clearModels ...bool) error {
+	return channel.update(true, clearModels...)
+}
+
+// UpdateWithHealth persists an intentional health/key-state edit from the channel management flow.
+func (channel *Channel) UpdateWithHealth(clearModels ...bool) error {
+	return channel.update(false, clearModels...)
+}
+
+func (channel *Channel) update(preserveHealth bool, clearModels ...bool) error {
 	// If this is a multi-key channel, recalculate MultiKeySize based on the current key list to avoid inconsistency after editing keys
 	if channel.ChannelInfo.IsMultiKey {
 		var keyStr string
@@ -648,6 +657,28 @@ func (channel *Channel) Update(clearModels ...bool) error {
 		}
 	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		var latest Channel
+		if err := lockForUpdate(tx).First(&latest, channel.Id).Error; err != nil {
+			return err
+		}
+		if preserveHealth {
+			channel.Status = latest.Status
+			latestOtherInfo := latest.GetOtherInfo()
+			otherInfo := channel.GetOtherInfo()
+			for _, key := range []string{"status_reason", "status_time"} {
+				if value, exists := latestOtherInfo[key]; exists {
+					otherInfo[key] = value
+				}
+			}
+			channel.SetOtherInfo(otherInfo)
+		}
+		sameKeySet := channel.Key == "" || channel.Key == latest.Key
+		if preserveHealth && latest.ChannelInfo.IsMultiKey && channel.ChannelInfo.IsMultiKey && sameKeySet {
+			channel.ChannelInfo.MultiKeyStatusList = maps.Clone(latest.ChannelInfo.MultiKeyStatusList)
+			channel.ChannelInfo.MultiKeyDisabledReason = maps.Clone(latest.ChannelInfo.MultiKeyDisabledReason)
+			channel.ChannelInfo.MultiKeyDisabledTime = maps.Clone(latest.ChannelInfo.MultiKeyDisabledTime)
+			channel.ChannelInfo.MultiKeyPollingIndex = latest.ChannelInfo.MultiKeyPollingIndex
+		}
 		if err := tx.Model(channel).Updates(channel).Error; err != nil {
 			return err
 		}
@@ -851,7 +882,15 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 }
 
 func EnableChannelByTag(tag string) error {
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusEnabled).Error
+	channelStatusLock.Lock()
+	defer channelStatusLock.Unlock()
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var channels []Channel
+		if err := lockForUpdate(tx).Where("tag = ?", tag).Find(&channels).Error; err != nil {
+			return err
+		}
+		return tx.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusEnabled).Error
+	})
 	if err != nil {
 		return err
 	}
@@ -860,7 +899,15 @@ func EnableChannelByTag(tag string) error {
 }
 
 func DisableChannelByTag(tag string) error {
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusManuallyDisabled).Error
+	channelStatusLock.Lock()
+	defer channelStatusLock.Unlock()
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var channels []Channel
+		if err := lockForUpdate(tx).Where("tag = ?", tag).Find(&channels).Error; err != nil {
+			return err
+		}
+		return tx.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusManuallyDisabled).Error
+	})
 	if err != nil {
 		return err
 	}
@@ -1159,7 +1206,7 @@ func (channel *Channel) GetSetting() dto.ChannelSettings {
 		if err != nil {
 			common.SysLog(fmt.Sprintf("failed to unmarshal setting: channel_id=%d, error=%v", channel.Id, err))
 			channel.Setting = nil // 清空设置以避免后续错误
-			_ = channel.Save()    // 保存修改
+			_ = DB.Model(&Channel{}).Where("id = ?", channel.Id).Update("setting", nil).Error
 		}
 	}
 	return setting
@@ -1181,7 +1228,7 @@ func (channel *Channel) GetOtherSettings() dto.ChannelOtherSettings {
 		if err != nil {
 			common.SysLog(fmt.Sprintf("failed to unmarshal setting: channel_id=%d, error=%v", channel.Id, err))
 			channel.OtherSettings = "{}" // 清空设置以避免后续错误
-			_ = channel.Save()           // 保存修改
+			_ = DB.Model(&Channel{}).Where("id = ?", channel.Id).Update("settings", "{}").Error
 		}
 	}
 	return setting

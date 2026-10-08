@@ -75,10 +75,15 @@ local info = cjson.encode({
     requests = total,
     errors = errors,
     error_rate_percent = errors * 100 / total,
-    status_codes = ARGV[7],
-    scope = ARGV[8],
-    model = ARGV[9],
-    status_code = tonumber(ARGV[12])
+	status_codes = ARGV[7],
+	scope = ARGV[8],
+	model = ARGV[9],
+	status_code = tonumber(ARGV[12]),
+	mechanism = ARGV[13],
+	source = ARGV[14],
+	state = 'cooldown',
+	version = 'v2',
+	recover_at = disabledUntil
 })
 local created = redis.call('SET', KEYS[1], info, 'EX', tonumber(ARGV[5]), 'NX')
 if not created then
@@ -106,14 +111,9 @@ func RecordChannelUpstreamResponseAsync(channel *model.Channel, upstreamStatusCo
 		return
 	}
 
-	// Copy the fields read by the worker because cached channel pointers may be refreshed concurrently.
-	snapshot := &model.Channel{
-		Id:            channel.Id,
-		Name:          channel.Name,
-		AutoBan:       common.GetPointer(1),
-		OtherSettings: channel.OtherSettings,
-		ChannelInfo:   channel.ChannelInfo,
-	}
+	// Snapshot status maps before the asynchronous worker starts.
+	snapshot := channel.Snapshot()
+	snapshot.AutoBan = common.GetPointer(1)
 	key, upstreamModel := "", ""
 	if len(identity) > 0 {
 		key = identity[0]
@@ -131,13 +131,8 @@ func RecordChannelUpstreamErrorAsync(channel *model.Channel, apiErr *types.NewAP
 	if channel == nil || apiErr == nil || !common.AutomaticDisableChannelEnabled || !channel.GetAutoBan() || !common.RedisEnabled || common.RDB == nil {
 		return
 	}
-	snapshot := &model.Channel{
-		Id:            channel.Id,
-		Name:          channel.Name,
-		AutoBan:       common.GetPointer(1),
-		OtherSettings: channel.OtherSettings,
-		ChannelInfo:   channel.ChannelInfo,
-	}
+	snapshot := channel.Snapshot()
+	snapshot.AutoBan = common.GetPointer(1)
 	gopool.Go(func() {
 		recordChannelUpstreamError(snapshot, apiErr, usingKey, upstreamModel)
 	})
@@ -152,13 +147,8 @@ func RecordChannelScopedFailureAsync(channel *model.Channel, apiErr *types.NewAP
 	if !realUpstream {
 		return
 	}
-	snapshot := &model.Channel{
-		Id:            channel.Id,
-		Name:          channel.Name,
-		AutoBan:       common.GetPointer(1),
-		OtherSettings: channel.OtherSettings,
-		ChannelInfo:   channel.ChannelInfo,
-	}
+	snapshot := channel.Snapshot()
+	snapshot.AutoBan = common.GetPointer(1)
 	gopool.Go(func() {
 		recordChannelUpstreamResponse(snapshot, statusCode, true, "", "")
 	})
@@ -238,6 +228,8 @@ func recordChannelUpstreamResponse(channel *model.Channel, upstreamStatusCode in
 			return ""
 		}(),
 		upstreamStatusCode,
+		"rolling_window",
+		"relay",
 	}
 
 	result, err := recordChannelUpstreamResponseScript.Run(context.Background(), common.RDB, []string{blockKey, sampleKey, counterKey}, args...).Result()
@@ -294,7 +286,10 @@ func isTemporaryQuotaError(apiErr *types.NewAPIError, statusCode int) bool {
 
 // isTemporaryQuotaMessage recognizes provider quota and rate-limit wording before generic disable keywords.
 func isTemporaryQuotaMessage(message string) bool {
-	return isProviderQuotaMessage(message) || isAccountQuotaMessage(message) || isTemporaryAccessMessage(message)
+	return isProviderQuotaMessage(message) || isAccountQuotaMessage(message) || isTemporaryAccessMessage(message) ||
+		strings.Contains(message, "no available account instance") ||
+		strings.Contains(message, "no available account") ||
+		strings.Contains(message, "无可用账号")
 }
 
 // isProviderQuotaMessage recognizes provider-specific rolling limits.
@@ -364,6 +359,12 @@ func blockSingleKeyChannelTemporarily(channel *model.Channel, apiErr *types.NewA
 		Model:             upstreamModel,
 		StatusCode:        statusCode,
 		Reason:            apiErr.MaskSensitiveError(),
+		Category:          "quota",
+		Source:            "relay",
+		State:             "cooldown",
+		Mechanism:         "immediate_quota",
+		Version:           "v2",
+		RecoverAt:         disabledUntil.Unix(),
 	}
 	raw, err := common.Marshal(info)
 	if err != nil {
