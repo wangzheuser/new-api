@@ -617,6 +617,7 @@ func (channel *Channel) UpdateWithHealth(clearModels ...bool) error {
 	return channel.update(false, clearModels...)
 }
 
+// update keeps persisted health authoritative unless the caller explicitly resets it.
 func (channel *Channel) update(preserveHealth bool, clearModels ...bool) error {
 	// If this is a multi-key channel, recalculate MultiKeySize based on the current key list to avoid inconsistency after editing keys
 	if channel.ChannelInfo.IsMultiKey {
@@ -668,6 +669,8 @@ func (channel *Channel) update(preserveHealth bool, clearModels ...bool) error {
 			for _, key := range []string{"status_reason", "status_time"} {
 				if value, exists := latestOtherInfo[key]; exists {
 					otherInfo[key] = value
+				} else {
+					delete(otherInfo, key)
 				}
 			}
 			channel.SetOtherInfo(otherInfo)
@@ -678,6 +681,36 @@ func (channel *Channel) update(preserveHealth bool, clearModels ...bool) error {
 			channel.ChannelInfo.MultiKeyDisabledReason = maps.Clone(latest.ChannelInfo.MultiKeyDisabledReason)
 			channel.ChannelInfo.MultiKeyDisabledTime = maps.Clone(latest.ChannelInfo.MultiKeyDisabledTime)
 			channel.ChannelInfo.MultiKeyPollingIndex = latest.ChannelInfo.MultiKeyPollingIndex
+		}
+		if preserveHealth && channel.ChannelInfo.IsMultiKey && !sameKeySet {
+			// Match retained keys by value so concurrent health changes survive a key-pool edit.
+			latestIndexes := make(map[string]int)
+			for index, key := range latest.GetKeys() {
+				latestIndexes[key] = index
+			}
+			channel.Keys = nil
+			channel.ChannelInfo.MultiKeyStatusList = make(map[int]int)
+			channel.ChannelInfo.MultiKeyDisabledReason = make(map[int]string)
+			channel.ChannelInfo.MultiKeyDisabledTime = make(map[int]int64)
+			for index, key := range channel.GetKeys() {
+				oldIndex, exists := latestIndexes[key]
+				if !exists {
+					continue
+				}
+				if status, exists := latest.ChannelInfo.MultiKeyStatusList[oldIndex]; exists {
+					channel.ChannelInfo.MultiKeyStatusList[index] = status
+				}
+				if reason, exists := latest.ChannelInfo.MultiKeyDisabledReason[oldIndex]; exists {
+					channel.ChannelInfo.MultiKeyDisabledReason[index] = reason
+				}
+				if disabledAt, exists := latest.ChannelInfo.MultiKeyDisabledTime[oldIndex]; exists {
+					channel.ChannelInfo.MultiKeyDisabledTime[index] = disabledAt
+				}
+			}
+			// Appending a key must not undo an operator's channel-wide disable.
+			if latest.Status != common.ChannelStatusManuallyDisabled {
+				channel.RecalculateMultiKeyStatus()
+			}
 		}
 		if err := tx.Model(channel).Updates(channel).Error; err != nil {
 			return err

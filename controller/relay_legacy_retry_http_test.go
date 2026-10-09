@@ -30,8 +30,21 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 	constant.StreamingTimeout = 30
 	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
 	for _, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAI} {
-		for _, scenario := range []string{"recover", "budget exhausted", "protocol event"} {
-			t.Run(string(format)+"/"+scenario, func(t *testing.T) {
+		for _, scenario := range []struct {
+			name     string
+			status   int
+			message  string
+			recover  bool
+			backup   bool
+			wantKeys []string
+		}{
+			{"key quota recovery", 429, "quota exceeded", true, false, []string{"KEY_A", "KEY_B"}},
+			{"key quota budget exhausted", 429, "quota exceeded", false, false, []string{"KEY_A", "KEY_B", "KEY_C"}},
+			{"channel recovery", 500, "upstream failed", true, true, []string{"KEY_A", "BACKUP_A"}},
+			{"channel unavailable", 500, "upstream failed", false, false, []string{"KEY_A"}},
+			{"protocol event", 0, "", false, false, []string{"KEY_A"}},
+		} {
+			t.Run(string(format)+"/"+scenario.name, func(t *testing.T) {
 				oldDB, oldLogDB := model.DB, model.LOG_DB
 				oldRedis, oldRedisEnabled := common.RDB, common.RedisEnabled
 				oldRetry, oldAuto, oldMemory := common.RetryTimes, common.AutomaticDisableChannelEnabled, common.MemoryCacheEnabled
@@ -63,15 +76,22 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 					mu.Lock()
 					attempts = append(attempts, key)
 					mu.Unlock()
-					if scenario == "budget exhausted" || (scenario == "recover" && key == "KEY_A") {
+					failed := scenario.status != 0
+					if scenario.recover {
+						failed = key == "KEY_A"
+						if scenario.backup {
+							failed = key != "BACKUP_A"
+						}
+					}
+					if failed {
 						w.Header().Set("Content-Type", "application/json")
-						w.WriteHeader(http.StatusInternalServerError)
-						_, _ = io.WriteString(w, `{"error":{"message":"upstream failed","type":"server_error"}}`)
+						w.WriteHeader(scenario.status)
+						_, _ = fmt.Fprintf(w, `{"error":{"message":%q,"type":"api_error"}}`, scenario.message)
 						return
 					}
 					w.Header().Set("Content-Type", "text/event-stream")
 					_, _ = io.WriteString(w, "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"MODEL_X\",\"content\":[],\"usage\":{\"input_tokens\":2,\"output_tokens\":0}}}\n\n")
-					if scenario == "protocol event" {
+					if scenario.name == "protocol event" {
 						_, _ = io.WriteString(w, "data: {\"type\":\"error\",\"error\":{\"type\":\"server_error\",\"message\":\"stream failed\"}}\n\n")
 						return
 					}
@@ -86,6 +106,13 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 				}
 				require.NoError(t, db.Create(channel).Error)
 				require.NoError(t, db.Create(&model.Ability{Group: "default", Model: "MODEL_X", ChannelId: channel.Id, Enabled: true}).Error)
+				if scenario.backup {
+					backup := channel.Snapshot()
+					backup.Id, backup.Name, backup.Key = 0, "backup-fixture", "BACKUP_A\nBACKUP_B"
+					backup.ChannelInfo.MultiKeySize = 2
+					require.NoError(t, db.Create(backup).Error)
+					require.NoError(t, backup.AddAbilities(nil))
+				}
 				path := "/v1/messages"
 				if format == types.RelayFormatOpenAI {
 					path = "/v1/chat/completions"
@@ -114,19 +141,14 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 				mu.Lock()
 				got := append([]string(nil), attempts...)
 				mu.Unlock()
-				expected := map[string]int{"recover": 2, "budget exhausted": 3, "protocol event": 1}[scenario]
-				require.Len(t, got, expected, body)
-				assert.Equal(t, "KEY_A", got[0])
-				for i := 1; i < len(got); i++ {
-					assert.NotContains(t, got[:i], got[i], "a failed key must not be retried")
-				}
+				require.Equal(t, scenario.wantKeys, got, body)
 				var logs []model.Log
 				require.NoError(t, db.Where("type = ?", model.LogTypeConsume).Find(&logs).Error)
 				var user model.User
 				var token model.Token
 				require.NoError(t, db.First(&user, 1).Error)
 				require.NoError(t, db.First(&token, 1).Error)
-				if scenario == "recover" {
+				if scenario.recover {
 					assert.Equal(t, 1, strings.Count(body, "fixture-ok"), body)
 					assert.NotContains(t, body, `"type":"error"`)
 					require.Len(t, logs, 1)
@@ -138,13 +160,6 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 					} else {
 						assert.Equal(t, 1, strings.Count(body, "[DONE]"))
 					}
-					assert.Empty(t, service.LoadMultiKeyCooldowns(channel.Id, "KEY_A"), "a single 5xx must remain below the rolling sample threshold")
-					key, _, apiErr := service.SelectNextEnabledChannelKey(channel, nil)
-					require.Nil(t, apiErr)
-					assert.NotEqual(t, "KEY_A", key, "a new request must skip the cooling key")
-					// Cooldown history is retained beyond its active interval for backoff and probes.
-					redisServer.FastForward(25 * time.Hour)
-					assert.Empty(t, service.LoadMultiKeyTemporaryDisableInfo(channel))
 				} else {
 					assert.Len(t, logs, 0)
 					// Refunds run asynchronously; verify the actual wallet and token balances.
@@ -155,7 +170,23 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 					assert.Equal(t, 1, strings.Count(body, `"error":`), body)
 					assert.NotContains(t, body, "event: message_stop")
 					assert.NotContains(t, body, "[DONE]")
-					assert.Empty(t, service.LoadMultiKeyCooldowns(channel.Id, "KEY_A"), "5xx failures are statistical until the configured sample threshold is reached")
+				}
+				if scenario.status == http.StatusTooManyRequests {
+					assert.NotEmpty(t, service.LoadMultiKeyCooldowns(channel.Id, "KEY_A"), "key quota failures must isolate the affected credential")
+					ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+					ctx.Request = httptest.NewRequest(http.MethodPost, path, nil)
+					key, _, apiErr := service.SelectChannelKeyForRequest(ctx, channel, "MODEL_X", nil)
+					require.Nil(t, apiErr)
+					failedKeys := got
+					if scenario.recover {
+						failedKeys = got[:len(got)-1]
+					}
+					assert.NotContains(t, failedKeys, key, "a new request must skip cooling keys")
+					service.FinishChannelKeyProbe(ctx, false)
+					redisServer.FastForward(25 * time.Hour)
+					assert.Empty(t, service.LoadMultiKeyCooldowns(channel.Id, "KEY_A"))
+				} else {
+					assert.Empty(t, service.LoadMultiKeyCooldowns(channel.Id, "KEY_A"), "channel failures must not cool an individual key")
 				}
 				loaded, err := model.GetChannelById(channel.Id, true)
 				require.NoError(t, err)

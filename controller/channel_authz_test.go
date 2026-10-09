@@ -387,17 +387,19 @@ func TestUpdateChannelPersistsExplicitEmptyModels(t *testing.T) {
 	assert.Zero(t, abilityCount)
 }
 
+// TestUpdateMultiKeyChannelPreservesOrResetsKeyStatus verifies key edits restore routing and clear stale health metadata.
 func TestUpdateMultiKeyChannelPreservesOrResetsKeyStatus(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
 
 	createChannel := func() model.Channel {
 		channel := model.Channel{
-			Type:   1,
-			Key:    "saved-key-a\nsaved-key-b",
-			Name:   "multi-key channel",
-			Models: "gpt-4o-mini",
-			Group:  "default",
-			Status: common.ChannelStatusAutoDisabled,
+			Type:      1,
+			Key:       "saved-key-a\nsaved-key-b",
+			Name:      "multi-key channel",
+			Models:    "gpt-4o-mini",
+			Group:     "default",
+			Status:    common.ChannelStatusAutoDisabled,
+			OtherInfo: `{"status_reason":"All keys are disabled","status_time":20}`,
 			ChannelInfo: model.ChannelInfo{
 				IsMultiKey:             true,
 				MultiKeySize:           2,
@@ -426,6 +428,11 @@ func TestUpdateMultiKeyChannelPreservesOrResetsKeyStatus(t *testing.T) {
 		assert.Equal(t, common.ChannelStatusAutoDisabled, updated.ChannelInfo.MultiKeyStatusList[0])
 		assert.Equal(t, common.ChannelStatusAutoDisabled, updated.ChannelInfo.MultiKeyStatusList[1])
 		assert.NotContains(t, updated.ChannelInfo.MultiKeyStatusList, 2)
+		assert.NotContains(t, updated.GetOtherInfo(), "status_reason")
+		assert.NotContains(t, updated.GetOtherInfo(), "status_time")
+		var ability model.Ability
+		require.NoError(t, db.Where("channel_id = ?", channel.Id).First(&ability).Error)
+		assert.True(t, ability.Enabled)
 	})
 
 	t.Run("replace clears old state", func(t *testing.T) {
@@ -443,6 +450,27 @@ func TestUpdateMultiKeyChannelPreservesOrResetsKeyStatus(t *testing.T) {
 		assert.Empty(t, updated.ChannelInfo.MultiKeyStatusList)
 		assert.Empty(t, updated.ChannelInfo.MultiKeyDisabledTime)
 		assert.Empty(t, updated.ChannelInfo.MultiKeyDisabledReason)
+		assert.NotContains(t, updated.GetOtherInfo(), "status_reason")
+		assert.NotContains(t, updated.GetOtherInfo(), "status_time")
+		var ability model.Ability
+		require.NoError(t, db.Where("channel_id = ?", channel.Id).First(&ability).Error)
+		assert.True(t, ability.Enabled)
+	})
+
+	t.Run("explicit replacement of the same keys resets their health", func(t *testing.T) {
+		channel := createChannel()
+		response := updateChannelForTest(t, fmt.Sprintf(
+			`{"id":%d,"key":"saved-key-a\nsaved-key-b","key_mode":"replace"}`, channel.Id,
+		))
+		require.True(t, response.Success, response.Message)
+		var updated model.Channel
+		require.NoError(t, db.First(&updated, channel.Id).Error)
+		assert.Equal(t, common.ChannelStatusEnabled, updated.Status)
+		assert.Empty(t, updated.ChannelInfo.MultiKeyStatusList)
+		assert.Empty(t, updated.ChannelInfo.MultiKeyDisabledReason)
+		assert.Empty(t, updated.ChannelInfo.MultiKeyDisabledTime)
+		assert.NotContains(t, updated.GetOtherInfo(), "status_reason")
+		assert.NotContains(t, updated.GetOtherInfo(), "status_time")
 	})
 }
 

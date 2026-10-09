@@ -1197,10 +1197,16 @@ func UpdateChannel(c *gin.Context) {
 			channel.ChannelInfo.MultiKeyDisabledTime = nil
 			clearMultiKeyTemporaryState = true
 		}
+		channel.OtherInfo = originChannel.OtherInfo
 		channel.RecalculateMultiKeyStatus()
 	}
 	_, modelsProvided := requestData["models"]
-	err = channel.Update(modelsProvided)
+	if clearMultiKeyTemporaryState {
+		// 替换密钥池是显式重置；追加仍保留保存时最新的已有密钥状态。
+		err = channel.UpdateWithHealth(modelsProvided)
+	} else {
+		err = channel.Update(modelsProvided)
+	}
 	if err != nil {
 		common.ApiError(c, err)
 		return

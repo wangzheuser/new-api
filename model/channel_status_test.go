@@ -117,6 +117,81 @@ func TestUpdateChannelStatusReaddsRecoveredChannelToRouteCache(t *testing.T) {
 	assert.True(t, ability.Enabled)
 }
 
+// TestChannelUpdatePreservesLatestHealth covers a health change after an editor loaded the channel.
+func TestChannelUpdatePreservesLatestHealth(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		appendKey       bool
+		manuallyDisable bool
+	}{
+		{"ordinary edit", false, false},
+		{"append key", true, false},
+		{"append after manual channel disable", true, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resetChannelStatusTestTables(t)
+			channel := createChannelStatusTestFixture(t, 7103, common.ChannelStatusEnabled, nil)
+			stale := channel.Snapshot()
+			require.True(t, UpdateChannelStatus(channel.Id, "key-0", common.ChannelStatusAutoDisabled, "expired"))
+			require.True(t, UpdateChannelStatus(channel.Id, "key-1", common.ChannelStatusManuallyDisabled, "operator"))
+			if test.manuallyDisable {
+				require.True(t, UpdateChannelStatus(channel.Id, "", common.ChannelStatusManuallyDisabled, "operator"))
+			}
+			stale.Name = "edited"
+			if test.appendKey {
+				stale.Key += "\nkey-2"
+			}
+			require.NoError(t, stale.Update())
+
+			var saved Channel
+			require.NoError(t, DB.First(&saved, channel.Id).Error)
+			assert.Equal(t, "edited", saved.Name)
+			assert.Equal(t, common.ChannelStatusAutoDisabled, saved.ChannelInfo.MultiKeyStatusList[0])
+			assert.Equal(t, common.ChannelStatusManuallyDisabled, saved.ChannelInfo.MultiKeyStatusList[1])
+			assert.Equal(t, "expired", saved.ChannelInfo.MultiKeyDisabledReason[0])
+			assert.Equal(t, "operator", saved.ChannelInfo.MultiKeyDisabledReason[1])
+			assert.Positive(t, saved.ChannelInfo.MultiKeyDisabledTime[0])
+			assert.Positive(t, saved.ChannelInfo.MultiKeyDisabledTime[1])
+			var ability Ability
+			require.NoError(t, DB.Where("channel_id = ?", channel.Id).First(&ability).Error)
+			assert.Equal(t, test.appendKey && !test.manuallyDisable, ability.Enabled)
+			if test.manuallyDisable {
+				assert.Equal(t, common.ChannelStatusManuallyDisabled, saved.Status)
+				assert.Equal(t, "operator", saved.GetOtherInfo()["status_reason"])
+			} else if test.appendKey {
+				assert.Equal(t, common.ChannelStatusEnabled, saved.Status)
+				assert.NotContains(t, saved.ChannelInfo.MultiKeyStatusList, 2)
+				assert.NotContains(t, saved.GetOtherInfo(), "status_reason")
+				assert.NotContains(t, saved.GetOtherInfo(), "status_time")
+			} else {
+				assert.Equal(t, common.ChannelStatusAutoDisabled, saved.Status)
+			}
+		})
+	}
+}
+
+// TestChannelUpdatePreservesRecoveredHealth prevents an old editor from restoring a cleared failure reason.
+func TestChannelUpdatePreservesRecoveredHealth(t *testing.T) {
+	resetChannelStatusTestTables(t)
+	channel := createChannelStatusTestFixture(t, 7104, common.ChannelStatusAutoDisabled, map[int]int{
+		0: common.ChannelStatusAutoDisabled,
+		1: common.ChannelStatusAutoDisabled,
+	})
+	channel.SetOtherInfo(map[string]interface{}{"status_reason": "All keys are disabled", "status_time": 123})
+	require.NoError(t, DB.Save(channel).Error)
+	stale := channel.Snapshot()
+	require.True(t, UpdateChannelStatus(channel.Id, "key-0", common.ChannelStatusEnabled, ""))
+	stale.Name = "edited after recovery"
+	require.NoError(t, stale.Update())
+	var saved Channel
+	require.NoError(t, DB.First(&saved, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusEnabled, saved.Status)
+	assert.NotContains(t, saved.GetOtherInfo(), "status_reason")
+	assert.NotContains(t, saved.GetOtherInfo(), "status_time")
+	assert.NotContains(t, saved.ChannelInfo.MultiKeyStatusList, 0)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, saved.ChannelInfo.MultiKeyStatusList[1])
+}
+
 // resetChannelStatusTestTables isolates channel status and route-cache test state.
 func resetChannelStatusTestTables(t *testing.T) {
 	t.Helper()

@@ -283,9 +283,22 @@ public_version() { proxy_version; }
                 if runner:
                     # The isolated runner uses the bridge directly; production clients use the stable host port.
                     address = json.loads(docker('inspect', gateway))[0]['NetworkSettings']['Networks'][network]['IPAddress'] + ':3000'
-                with self.assertRaises(urllib.error.HTTPError) as failed:
-                    urllib.request.urlopen('http://' + address + '/api/status', timeout=5)
-                self.assertEqual(failed.exception.code, 502)
+                else:
+                    # Docker can assign a different ephemeral host port after a restart.
+                    address = docker('port', gateway, '3000/tcp')
+                env['INTERNAL_GATEWAY_URL'] = 'http://' + address
+                deadline = time.monotonic() + 15
+                while True:
+                    try:
+                        with urllib.request.urlopen('http://' + address + '/api/status', timeout=2) as response:
+                            self.fail('expected unavailable backend, got HTTP ' + str(response.status))
+                    except urllib.error.HTTPError as failed:
+                        self.assertEqual(failed.code, 502)
+                        failed.close()
+                        break
+                    except OSError as error:
+                        self.assertLess(time.monotonic(), deadline, str(error))
+                        time.sleep(.1)
                 docker('start', blue)
                 wait_version('blue')
                 docker('start', green)
@@ -294,8 +307,6 @@ public_version() { proxy_version; }
                     self.assertLess(time.monotonic(), deadline)
                     time.sleep(.2)
                 # A release that crashes must not block the rollback's admission.
-                if runner:
-                    env['INTERNAL_GATEWAY_URL'] = 'http://' + address
                 controller('switch', '--slot', green, '--version', 'green')
                 docker('stop', green)
                 result = subprocess.run(['bash', '-c', harness, 'fixture', tmp, str(ROOT), 'action_rollback'],
