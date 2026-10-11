@@ -48,6 +48,19 @@ func newAwsInvokeContext(parent context.Context) (context.Context, context.Cance
 	return context.WithTimeout(parent, time.Duration(common.RelayTimeout)*time.Second)
 }
 
+func newAwsInvokeError(requestContext context.Context, err error, operation string) *types.NewAPIError {
+	options := make([]types.NewAPIErrorOptions, 0, 1)
+	if requestContext.Err() != nil {
+		options = append(options, types.ErrOptionWithSkipRetry())
+	}
+	return types.NewOpenAIError(
+		errors.Wrap(err, operation),
+		types.ErrorCodeAwsInvokeError,
+		getAwsErrorStatusCode(err),
+		options...,
+	)
+}
+
 func newAwsClient(c *gin.Context, info *relaycommon.RelayInfo) (*bedrockruntime.Client, error) {
 	httpClient, err := service.GetHttpClientWithProxySettings(info.ChannelSetting.Proxy, info.ChannelSetting)
 	if err != nil {
@@ -221,7 +234,7 @@ func awsHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types
 
 	awsResp, err := a.AwsClient.InvokeModel(ctx, a.AwsReq.(*bedrockruntime.InvokeModelInput))
 	if err != nil {
-		return newAwsInvokeError(requestContext, err, "InvokeModel"), nil
+		return newAwsInvokeError(c.Request.Context(), err, "InvokeModel"), nil
 	}
 
 	claudeInfo := &claude.ClaudeResponseInfo{
@@ -250,7 +263,7 @@ func awsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (
 
 	awsResp, err := a.AwsClient.InvokeModelWithResponseStream(ctx, a.AwsReq.(*bedrockruntime.InvokeModelWithResponseStreamInput))
 	if err != nil {
-		return newAwsInvokeError(requestContext, err, "InvokeModelWithResponseStream"), nil
+		return newAwsInvokeError(c.Request.Context(), err, "InvokeModelWithResponseStream"), nil
 	}
 	stream := awsResp.GetStream()
 	defer stream.Close()
@@ -307,7 +320,7 @@ func handleNovaRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) 
 
 	awsResp, err := a.AwsClient.InvokeModel(ctx, a.AwsReq.(*bedrockruntime.InvokeModelInput))
 	if err != nil {
-		return newAwsInvokeError(requestContext, err, "InvokeModel"), nil
+		return newAwsInvokeError(c.Request.Context(), err, "InvokeModel"), nil
 	}
 
 	// 解析Nova响应

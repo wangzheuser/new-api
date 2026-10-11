@@ -12,6 +12,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -1296,7 +1297,22 @@ func (channel *Channel) GetOtherSettings() dto.ChannelOtherSettings {
 		}
 	}
 	if preset := common.GetAdvancedCustomPreset(channel.Type); preset != nil {
-		setting.AdvancedCustom = preset
+		// The model package keeps its API DTO independent from relaykit; copy the
+		// preset fields across the module boundary explicitly.
+		converted := &dto.AdvancedCustomConfig{Routes: make([]dto.AdvancedCustomRoute, 0, len(preset.Routes))}
+		for _, route := range preset.Routes {
+			convertedRoute := dto.AdvancedCustomRoute{
+				IncomingPath: route.IncomingPath,
+				UpstreamPath: route.UpstreamPath,
+				Converter:    route.Converter,
+				Models:       append([]string(nil), route.Models...),
+			}
+			if route.Auth != nil {
+				convertedRoute.Auth = &dto.AdvancedCustomRouteAuth{Type: route.Auth.Type, Name: route.Auth.Name, Value: route.Auth.Value}
+			}
+			converted.Routes = append(converted.Routes, convertedRoute)
+		}
+		setting.AdvancedCustom = converted
 	}
 	return setting
 }

@@ -1,6 +1,6 @@
 package relayconvert
 
-import "github.com/QuantumNous/new-api/dto"
+import "github.com/QuantumNous/new-api/relaykit/dto"
 
 // nativeClaudeStreamUsage merges sparse message_delta usage without changing client frames.
 func (s *ResponseStreamState) nativeClaudeStreamUsage(response any) *dto.Usage {

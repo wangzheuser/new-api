@@ -214,7 +214,12 @@ func loadOptionsFromDatabase() {
 	for _, option := range options {
 		values[option.Key] = option.Value
 	}
+	passkeyOptions := make(map[string]string)
 	for key, value := range operation_setting.MigrateChannelAutoDisableOptions(values) {
+		if IsPasskeyDomainOption(key) {
+			passkeyOptions[key] = value
+			continue
+		}
 		if err := updateOptionMap(key, value); err != nil {
 			common.SysLog("failed to update option map: " + err.Error())
 		}

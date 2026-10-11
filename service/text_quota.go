@@ -2,7 +2,9 @@ package service
 
 import (
 	"fmt"
+	"math"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -11,12 +13,14 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
+	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 )
@@ -69,7 +73,14 @@ type textQuotaSummary struct {
 	FileSearchCallCount      int
 	AudioInputPrice          float64
 	ImageGenerationCallPrice float64
+	ToolSurchargeItems       []ToolSurchargeItem
 	ToolCallSurchargeQuota   decimal.Decimal
+	FixedPriceBilling        bool
+}
+
+// hasBillableUsage keeps zero-token tool charges and fixed-price settlements billable.
+func (s *textQuotaSummary) hasBillableUsage() bool {
+	return s.FixedPriceBilling || s.TotalTokens > 0 || !s.ToolCallSurchargeQuota.IsZero()
 }
 
 func cacheWriteTokensTotal(summary textQuotaSummary) int {
@@ -218,7 +229,8 @@ func composeTieredTextQuota(relayInfo *relaycommon.RelayInfo, summary textQuotaS
 // calculateTextQuotaSummary expects a usage already remapped by
 // effectiveBillingUsage; PostTextConsumeQuota performs that remap once and shares
 // the result with tiered billing, affinity observation and logging.
-func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage) textQuotaSummary {
+func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, rawUsage any) textQuotaSummary {
+	usage := relayUsage(rawUsage)
 	summary := textQuotaSummary{
 		ModelName:            relayInfo.GetBillingModelName(),
 		TokenName:            ctx.GetString("token_name"),
@@ -390,7 +402,7 @@ func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 	return "openai"
 }
 
-func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) error {
+func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []*common.Message) error {
 	if relayInfo != nil && relayInfo.IsStream && relayInfo.StreamStatus != nil {
 		if relayInfo.StreamStatus.GetBillingFinalization() == "" {
 			relayInfo.StreamStatus.SetBillingFinalization(relaycommon.BillingSettled)
@@ -407,11 +419,13 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		extraContent = append(extraContent, common.NewMessage("Upstream returned no usage"))
 	}
 	if originUsage != nil {
-		ObserveChannelAffinityUsageCacheByRelayFormat(ctx, billingUsage, relayInfo.GetFinalRequestRelayFormat())
+		ObserveChannelAffinityUsageCacheByRelayFormat(ctx, rootUsage(billingUsage), relayInfo.GetFinalRequestRelayFormat())
 	}
 
-	billingUsage = applyContextTruncationBilling(ctx, relayInfo, billingUsage)
-	billingUsage = applyCacheUsageSimulation(ctx, relayInfo, billingUsage)
+	rootBillingUsage := rootUsage(billingUsage)
+	rootBillingUsage = applyContextTruncationBilling(ctx, relayInfo, rootBillingUsage)
+	rootBillingUsage = applyCacheUsageSimulation(ctx, relayInfo, rootBillingUsage)
+	billingUsage = relayUsage(rootBillingUsage)
 	adminRejectReason := common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason)
 	summary := calculateTextQuotaSummary(ctx, relayInfo, billingUsage)
 
@@ -454,14 +468,14 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	}
 
 	if summary.TotalTokens == 0 {
-		extraContent = append(extraContent, "上游没有返回计费信息，无法扣费（可能是上游超时）")
+		extraContent = append(extraContent, common.NewMessage("上游没有返回计费信息，无法扣费（可能是上游超时）"))
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
 	}
 
 	settleErr := SettleBilling(ctx, relayInfo, summary.Quota)
 	if settleErr != nil {
 		logger.LogError(ctx, "error settling billing: "+settleErr.Error())
-		extraContent = append(extraContent, "计费结算失败，保留预扣待对账")
+		extraContent = append(extraContent, common.NewMessage("计费结算失败，保留预扣待对账"))
 		if relayInfo.StreamStatus != nil {
 			relayInfo.StreamStatus.MarkBillingFailed()
 		}
@@ -557,7 +571,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		ModelName:           logModel,
 		TokenName:           summary.TokenName,
 		Quota:               summary.Quota,
-		Content:             logContent,
+		Content:             extraContent,
 		TokenId:             relayInfo.TokenId,
 		UseTimeSeconds:      int(summary.UseTimeSeconds),
 		IsStream:            relayInfo.IsStream,
@@ -623,16 +637,16 @@ func FinalizeTextBilling(
 	if finalization == relaycommon.BillingSettledPartial {
 		usage := finalUsage
 		if partial, ok, _ := status.PartialUsageSnapshot(); ok {
-			usage = &partial
+			usage = relayUsage(&partial)
 		}
 		if usage == nil {
 			usage = &dto.Usage{
 				PromptTokens: relayInfo.GetEstimatePromptTokens(),
 				TotalTokens:  relayInfo.GetEstimatePromptTokens(),
 			}
-			status.ObservePartialUsage(usage, false, true)
+			status.ObservePartialUsage(rootUsage(usage), false, true)
 		}
-		err := PostTextConsumeQuota(ctx, relayInfo, usage, []string{"部分流失败结算"})
+		err := PostTextConsumeQuota(ctx, relayInfo, usage, []*common.Message{common.NewMessage("部分流失败结算")})
 		return status.GetBillingFinalization(), err
 	}
 

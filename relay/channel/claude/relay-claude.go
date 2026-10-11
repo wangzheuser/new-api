@@ -435,7 +435,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		return types.WithClaudeError(*claudeError, http.StatusInternalServerError)
 	}
 	info.MergeResponseSemantics(types.RelayFormatClaude, data)
-	maybeMarkClaudeRefusal(c, claudeResponse.StopReason)
+	maybeMarkClaudeRefusal(c, info, claudeResponse.StopReason)
 	if claudeInfo.Usage == nil {
 		claudeInfo.Usage = &dto.Usage{}
 	}
@@ -480,7 +480,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		}
 	case types.RelayFormatClaude:
 		responseData = data
-	case types.RelayFormatOpenAIResponses, types.RelayFormatGemini:
+	case types.RelayFormatGemini:
 		converted, convertErr := relayconvert.ConvertResponse(c, info, info.RelayFormat, &claudeResponse)
 		if convertErr != nil {
 			return types.NewError(convertErr, types.ErrorCodeBadResponseBody)

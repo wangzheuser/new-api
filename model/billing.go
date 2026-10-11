@@ -68,9 +68,9 @@ func ApplyBillingDelta(userId, tokenId int, tokenKey string, subscriptionId, del
 			}
 		}
 		if tokenId > 0 {
-			if err := cacheDecrTokenQuota(tokenKey, int64(delta)); err != nil {
+			if _, err := cacheApplyTokenQuotaDelta(tokenId, tokenKey, -int64(delta)); err != nil {
 				common.SysError("billing token cache update failed: " + err.Error())
-				_ = cacheDeleteToken(tokenKey)
+				_ = invalidateTokenCacheForMutation(tokenKey)
 			}
 		}
 	}
@@ -119,9 +119,9 @@ func RefundSubscriptionBilling(requestID string, userID, tokenID int, tokenKey s
 		return err
 	}
 	if common.RedisEnabled && tokenID > 0 {
-		if err := cacheIncrTokenQuota(tokenKey, cacheRefund); err != nil {
+		if _, err := cacheApplyTokenQuotaDelta(tokenID, tokenKey, cacheRefund); err != nil {
 			common.SysError("billing token refund cache update failed: " + err.Error())
-			_ = cacheDeleteToken(tokenKey)
+			_ = invalidateTokenCacheForMutation(tokenKey)
 		}
 	}
 	return nil

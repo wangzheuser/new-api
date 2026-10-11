@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayhelper "github.com/QuantumNous/new-api/relay/helper"
+	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -34,7 +35,7 @@ func resolveSystemPrompt(info *relaycommon.RelayInfo) (string, bool) {
 	if info == nil {
 		return "", false
 	}
-	prompt, prepend, _, _ := model_setting.ResolveSystemPrompt(info.ChannelSetting,
+	prompt, prepend, _, _ := model_setting.ResolveSystemPrompt(rootChannelSettings(info.ChannelSetting),
 		info.GetRequestedModelName(),
 		info.GetAttemptModelName(),
 		info.IsContextFallbackActive(),
@@ -56,12 +57,10 @@ func PreviewSystemPromptTokens(c *gin.Context, info *relaycommon.RelayInfo, requ
 	previewInfo.OriginModelName = attemptModel
 	previewInfo.ContextFallback = nil
 	previewInfo.ChannelMeta = &relaycommon.ChannelMeta{
-		ChannelSetting:    settings,
+		ChannelSetting:    relayChannelSettings(settings),
 		UpstreamModelName: attemptModel,
 	}
-	if err := relayhelper.ModelMappedHelper(c, &previewInfo, requestCopy); err != nil {
-		return SystemPromptPreview{}, types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
-	}
+	requestCopy.SetModelName(attemptModel)
 
 	prompt, prepend, source, matchedModel := model_setting.ResolveSystemPrompt(settings,
 		info.GetRequestedModelName(),
@@ -201,7 +200,7 @@ func markSystemPromptApplied(c *gin.Context, info *relaycommon.RelayInfo) {
 	if c == nil || info == nil {
 		return
 	}
-	_, _, source, modelName := model_setting.ResolveSystemPrompt(info.ChannelSetting,
+	_, _, source, modelName := model_setting.ResolveSystemPrompt(rootChannelSettings(info.ChannelSetting),
 		info.GetRequestedModelName(),
 		info.GetAttemptModelName(),
 		info.IsContextFallbackActive(),
@@ -350,4 +349,22 @@ func applyGeminiSystemPrompt(c *gin.Context, request *dto.GeminiChatRequest, sys
 	}
 	request.SystemInstructions.Parts = append([]dto.GeminiPart{{Text: systemPrompt}}, request.SystemInstructions.Parts...)
 	return true
+}
+
+func rootChannelSettings(settings kitdto.ChannelSettings) dto.ChannelSettings {
+	var converted dto.ChannelSettings
+	data, err := common.Marshal(settings)
+	if err == nil {
+		_ = common.Unmarshal(data, &converted)
+	}
+	return converted
+}
+
+func relayChannelSettings(settings dto.ChannelSettings) kitdto.ChannelSettings {
+	var converted kitdto.ChannelSettings
+	data, err := common.Marshal(settings)
+	if err == nil {
+		_ = common.Unmarshal(data, &converted)
+	}
+	return converted
 }

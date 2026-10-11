@@ -17,7 +17,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
+	rootdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
@@ -25,6 +25,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -371,13 +372,18 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, op
 	}
 	request := buildTestRequest(testModel, requestEndpointType, channel, options)
 	if directNativeProbe {
-		request, err = buildProtocolProbeRequest(testModel, constant.EndpointType(endpointType), options)
+		var probeRequest rootdto.Request
+		probeRequest, err = buildProtocolProbeRequest(testModel, constant.EndpointType(endpointType), options)
 		if err != nil {
 			return testResult{
 				context:     c,
 				localErr:    err,
 				newAPIError: types.NewError(err, types.ErrorCodeInvalidRequest),
 			}
+		}
+		request, err = relayRequestFromRoot(probeRequest)
+		if err != nil {
+			return testResult{context: c, localErr: err, newAPIError: types.NewError(err, types.ErrorCodeConvertRequestFailed)}
 		}
 	}
 	if options.requireSystemPromptSupport {
@@ -478,7 +484,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, op
 		info.FinalRequestRelayFormat = relayFormat
 	}
 	if options.applySystemPrompt {
-		if apiErr := relay.ApplySystemPromptForRequest(c, info, request); apiErr != nil {
+		if apiErr := applySystemPromptForRelayRequest(c, info, request); apiErr != nil {
 			return testResult{
 				context:     c,
 				localErr:    apiErr,
@@ -819,13 +825,103 @@ func settleTestQuota(info *relaycommon.RelayInfo, priceData types.PriceData, usa
 	return int(priceData.ModelPrice * common.QuotaPerUnit), nil
 }
 
-func buildTestLogOther(c *gin.Context, info *relaycommon.RelayInfo, priceData types.PriceData, usage *dto.Usage, tieredResult *billingexpr.TieredResult) map[string]interface{} {
+func buildTestLogOther(c *gin.Context, info *relaycommon.RelayInfo, priceData types.PriceData, usage *dto.Usage, tieredResult *billingexpr.TieredResult) *model.LogOther {
 	other := service.GenerateTextOtherInfo(c, info, priceData.ModelRatio, priceData.GroupRatioInfo.GroupRatio, priceData.CompletionRatio,
 		usage.PromptTokensDetails.CachedTokens, priceData.CacheRatio, priceData.ModelPrice, priceData.GroupRatioInfo.GroupSpecialRatio)
 	if tieredResult != nil {
 		service.InjectTieredBillingInfo(other, info, tieredResult)
 	}
 	return other
+}
+
+// relayRequestFromRoot crosses the legacy probe DTO boundary through JSON.
+func relayRequestFromRoot(request rootdto.Request) (dto.Request, error) {
+	data, err := common.Marshal(request)
+	if err != nil {
+		return nil, err
+	}
+	var converted dto.Request
+	switch request.(type) {
+	case *rootdto.GeneralOpenAIRequest:
+		converted = &dto.GeneralOpenAIRequest{}
+	case *rootdto.OpenAIResponsesRequest:
+		converted = &dto.OpenAIResponsesRequest{}
+	case *rootdto.OpenAIResponsesCompactionRequest:
+		converted = &dto.OpenAIResponsesCompactionRequest{}
+	case *rootdto.ClaudeRequest:
+		converted = &dto.ClaudeRequest{}
+	case *rootdto.GeminiChatRequest:
+		converted = &dto.GeminiChatRequest{}
+	default:
+		return nil, fmt.Errorf("unsupported protocol probe request type %T", request)
+	}
+	if err := common.Unmarshal(data, converted); err != nil {
+		return nil, err
+	}
+	return converted, nil
+}
+
+func rootRequestFromRelay(request dto.Request) (rootdto.Request, error) {
+	data, err := common.Marshal(request)
+	if err != nil {
+		return nil, err
+	}
+	var converted rootdto.Request
+	switch request.(type) {
+	case *dto.GeneralOpenAIRequest:
+		converted = &rootdto.GeneralOpenAIRequest{}
+	case *dto.OpenAIResponsesRequest:
+		converted = &rootdto.OpenAIResponsesRequest{}
+	case *dto.OpenAIResponsesCompactionRequest:
+		converted = &rootdto.OpenAIResponsesCompactionRequest{}
+	case *dto.ClaudeRequest:
+		converted = &rootdto.ClaudeRequest{}
+	case *dto.GeminiChatRequest:
+		converted = &rootdto.GeminiChatRequest{}
+	default:
+		return nil, fmt.Errorf("unsupported relay request type %T", request)
+	}
+	if err := common.Unmarshal(data, converted); err != nil {
+		return nil, err
+	}
+	return converted, nil
+}
+
+// applySystemPromptForRelayRequest reuses the host prompt policy for relaykit requests.
+func applySystemPromptForRelayRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.Request) *types.NewAPIError {
+	data, err := common.Marshal(request)
+	if err != nil {
+		return types.NewError(err, types.ErrorCodeJsonMarshalFailed)
+	}
+	var rootRequest rootdto.Request
+	switch request.(type) {
+	case *dto.GeneralOpenAIRequest:
+		rootRequest = &rootdto.GeneralOpenAIRequest{}
+	case *dto.OpenAIResponsesRequest:
+		rootRequest = &rootdto.OpenAIResponsesRequest{}
+	case *dto.OpenAIResponsesCompactionRequest:
+		rootRequest = &rootdto.OpenAIResponsesCompactionRequest{}
+	case *dto.ClaudeRequest:
+		rootRequest = &rootdto.ClaudeRequest{}
+	case *dto.GeminiChatRequest:
+		rootRequest = &rootdto.GeminiChatRequest{}
+	default:
+		return nil
+	}
+	if err := common.Unmarshal(data, rootRequest); err != nil {
+		return types.NewError(err, types.ErrorCodeJsonMarshalFailed)
+	}
+	if apiErr := relay.ApplySystemPromptForRequest(c, info, rootRequest); apiErr != nil {
+		return apiErr
+	}
+	updated, err := common.Marshal(rootRequest)
+	if err != nil {
+		return types.NewError(err, types.ErrorCodeJsonMarshalFailed)
+	}
+	if err := common.Unmarshal(updated, request); err != nil {
+		return types.NewError(err, types.ErrorCodeJsonMarshalFailed)
+	}
+	return nil
 }
 
 func coerceTestUsage(usageAny any, isStream bool, estimatePromptTokens int) (*dto.Usage, error) {
@@ -2069,7 +2165,7 @@ func performChannelTests(ctx context.Context, targets []channelTestTarget, testU
 			if channel.ChannelInfo.IsMultiKey {
 				service.HandleMultiKeyFailure(channel, common.GetContextKeyInt(result.context, constant.ContextKeyChannelMultiKeyIndex), common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), newAPIError, common.GetContextKeyString(result.context, constant.ContextKeyChannelHealthModel))
 			} else if service.ShouldDisableChannel(newAPIError) {
-				processChannelError(result.context, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+				processChannelError(result.context, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, nil)
 			} else {
 				service.RecordChannelUpstreamErrorAsync(channel, newAPIError, "", common.GetContextKeyString(result.context, constant.ContextKeyChannelHealthModel))
 			}

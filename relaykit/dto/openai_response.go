@@ -364,17 +364,160 @@ type IncompleteDetails struct {
 }
 
 type ResponsesOutput struct {
-	Type      string                   `json:"type"`
-	ID        string                   `json:"id"`
-	Status    string                   `json:"status"`
-	Role      string                   `json:"role"`
-	Content   []ResponsesOutputContent `json:"content"`
-	Summary   []ResponsesOutputContent `json:"summary,omitempty"`
-	Quality   string                   `json:"quality"`
-	Size      string                   `json:"size"`
-	CallId    string                   `json:"call_id,omitempty"`
-	Name      string                   `json:"name,omitempty"`
-	Arguments json.RawMessage          `json:"arguments,omitempty"`
+	Type                string                          `json:"type"`
+	ID                  string                          `json:"id"`
+	Status              string                          `json:"status"`
+	Role                string                          `json:"role"`
+	Content             []ResponsesOutputContent        `json:"content"`
+	Summary             []ResponsesReasoningSummaryPart `json:"summary,omitempty"`
+	Quality             string                          `json:"quality"`
+	Size                string                          `json:"size"`
+	Result              string                          `json:"result,omitempty"`
+	CallId              string                          `json:"call_id,omitempty"`
+	Name                string                          `json:"name,omitempty"`
+	Namespace           string                          `json:"namespace,omitempty"`
+	Arguments           json.RawMessage                 `json:"arguments,omitempty"`
+	Input               json.RawMessage                 `json:"input,omitempty"`
+	Action              json.RawMessage                 `json:"action,omitempty"`
+	Queries             json.RawMessage                 `json:"queries,omitempty"`
+	Results             json.RawMessage                 `json:"results,omitempty"`
+	Sources             json.RawMessage                 `json:"sources,omitempty"`
+	Code                json.RawMessage                 `json:"code,omitempty"`
+	Outputs             json.RawMessage                 `json:"outputs,omitempty"`
+	ContainerID         string                          `json:"container_id,omitempty"`
+	PendingSafetyChecks json.RawMessage                 `json:"pending_safety_checks,omitempty"`
+	Caller              json.RawMessage                 `json:"caller,omitempty"`
+	ServerLabel         string                          `json:"server_label,omitempty"`
+	Output              json.RawMessage                 `json:"output,omitempty"`
+	ItemError           json.RawMessage                 `json:"error,omitempty"`
+	ApprovalRequestID   string                          `json:"approval_request_id,omitempty"`
+	MCPTools            json.RawMessage                 `json:"tools,omitempty"`
+}
+
+// MarshalJSON keeps hosted-tool variants within their protocol-specific
+// schemas. ResponsesOutput also represents messages, images, and function
+// calls, whose fields must not leak into web_search_call, mcp_call, or
+// custom_tool_call items.
+func (r ResponsesOutput) MarshalJSON() ([]byte, error) {
+	switch r.Type {
+	case "custom_tool_call":
+		input := r.Input
+		if len(input) == 0 {
+			input = json.RawMessage(`""`)
+		}
+		return kitutil.Marshal(struct {
+			Type      string          `json:"type"`
+			ID        string          `json:"id,omitempty"`
+			Status    string          `json:"status,omitempty"`
+			CallID    string          `json:"call_id"`
+			Name      string          `json:"name"`
+			Namespace string          `json:"namespace,omitempty"`
+			Input     json.RawMessage `json:"input"`
+		}{Type: r.Type, ID: r.ID, Status: r.Status, CallID: r.CallId, Name: r.Name, Namespace: r.Namespace, Input: input})
+	case "web_search_call":
+		return kitutil.Marshal(struct {
+			Type   string          `json:"type"`
+			ID     string          `json:"id"`
+			Status string          `json:"status,omitempty"`
+			Action json.RawMessage `json:"action,omitempty"`
+		}{Type: r.Type, ID: r.ID, Status: r.Status, Action: r.Action})
+	case "mcp_call":
+		return kitutil.Marshal(struct {
+			Type              string          `json:"type"`
+			ID                string          `json:"id"`
+			Name              string          `json:"name"`
+			ServerLabel       string          `json:"server_label"`
+			Arguments         json.RawMessage `json:"arguments"`
+			Status            string          `json:"status,omitempty"`
+			Output            json.RawMessage `json:"output,omitempty"`
+			Error             json.RawMessage `json:"error,omitempty"`
+			ApprovalRequestID string          `json:"approval_request_id,omitempty"`
+		}{
+			Type:              r.Type,
+			ID:                r.ID,
+			Name:              r.Name,
+			ServerLabel:       r.ServerLabel,
+			Arguments:         r.Arguments,
+			Status:            r.Status,
+			Output:            r.Output,
+			Error:             r.ItemError,
+			ApprovalRequestID: r.ApprovalRequestID,
+		})
+	default:
+		type responsesOutputAlias ResponsesOutput
+		return kitutil.Marshal(responsesOutputAlias(r))
+	}
+}
+
+// NormalizeResponsesWebSearchAction validates and canonicalizes the current
+// Responses web_search_call action union. Claude emits {"query": ...}; the
+// Responses representation additionally requires a discriminator.
+func NormalizeResponsesWebSearchAction(raw json.RawMessage) (json.RawMessage, error) {
+	var action struct {
+		Type    string          `json:"type"`
+		Query   string          `json:"query"`
+		Queries []string        `json:"queries"`
+		Sources json.RawMessage `json:"sources"`
+		URL     string          `json:"url"`
+		Pattern string          `json:"pattern"`
+	}
+	if err := kitutil.Unmarshal(raw, &action); err != nil {
+		return nil, fmt.Errorf("decode Responses web-search action: %w", err)
+	}
+	action.Type = strings.TrimSpace(action.Type)
+	action.Query = strings.TrimSpace(action.Query)
+	action.URL = strings.TrimSpace(action.URL)
+	action.Pattern = strings.TrimSpace(action.Pattern)
+	for index := range action.Queries {
+		action.Queries[index] = strings.TrimSpace(action.Queries[index])
+		if action.Queries[index] == "" {
+			return nil, fmt.Errorf("Responses web-search action queries[%d] must not be empty", index)
+		}
+	}
+	if action.Type == "" && (action.Query != "" || len(action.Queries) > 0) {
+		action.Type = "search"
+	}
+
+	var canonical any
+	switch action.Type {
+	case "search":
+		if action.Query == "" && len(action.Queries) == 0 {
+			return nil, fmt.Errorf("Responses web-search action %q requires query or queries", action.Type)
+		}
+		if len(action.Sources) > 0 && kitutil.GetJsonType(action.Sources) != "array" && kitutil.GetJsonType(action.Sources) != "null" {
+			return nil, fmt.Errorf("Responses web-search action sources must be an array")
+		}
+		canonical = struct {
+			Type    string          `json:"type"`
+			Query   string          `json:"query,omitempty"`
+			Queries []string        `json:"queries,omitempty"`
+			Sources json.RawMessage `json:"sources,omitempty"`
+		}{Type: action.Type, Query: action.Query, Queries: action.Queries, Sources: action.Sources}
+	case "open_page":
+		if action.URL == "" {
+			return nil, fmt.Errorf("Responses web-search action %q requires url", action.Type)
+		}
+		canonical = struct {
+			Type string `json:"type"`
+			URL  string `json:"url"`
+		}{Type: action.Type, URL: action.URL}
+	case "find", "find_in_page":
+		if action.URL == "" || action.Pattern == "" {
+			return nil, fmt.Errorf("Responses web-search action %q requires url and pattern", action.Type)
+		}
+		canonical = struct {
+			Type    string `json:"type"`
+			URL     string `json:"url"`
+			Pattern string `json:"pattern"`
+		}{Type: "find_in_page", URL: action.URL, Pattern: action.Pattern}
+	default:
+		return nil, fmt.Errorf("unsupported Responses web-search action type %q", action.Type)
+	}
+	encoded, err := kitutil.Marshal(canonical)
+	if err != nil {
+		return nil, fmt.Errorf("encode Responses web-search action: %w", err)
+	}
+	return encoded, nil
 }
 
 // ArgumentsString returns function call arguments in the string form expected by Chat Completions.
@@ -423,14 +566,22 @@ const (
 
 // ResponsesStreamResponse 用于处理 /v1/responses 流式响应
 type ResponsesStreamResponse struct {
-	Type     string                   `json:"type"`
-	Response *OpenAIResponsesResponse `json:"response,omitempty"`
-	Delta    string                   `json:"delta,omitempty"`
-	Item     *ResponsesOutput         `json:"item,omitempty"`
-	Error    any                      `json:"error,omitempty"`
-	Code     any                      `json:"code,omitempty"`
-	Message  string                   `json:"message,omitempty"`
-	Param    any                      `json:"param,omitempty"`
+	Type            string                   `json:"type"`
+	Response        *OpenAIResponsesResponse `json:"response,omitempty"`
+	Code            any                      `json:"code,omitempty"`
+	Message         string                   `json:"message,omitempty"`
+	Param           any                      `json:"param,omitempty"`
+	Delta           string                   `json:"delta,omitempty"`
+	Arguments       *string                  `json:"arguments,omitempty"`
+	Input           *string                  `json:"input,omitempty"`
+	Name            string                   `json:"name,omitempty"`
+	Text            *string                  `json:"text,omitempty"`
+	Item            *ResponsesOutput         `json:"item,omitempty"`
+	Error           any                      `json:"error,omitempty"`
+	SequenceNumber  *int                     `json:"sequence_number,omitempty"`
+	Annotation      json.RawMessage          `json:"annotation,omitempty"`
+	AnnotationIndex *int                     `json:"annotation_index,omitempty"`
+	Obfuscation     string                   `json:"obfuscation,omitempty"`
 	// - response.function_call_arguments.delta
 	// - response.function_call_arguments.done
 	// - response.custom_tool_call_input.delta
@@ -442,7 +593,6 @@ type ResponsesStreamResponse struct {
 	Part         *ResponsesReasoningSummaryPart `json:"part,omitempty"`
 }
 
-// GetOpenAIError extracts an OpenAI error from Responses stream terminal events.
 func (r *ResponsesStreamResponse) GetOpenAIError() *types.OpenAIError {
 	if r == nil {
 		return nil
@@ -458,11 +608,7 @@ func (r *ResponsesStreamResponse) GetOpenAIError() *types.OpenAIError {
 	if r.Message == "" && r.Code == nil {
 		return nil
 	}
-	openAIError := &types.OpenAIError{
-		Message: r.Message,
-		Type:    "upstream_error",
-		Code:    r.Code,
-	}
+	openAIError := &types.OpenAIError{Message: r.Message, Type: "upstream_error", Code: r.Code}
 	if param, ok := r.Param.(string); ok {
 		openAIError.Param = param
 	}

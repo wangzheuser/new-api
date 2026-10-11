@@ -28,16 +28,57 @@ const (
 	MsgBatchTooMany      = "common.batch_too_many"
 )
 
+// Channel notices
+const (
+	MsgChannelUpstreamUpdateNotifySubject   = "channel.upstream_update_notify_subject"
+	MsgChannelUpstreamUpdateSummary         = "channel.upstream_update_summary"
+	MsgChannelUpstreamUpdateChangedChannels = "channel.upstream_update_changed_channels"
+	MsgChannelUpstreamUpdateMoreChannels    = "channel.upstream_update_more_channels"
+	MsgChannelUpstreamUpdateAddedModels     = "channel.upstream_update_added_models"
+	MsgChannelUpstreamUpdateRemovedModels   = "channel.upstream_update_removed_models"
+	MsgChannelUpstreamUpdateFailedChannels  = "channel.upstream_update_failed_channels"
+	MsgChannelUpstreamUpdateMoreOmitted     = "channel.upstream_update_more_omitted"
+)
+
 // Auth middleware messages
 const (
-	MsgAuthNotLoggedIn           = "auth.not_logged_in"
-	MsgAuthAccessTokenInvalid    = "auth.access_token_invalid"
-	MsgAuthUserInfoInvalid       = "auth.user_info_invalid"
-	MsgAuthUserIdNotProvided     = "auth.user_id_not_provided"
-	MsgAuthUserIdFormatError     = "auth.user_id_format_error"
-	MsgAuthUserIdMismatch        = "auth.user_id_mismatch"
-	MsgAuthUserBanned            = "auth.user_banned"
-	MsgAuthInsufficientPrivilege = "auth.insufficient_privilege"
+	MsgAuthNotLoggedIn            = "auth.not_logged_in"
+	MsgAuthClientIPUnresolved     = "auth.client_ip_unresolved"
+	MsgAuthTokenIPNotAllowed      = "auth.token_ip_not_allowed"
+	MsgAuthTokenGroupForbidden    = "auth.token_group_forbidden"
+	MsgAuthTokenGroupDeprecated   = "auth.token_group_deprecated"
+	MsgAuthChannelSelectForbidden = "auth.channel_select_forbidden"
+	MsgAuthAccessTokenInvalid     = "auth.access_token_invalid"
+	MsgAuthUserInfoInvalid        = "auth.user_info_invalid"
+	MsgAuthUserIdNotProvided      = "auth.user_id_not_provided"
+	MsgAuthUserIdFormatError      = "auth.user_id_format_error"
+	MsgAuthUserIdMismatch         = "auth.user_id_mismatch"
+	MsgAuthUserBanned             = "auth.user_banned"
+	MsgAuthInsufficientPrivilege  = "auth.insufficient_privilege"
+)
+
+// Email verification messages
+const (
+	MsgEmailVerificationSubject       = "email.verification.subject"
+	MsgEmailVerificationGreeting      = "email.verification.greeting"
+	MsgEmailVerificationCode          = "email.verification.code"
+	MsgEmailVerificationValidity      = "email.verification.validity"
+	MsgEmailPasswordResetSubject      = "email.password_reset.subject"
+	MsgEmailPasswordResetGreeting     = "email.password_reset.greeting"
+	MsgEmailPasswordResetLink         = "email.password_reset.link"
+	MsgEmailPasswordResetLinkFallback = "email.password_reset.link_fallback"
+	MsgEmailPasswordResetValidity     = "email.password_reset.validity"
+)
+
+// Relay billing messages
+const (
+	MsgRelayModelPriceNotConfigured      = "relay.model_price_not_configured"
+	MsgRelayModelPriceNotConfiguredAdmin = "relay.model_price_not_configured_admin"
+	MsgRelayGroupSaturated               = "relay.group_saturated"
+	MsgRelayGroupUpstreamSaturated       = "relay.group_upstream_saturated"
+	MsgRelayRetryGetChannelFailed        = "relay.retry_get_channel_failed"
+	MsgRelayRetryNoAvailableChannel      = "relay.retry_no_available_channel"
+	MsgRelayAccessTokenUnsupported       = "relay.access_token_unsupported"
 )
 
 // Token related messages
@@ -138,13 +179,25 @@ const (
 	MsgUserImpersonationExistingSession = "user.impersonation_existing_session"
 )
 
+const (
+	MsgChannelNotifyDisabledSubject    = "channel.notify_disabled_subject"
+	MsgChannelNotifyDisabledContent    = "channel.notify_disabled_content"
+	MsgNotifyQuotaLowTitle             = "notify.quota_low_title"
+	MsgNotifySubscriptionQuotaLowTitle = "notify.subscription_quota_low_title"
+	MsgNotifyQuotaLowBark              = "notify.quota_low_bark"
+	MsgNotifyQuotaLowGotify            = "notify.quota_low_gotify"
+	MsgNotifyQuotaLowEmail             = "notify.quota_low_email"
+)
+
 // Quota related messages
 const (
-	MsgQuotaNegative        = "quota.negative"
-	MsgQuotaExceedMax       = "quota.exceed_max"
-	MsgQuotaInsufficient    = "quota.insufficient"
-	MsgQuotaWarningInvalid  = "quota.warning_invalid"
-	MsgQuotaThresholdGtZero = "quota.threshold_gt_zero"
+	MsgQuotaNegative               = "quota.negative"
+	MsgQuotaExceedMax              = "quota.exceed_max"
+	MsgQuotaInsufficient           = "quota.insufficient"
+	MsgQuotaUserInsufficient       = "quota.user_insufficient"
+	MsgQuotaPreConsumeInsufficient = "quota.pre_consume_insufficient"
+	MsgQuotaWarningInvalid         = "quota.warning_invalid"
+	MsgQuotaThresholdGtZero        = "quota.threshold_gt_zero"
 )
 
 // Subscription related messages

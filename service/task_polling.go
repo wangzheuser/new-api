@@ -18,6 +18,7 @@ import (
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relaydto "github.com/QuantumNous/new-api/relaykit/dto"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/samber/lo"
@@ -31,6 +32,20 @@ type TaskPollingAdaptor interface {
 	// AdjustBillingOnComplete 在任务到达终态（成功/失败）时由轮询循环调用。
 	// 返回正数触发差额结算（补扣/退还），返回 0 保持预扣费金额不变。
 	AdjustBillingOnComplete(task *model.Task, taskResult *relaycommon.TaskInfo) int
+}
+
+// relayChannelSettings crosses the root DTO and relaykit module boundary using
+// their shared JSON contract, preserving fields without coupling the modules.
+func relayChannelSettings(settings taskdto.ChannelSettings) (relaydto.ChannelSettings, error) {
+	encoded, err := common.Marshal(settings)
+	if err != nil {
+		return relaydto.ChannelSettings{}, err
+	}
+	var converted relaydto.ChannelSettings
+	if err := common.Unmarshal(encoded, &converted); err != nil {
+		return relaydto.ChannelSettings{}, err
+	}
+	return converted, nil
 }
 
 type BatchTaskPollingAdaptor interface {
@@ -263,7 +278,12 @@ func updateBatchTasks(ctx context.Context, adaptor BatchTaskPollingAdaptor, chan
 		}
 		return err
 	}
-	proxy := ch.GetSetting().Proxy
+	channelSetting := ch.GetSetting()
+	proxy := channelSetting.Proxy
+	relaySetting, err := relayChannelSettings(channelSetting)
+	if err != nil {
+		return err
+	}
 	baseURL := ch.GetBaseURL()
 	if baseURL == "" {
 		baseURL = constant.GetChannelBaseURL(ch.Type)
@@ -277,7 +297,7 @@ func updateBatchTasks(ctx context.Context, adaptor BatchTaskPollingAdaptor, chan
 	// The channel type tells plugin adaptors whether the upstream is another
 	// New API gateway, the same signal submission derives from the request.
 	info := &relaycommon.RelayInfo{}
-	info.ChannelMeta = &relaycommon.ChannelMeta{ChannelType: ch.Type, ChannelId: ch.Id, ChannelBaseUrl: baseURL, ChannelSetting: ch.GetSetting()}
+	info.ChannelMeta = &relaycommon.ChannelMeta{ChannelType: ch.Type, ChannelId: ch.Id, ChannelBaseUrl: baseURL, ChannelSetting: relaySetting}
 	info.ApiKey = ch.Key
 	adaptor.Init(info)
 	resp, err := adaptor.FetchBatchTasks(baseURL, ch.Key, tasks, proxy)
@@ -447,12 +467,16 @@ func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, chann
 	if adaptor == nil {
 		return fmt.Errorf("video adaptor not found")
 	}
+	relaySetting, err := relayChannelSettings(cacheGetChannel.GetSetting())
+	if err != nil {
+		return err
+	}
 	info := &relaycommon.RelayInfo{}
 	info.ChannelMeta = &relaycommon.ChannelMeta{
 		ChannelType:    cacheGetChannel.Type,
 		ChannelId:      cacheGetChannel.Id,
 		ChannelBaseUrl: cacheGetChannel.GetBaseURL(),
-		ChannelSetting: cacheGetChannel.GetSetting(),
+		ChannelSetting: relaySetting,
 	}
 	info.ApiKey = cacheGetChannel.Key
 	adaptor.Init(info)

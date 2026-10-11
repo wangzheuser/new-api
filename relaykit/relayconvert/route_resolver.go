@@ -1,6 +1,6 @@
 package relayconvert
 
-import "github.com/QuantumNous/new-api/types"
+import "github.com/QuantumNous/new-api/relaykit/types"
 
 // TextRoute describes a complete request and response conversion route.
 type TextRoute struct {

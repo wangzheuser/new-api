@@ -282,16 +282,7 @@ func ExtractReasoningTextFromResponses(resp *dto.OpenAIResponsesResponse) string
 		if out.Type != responsesOutputTypeReasoning {
 			continue
 		}
-		for _, summary := range out.Summary {
-			if summary.Text != "" {
-				sb.WriteString(summary.Text)
-			}
-		}
-		for _, c := range out.Content {
-			if c.Text != "" {
-				sb.WriteString(c.Text)
-			}
-		}
+		appendSeparatedText(&sb, reasoningOutputText(&out))
 	}
 	return sb.String()
 }
@@ -301,20 +292,10 @@ func reasoningOutputText(output *dto.ResponsesOutput) string {
 		return ""
 	}
 	var text strings.Builder
-	hasContentText := false
-	for _, part := range output.Content {
-		if part.Text != "" {
-			hasContentText = true
-			break
-		}
-	}
-	if hasContentText {
-		for _, part := range output.Content {
-			appendSeparatedText(&text, part.Text)
-		}
-		return text.String()
-	}
 	for _, part := range output.Summary {
+		appendSeparatedText(&text, part.Text)
+	}
+	for _, part := range output.Content {
 		appendSeparatedText(&text, part.Text)
 	}
 	return text.String()

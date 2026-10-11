@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -13,7 +14,6 @@ import (
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
-	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/console_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -277,7 +277,7 @@ func SendEmailVerification(c *gin.Context) {
 		i18n.T(c, i18n.MsgEmailVerificationGreeting, systemName),
 		i18n.T(c, i18n.MsgEmailVerificationCode, map[string]any{"Code": code}),
 		i18n.T(c, i18n.MsgEmailVerificationValidity, map[string]any{"Minutes": common.VerificationValidMinutes}))
-	err = common.SendEmail(subject, email, content)
+	err := common.SendEmail(subject, email, content)
 	if err != nil {
 		common.ApiError(c, err)
 		return

@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/relay"
 	relaychannel "github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relaydto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -232,12 +233,20 @@ func initTaskArtifactAdaptor(task *model.Task) (relaychannel.TaskAdaptor, error)
 	if baseURL == "" {
 		baseURL = constant.GetChannelBaseURL(channelModel.Type)
 	}
+	var relaySetting relaydto.ChannelSettings
+	settingBytes, err := common.Marshal(channelModel.GetSetting())
+	if err != nil {
+		return nil, err
+	}
+	if err := common.Unmarshal(settingBytes, &relaySetting); err != nil {
+		return nil, err
+	}
 	adaptor.Init(&relaycommon.RelayInfo{
 		ChannelMeta: &relaycommon.ChannelMeta{
 			ChannelType:    channelModel.Type,
 			ChannelBaseUrl: baseURL,
 			ApiKey:         pluginKey,
-			ChannelSetting: channelModel.GetSetting(),
+			ChannelSetting: relaySetting,
 		},
 	})
 	return adaptor, nil
@@ -438,8 +447,8 @@ func GetUserTask(c *gin.Context) {
 		EndTimestamp:   endTimestamp,
 	}
 
-	items := model.TaskGetAllUserTask(userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
-	total := model.TaskCountAllUserTask(userId, queryParams)
+	items := model.TaskGetAllUserTask(userID, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
+	total := model.TaskCountAllUserTask(userID, queryParams)
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(userTasksToDto(items))
 	common.ApiSuccess(c, pageInfo)
@@ -454,8 +463,8 @@ func userTasksToDto(tasks []*model.Task) []*dto.UserTaskDto {
 	return result
 }
 
-func tasksToDto(tasks []*model.Task, fillUser bool) []*dto.TaskDto {
-	var userIdMap map[int]*model.UserBase
+func tasksToDto(tasks []*model.Task, fillUser bool, viewerRole int) []*dto.TaskDto {
+	var userIDMap map[int]*model.UserBase
 	if fillUser {
 		userIDMap = make(map[int]*model.UserBase)
 		userIDs := types.NewSet[int]()

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	rootdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/system_setting"
@@ -300,16 +301,13 @@ func configureProxyTransport(transport *http.Transport, proxyURL *url.URL) error
 			return err
 		}
 
-		transport := &http.Transport{
-			MaxIdleConns:        common.RelayMaxIdleConns,
-			MaxIdleConnsPerHost: common.RelayMaxIdleConnsPerHost,
-			IdleConnTimeout:     time.Duration(common.RelayIdleConnTimeout) * time.Second,
-			ForceAttemptHTTP2:   true,
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return dialer.(proxy.ContextDialer).DialContext(ctx, network, addr)
-			},
+		transport.MaxIdleConns = common.RelayMaxIdleConns
+		transport.MaxIdleConnsPerHost = common.RelayMaxIdleConnsPerHost
+		transport.IdleConnTimeout = time.Duration(common.RelayIdleConnTimeout) * time.Second
+		transport.ForceAttemptHTTP2 = true
+		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dialer.(proxy.ContextDialer).DialContext(ctx, network, addr)
 		}
-		transport.DialContext = contextDialer.DialContext
 		return nil
 	default:
 		return fmt.Errorf("unsupported proxy scheme")
@@ -395,7 +393,34 @@ func GetHttpClientWithProxy(rawProxyURL string) (*http.Client, error) {
 // GetHttpClientWithProxySettings returns a cached HTTP client for the proxy URL and
 // channel transport settings. Default auto + 1 shard shares the same client pool as
 // GetHttpClientWithProxy / GetHttpClient for the empty-proxy case.
-func GetHttpClientWithProxySettings(rawProxyURL string, settings dto.ChannelSettings) (*http.Client, error) {
+func GetHttpClientWithProxySettings(rawProxyURL string, rawSettings any) (*http.Client, error) {
+	settings := dto.ChannelSettings{}
+	switch value := rawSettings.(type) {
+	case dto.ChannelSettings:
+		settings = value
+	case *dto.ChannelSettings:
+		if value != nil {
+			settings = *value
+		}
+	case rootdto.ChannelSettings:
+		encoded, err := common.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		if err := common.Unmarshal(encoded, &settings); err != nil {
+			return nil, err
+		}
+	case *rootdto.ChannelSettings:
+		if value != nil {
+			encoded, err := common.Marshal(*value)
+			if err != nil {
+				return nil, err
+			}
+			if err := common.Unmarshal(encoded, &settings); err != nil {
+				return nil, err
+			}
+		}
+	}
 	policy := NormalizeHTTPTransportPolicy(settings)
 	trimmedProxyURL := strings.TrimSpace(rawProxyURL)
 

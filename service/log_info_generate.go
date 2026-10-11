@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/base64"
+	"fmt"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -46,21 +47,16 @@ func attachQuotaSaturation(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, o
 }
 
 // appendBillingSettlementInfo records a failed settlement for admin reconciliation.
-func appendBillingSettlementInfo(other map[string]interface{}, relayInfo *relaycommon.RelayInfo) {
+func appendBillingSettlementInfo(other *model.LogOther, relayInfo *relaycommon.RelayInfo) {
 	if other == nil || relayInfo == nil || relayInfo.BillingSettlementState == "" {
 		return
 	}
-	adminInfo, ok := other["admin_info"].(map[string]interface{})
-	if !ok || adminInfo == nil {
-		adminInfo = map[string]interface{}{}
-		other["admin_info"] = adminInfo
-	}
-	adminInfo["billing_settlement"] = map[string]interface{}{
+	other.SetAdmin("billing_settlement", map[string]interface{}{
 		"state":              relayInfo.BillingSettlementState,
 		"error":              relayInfo.BillingSettlementError,
 		"actual_quota":       relayInfo.BillingSettlementQuota,
 		"pre_consumed_quota": relayInfo.FinalPreConsumedQuota,
-	}
+	})
 }
 
 func appendRequestPath(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
@@ -114,6 +110,14 @@ func AppendRelayLogAdminInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 	}
 }
 
+// AppendResponseModelLogInfo records upstream model declarations for admin diagnostics.
+func AppendResponseModelLogInfo(relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
+	if relayInfo == nil || other == nil || relayInfo.ResponseModel == nil || relayInfo.ResponseModel.ReturnedModel == "" {
+		return
+	}
+	other.SetAdmin("response_model", relayInfo.ResponseModel)
+}
+
 func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, modelRatio, groupRatio, completionRatio float64,
 	cacheTokens int, cacheRatio float64, modelPrice float64, userGroupRatio float64) *model.LogOther {
 	MarkRequestPolicySuccess(ctx, relayInfo.StreamStatus)
@@ -130,8 +134,8 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 		other.SetPublic("reasoning_effort", relayInfo.ReasoningEffort)
 	}
 	if relayInfo.IsModelMapped && !relayInfo.IsContextFallbackActive() {
-		other["is_model_mapped"] = true
-		other["upstream_model_name"] = relayInfo.UpstreamModelName
+		other.SetPublic("is_model_mapped", true)
+		other.SetPublic("upstream_model_name", relayInfo.UpstreamModelName)
 	}
 
 	isSystemPromptOverwritten := common.GetContextKeyBool(ctx, constant.ContextKeySystemPromptOverride)
@@ -163,10 +167,10 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 		adminInfo["local_count_tokens"] = isLocalCountTokens
 	}
 
-	AppendChannelAffinityAdminInfo(ctx, adminInfo)
+	AppendChannelAffinityAdminInfo(ctx, other)
 	AppendRelayProtocolInfo(relayInfo, other, adminInfo)
 
-	other["admin_info"] = adminInfo
+	other.MergeAdmin(adminInfo)
 	appendRequestPath(ctx, relayInfo, other)
 	appendBillingInfo(relayInfo, other)
 	appendParamOverrideInfo(relayInfo, other)
@@ -175,7 +179,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 }
 
 // AppendRelayProtocolInfo adds route, normalization, conversion, and final format audit fields.
-func AppendRelayProtocolInfo(relayInfo *relaycommon.RelayInfo, other, adminInfo map[string]interface{}) {
+func AppendRelayProtocolInfo(relayInfo *relaycommon.RelayInfo, other *model.LogOther, adminInfo map[string]interface{}) {
 	if relayInfo == nil {
 		return
 	}
@@ -270,7 +274,7 @@ func AppendContextFallbackAdminInfo(relayInfo *relaycommon.RelayInfo, adminInfo 
 	}
 }
 
-func appendParamOverrideInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+func appendParamOverrideInfo(relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
 	if relayInfo == nil || other == nil || len(relayInfo.ParamOverrideAudit) == 0 {
 		return
 	}
@@ -278,18 +282,18 @@ func appendParamOverrideInfo(relayInfo *relaycommon.RelayInfo, other map[string]
 }
 
 // AppendStreamStatus adds protocol terminal and transport end details to a log payload.
-func AppendStreamStatus(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+func AppendStreamStatus(relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
 	if relayInfo == nil || other == nil || !relayInfo.IsStream {
 		return
 	}
 	if relayInfo.StreamStatus == nil {
-		other["stream_status"] = map[string]interface{}{
+		other.SetPublic("stream_status", map[string]interface{}{
 			"status":               "error",
 			"phase":                "pre_stream",
 			"end_reason":           "not_started",
 			"received_event_count": relayInfo.ReceivedResponseCount,
 			"terminal_seen":        false,
-		}
+		})
 		return
 	}
 	ss := relayInfo.StreamStatus
@@ -428,7 +432,7 @@ func appendFinalRequestFormat(relayInfo *relaycommon.RelayInfo, other *model.Log
 	if finalFormat == "" {
 		return
 	}
-	other["final_request_relay_format"] = finalFormat
+	other.SetPublic("final_request_relay_format", finalFormat)
 	if finalFormat == types.RelayFormatClaude {
 		// claude indicates the final upstream request format is Claude Messages.
 		// Frontend log rendering uses this to keep the original Claude input display.

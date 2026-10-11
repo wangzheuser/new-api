@@ -6,7 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/dto"
+	basecommon "github.com/QuantumNous/new-api/common"
+	rootdto "github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 )
 
 type StreamEndReason string
@@ -41,16 +43,9 @@ const (
 )
 
 // ResponseOutcome is the protocol-level result of one response, independent of
-// how the transport ended. Adaptors mark it from the events they already parse.
-type ResponseOutcome string
-
-const (
-	ResponseOutcomeUnknown    ResponseOutcome = ""
-	ResponseOutcomeCompleted  ResponseOutcome = "completed"
-	ResponseOutcomeFailed     ResponseOutcome = "failed"
-	ResponseOutcomeIncomplete ResponseOutcome = "incomplete"
-	ResponseOutcomeCancelled  ResponseOutcome = "cancelled"
-)
+// how the transport ended. The semantic constants live in response_semantics.go
+// and are shared with response override rules.
+type ResponseOutcome = string
 
 const maxStreamErrorEntries = 20
 
@@ -88,10 +83,28 @@ type StreamStatus struct {
 	firstPayloadAt           time.Time
 	partialToolNameBytes     int64
 	partialToolArgumentBytes int64
+	response                 ResponseOutcome
+	errorCode                string
+	errorType                string
+	errorStatus              int
+	incompleteReason         string
+	expectsTerminal          bool
+}
+
+// StreamOutcome holds protocol facts used by health classification.
+type StreamOutcome struct {
+	EndReason        StreamEndReason
+	HasErrors        bool
+	ExpectsTerminal  bool
+	Response         ResponseOutcome
+	ErrorCode        string
+	ErrorType        string
+	ErrorStatus      int
+	IncompleteReason string
 }
 
 func NewStreamStatus() *StreamStatus {
-	return &StreamStatus{}
+	return &StreamStatus{response: ResponseOutcomeUnknown}
 }
 
 // MarkAppHTTPCommitted records that APP already flushed the downstream status and SSE headers.
@@ -289,7 +302,8 @@ func (s *StreamStatus) TryBeginBillingApplication() bool {
 }
 
 // ObservePartialUsage stores monotonic upstream usage or a local estimate for partial settlement.
-func (s *StreamStatus) ObservePartialUsage(usage *dto.Usage, upstream bool, estimated bool) {
+func (s *StreamStatus) ObservePartialUsage(rawUsage any, upstream bool, estimated bool) {
+	usage := normalizePartialUsage(rawUsage)
 	if s == nil || usage == nil {
 		return
 	}
@@ -356,6 +370,35 @@ func (s *StreamStatus) PartialUsageSnapshot() (dto.Usage, bool, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.partialUsage, s.hasPartialUsage, s.partialUsageEstimated
+}
+
+func normalizePartialUsage(raw any) *dto.Usage {
+	switch usage := raw.(type) {
+	case nil:
+		return nil
+	case *dto.Usage:
+		return usage
+	case dto.Usage:
+		copy := usage
+		return &copy
+	case *rootdto.Usage:
+		if usage == nil {
+			return nil
+		}
+		encoded, err := basecommon.Marshal(*usage)
+		if err != nil {
+			return nil
+		}
+		var converted dto.Usage
+		if err := basecommon.Unmarshal(encoded, &converted); err != nil {
+			return nil
+		}
+		return &converted
+	case rootdto.Usage:
+		return normalizePartialUsage(&usage)
+	default:
+		return nil
+	}
 }
 
 // ObserveToolPayloadBytes records only tool fragments successfully flushed to the client.

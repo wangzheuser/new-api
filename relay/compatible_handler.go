@@ -74,66 +74,18 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 	adaptor.Init(info)
 
 	passThroughGlobal := model_setting.GetGlobalSettings().PassThroughRequestEnabled
-	passThroughRequest := (passThroughGlobal || info.ChannelSetting.PassThroughBodyEnabled) && textRouteAllowsPassThrough(info)
-	if !passThroughRequest && info.RelayMode == relayconstant.RelayModeChatCompletions {
-		systemPrompt, prepend := resolveSystemPrompt(info)
-		before := request.GetTokenCountMeta()
-		if applyOpenAISystemPrompt(c, request, systemPrompt, prepend) {
-			if accountingErr := accountInjectedSystemPrompt(c, info, before, request.GetTokenCountMeta()); accountingErr != nil {
-				return accountingErr
-			}
-		}
-	}
-	if policyErr := prepareTextInputPolicies(c, info, request, passThroughRequest); policyErr != nil {
-		return policyErr
-	}
-	if isUnconvertedProtocolRoute(info) {
-		nativeRequest := any(request)
-		if !passThroughRequest {
-			convertedRequest, convertErr := adaptor.ConvertOpenAIRequest(c, info, request)
-			if convertErr != nil {
-				return types.NewError(convertErr, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-			}
-			nativeRequest = convertedRequest
-		}
-		usage, nativeErr := executeNativeTextRoute(c, info, adaptor, nativeRequest, passThroughRequest)
-		if nativeErr != nil {
-			return nativeErr
-		}
-		containAudioTokens := usage.CompletionTokenDetails.AudioTokens > 0 || usage.PromptTokensDetails.AudioTokens > 0
-		containsAudioRatios := ratio_setting.ContainsAudioRatio(info.GetBillingModelName()) || ratio_setting.ContainsAudioCompletionRatio(info.GetBillingModelName())
-		if containAudioTokens && containsAudioRatios {
-			service.PostAudioConsumeQuota(c, info, usage, "")
-		} else {
-			service.PostTextConsumeQuota(c, info, usage, nil)
-		}
-		return nil
-	}
-	if isConvertedProtocolRoute(info) {
-		usage, newApiErr := executeConvertedTextRoute(c, info, adaptor, request)
-		if newApiErr != nil {
-			return newApiErr
-		}
-		containAudioTokens := usage.CompletionTokenDetails.AudioTokens > 0 || usage.PromptTokensDetails.AudioTokens > 0
-		containsAudioRatios := ratio_setting.ContainsAudioRatio(info.GetBillingModelName()) || ratio_setting.ContainsAudioCompletionRatio(info.GetBillingModelName())
-		if containAudioTokens && containsAudioRatios {
-			service.PostAudioConsumeQuota(c, info, usage, "")
-		} else {
-			service.PostTextConsumeQuota(c, info, usage, nil)
-		}
-		return nil
-	}
 	if info.RelayMode == relayconstant.RelayModeChatCompletions &&
 		!passThroughGlobal &&
 		!info.ChannelSetting.PassThroughBodyEnabled &&
 		service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName) {
-		usage, newApiErr := chatCompletionsViaResponses(c, info, adaptor, request)
+		applySystemPromptIfNeeded(c, info, request)
+		usage, newApiErr := textRequestViaResponses(c, info, adaptor, request)
 		if newApiErr != nil {
 			return newApiErr
 		}
 
 		var containAudioTokens = usage.CompletionTokenDetails.AudioTokens > 0 || usage.PromptTokensDetails.AudioTokens > 0
-		var containsAudioRatios = ratio_setting.ContainsAudioRatio(info.GetBillingModelName()) || ratio_setting.ContainsAudioCompletionRatio(info.GetBillingModelName())
+		var containsAudioRatios = ratio_setting.ContainsAudioRatio(info.OriginModelName) || ratio_setting.ContainsAudioCompletionRatio(info.OriginModelName)
 
 		if containAudioTokens && containsAudioRatios {
 			service.PostAudioConsumeQuota(c, info, usage, nil)
@@ -145,7 +97,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 
 	var requestBody io.Reader
 
-	if passThroughRequest {
+	if passThroughGlobal || info.ChannelSetting.PassThroughBodyEnabled {
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
@@ -162,6 +114,10 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 			return newConvertRequestFailedError(c, info, err)
 		}
 		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
+
+		if req, ok := convertedRequest.(*dto.GeneralOpenAIRequest); ok {
+			applySystemPromptIfNeeded(c, info, req)
+		}
 
 		jsonData, err := common.Marshal(convertedRequest)
 		if err != nil {
@@ -220,7 +176,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 	}
 
 	var containAudioTokens = usage.(*dto.Usage).CompletionTokenDetails.AudioTokens > 0 || usage.(*dto.Usage).PromptTokensDetails.AudioTokens > 0
-	var containsAudioRatios = ratio_setting.ContainsAudioRatio(info.GetBillingModelName()) || ratio_setting.ContainsAudioCompletionRatio(info.GetBillingModelName())
+	var containsAudioRatios = ratio_setting.ContainsAudioRatio(info.OriginModelName) || ratio_setting.ContainsAudioCompletionRatio(info.OriginModelName)
 
 	if containAudioTokens && containsAudioRatios {
 		service.PostAudioConsumeQuota(c, info, usage.(*dto.Usage), nil)

@@ -77,39 +77,42 @@ func resolveUserSortOptions(sortOptions []UserSortOptions) UserSortOptions {
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
 // Otherwise, the sensitive information will be saved on local storage in plain text!
 type User struct {
-	Id               int                        `json:"id"`
-	Username         string                     `json:"username" gorm:"unique;index" validate:"max=20"`
-	Password         string                     `json:"password" gorm:"not null;" validate:"min=8,max=20"`
-	OriginalPassword string                     `json:"original_password" gorm:"-:all"` // this field is only for Password change verification, don't save it to database!
-	DisplayName      string                     `json:"display_name" gorm:"index" validate:"max=20"`
-	Role             int                        `json:"role" gorm:"type:int;default:1"`   // admin, common
-	Status           int                        `json:"status" gorm:"type:int;default:1"` // enabled, disabled
-	Email            string                     `json:"email" gorm:"index" validate:"max=50"`
-	GitHubId         string                     `json:"github_id" gorm:"column:github_id;index"`
-	DiscordId        string                     `json:"discord_id" gorm:"column:discord_id;index"`
-	OidcId           string                     `json:"oidc_id" gorm:"column:oidc_id;index"`
-	WeChatId         string                     `json:"wechat_id" gorm:"column:wechat_id;index"`
-	TelegramId       string                     `json:"telegram_id" gorm:"column:telegram_id;index"`
-	VerificationCode string                     `json:"verification_code" gorm:"-:all"`                         // this field is only for Email verification, don't save it to database!
-	RegistrationCode string                     `json:"registration_code" gorm:"-:all"`                         // registration access code, never persisted on users
-	AccessToken      *string                    `json:"-" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
-	Quota            int                        `json:"quota" gorm:"type:int;default:0"`
-	UsedQuota        int                        `json:"used_quota" gorm:"type:int;default:0;column:used_quota"` // used quota
-	RequestCount     int                        `json:"request_count" gorm:"type:int;default:0;"`               // request number
-	Group            string                     `json:"group" gorm:"type:varchar(64);default:'default'"`
-	AffCode          string                     `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
-	AffCount         int                        `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
-	AffQuota         int                        `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
-	AffHistoryQuota  int                        `json:"aff_history_quota" gorm:"type:int;default:0;column:aff_history"` // 邀请历史额度
-	InviterId        int                        `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
-	DeletedAt        gorm.DeletedAt             `gorm:"index"`
-	LinuxDOId        string                     `json:"linux_do_id" gorm:"column:linux_do_id;index"`
-	Setting          string                     `json:"setting" gorm:"type:text;column:setting"`
-	Remark           string                     `json:"remark,omitempty" gorm:"type:varchar(255)" validate:"max=255"`
-	StripeCustomer   string                     `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
-	CreatedAt        int64                      `json:"created_at" gorm:"autoCreateTime;column:created_at"`
-	LastLoginAt      int64                      `json:"last_login_at" gorm:"default:0;column:last_login_at"`
-	AdminPermissions map[string]map[string]bool `json:"admin_permissions,omitempty" gorm:"-:all"`
+	Id                   int                        `json:"id"`
+	Username             string                     `json:"username" gorm:"unique;index" validate:"max=20"`
+	Password             string                     `json:"password" gorm:"not null;" validate:"min=8,max=128"`
+	HasPassword          bool                       `json:"-" gorm:"-:all"`
+	OriginalPassword     string                     `json:"original_password" gorm:"-:all"` // this field is only for Password change verification, don't save it to database!
+	DisplayName          string                     `json:"display_name" gorm:"index" validate:"max=20"`
+	Role                 int                        `json:"role" gorm:"type:int;default:1"`   // admin, common
+	Status               int                        `json:"status" gorm:"type:int;default:1"` // enabled, disabled
+	Email                string                     `json:"email" gorm:"index" validate:"max=50"`
+	GitHubId             string                     `json:"github_id" gorm:"column:github_id;index"`
+	DiscordId            string                     `json:"discord_id" gorm:"column:discord_id;index"`
+	OidcId               string                     `json:"oidc_id" gorm:"column:oidc_id;index"`
+	WeChatId             string                     `json:"wechat_id" gorm:"column:wechat_id;index"`
+	TelegramId           string                     `json:"telegram_id" gorm:"column:telegram_id;index"`
+	VerificationCode     string                     `json:"verification_code" gorm:"-:all"`                         // this field is only for Email verification, don't save it to database!
+	RegistrationCode     string                     `json:"registration_code" gorm:"-:all"`                         // registration access code, never persisted on users
+	AccessToken          *string                    `json:"-" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
+	AccessTokenCreatedAt *int64                     `json:"-" gorm:"type:bigint;column:access_token_created_at"`
+	Quota                int                        `json:"quota" gorm:"type:int;default:0"`
+	UsedQuota            int                        `json:"used_quota" gorm:"type:int;default:0;column:used_quota"` // used quota
+	RequestCount         int                        `json:"request_count" gorm:"type:int;default:0;"`               // request number
+	Group                string                     `json:"group" gorm:"type:varchar(64);default:'default'"`
+	AffCode              string                     `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
+	AffCount             int                        `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
+	AffQuota             int                        `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
+	AffHistoryQuota      int                        `json:"aff_history_quota" gorm:"type:int;default:0;column:aff_history"` // 邀请历史额度
+	InviterId            int                        `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
+	DeletedAt            gorm.DeletedAt             `gorm:"index"`
+	LinuxDOId            string                     `json:"linux_do_id" gorm:"column:linux_do_id;index"`
+	Setting              string                     `json:"setting" gorm:"type:text;column:setting"`
+	Remark               string                     `json:"remark,omitempty" gorm:"type:varchar(255)" validate:"max=255"`
+	StripeCustomer       string                     `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
+	CreatedAt            int64                      `json:"created_at" gorm:"autoCreateTime;column:created_at"`
+	LastLoginAt          int64                      `json:"last_login_at" gorm:"default:0;column:last_login_at"`
+	AuthVersion          int64                      `json:"-" gorm:"type:bigint;not null;default:1;column:auth_version"`
+	AdminPermissions     map[string]map[string]bool `json:"admin_permissions,omitempty" gorm:"-:all"`
 }
 
 func (user *User) ToBaseUser() *UserBase {
@@ -453,7 +456,61 @@ func GetDistinctUserBaseGroups() ([]string, error) {
 }
 
 // SearchUsers applies keyword, entitlement, and subscription filters before pagination.
-func SearchUsers(filters UserSearchFilters, startIdx int, num int) ([]*User, int64, error) {
+// It accepts both the structured filter form and the legacy positional form while
+// callers migrate between the two APIs.
+func SearchUsers(first any, args ...any) ([]*User, int64, error) {
+	var filters UserSearchFilters
+	var startIdx, num int
+	var sortOptions []UserSortOptions
+	switch value := first.(type) {
+	case UserSearchFilters:
+		filters = value
+		if len(args) < 2 {
+			return nil, 0, errors.New("missing pagination arguments")
+		}
+		var ok bool
+		startIdx, ok = args[0].(int)
+		if !ok {
+			return nil, 0, errors.New("invalid start index")
+		}
+		num, ok = args[1].(int)
+		if !ok {
+			return nil, 0, errors.New("invalid page size")
+		}
+		if len(args) > 2 {
+			if option, ok := args[2].(UserSortOptions); ok {
+				sortOptions = []UserSortOptions{option}
+			}
+		}
+	case string:
+		if len(args) < 5 {
+			return nil, 0, errors.New("missing search arguments")
+		}
+		filters.Keyword = value
+		filters.BaseGroup, _ = args[0].(string)
+		if args[1] != nil {
+			filters.Role, _ = args[1].(*int)
+		}
+		if args[2] != nil {
+			filters.Status, _ = args[2].(*int)
+		}
+		var ok bool
+		startIdx, ok = args[3].(int)
+		if !ok {
+			return nil, 0, errors.New("invalid start index")
+		}
+		num, ok = args[4].(int)
+		if !ok {
+			return nil, 0, errors.New("invalid page size")
+		}
+		if len(args) > 5 {
+			if option, ok := args[5].(UserSortOptions); ok {
+				sortOptions = []UserSortOptions{option}
+			}
+		}
+	default:
+		return nil, 0, errors.New("invalid search filters")
+	}
 	var users []*User
 	var total int64
 	var err error
@@ -474,7 +531,7 @@ func SearchUsers(filters UserSearchFilters, startIdx int, num int) ([]*User, int
 
 	// 构建搜索条件
 	likeCondition := "username LIKE ? OR email LIKE ? OR display_name LIKE ?"
-	likeArgs := []interface{}{"%" + filters.Keyword + "%", "%" + filters.Keyword + "%", "%" + filters.Keyword + "%"}
+	likeArgs := []any{"%" + filters.Keyword + "%", "%" + filters.Keyword + "%", "%" + filters.Keyword + "%"}
 
 	// 尝试将关键字转换为整数ID
 	keywordInt, err := strconv.Atoi(filters.Keyword)
@@ -630,32 +687,8 @@ func HardDeleteUserById(id int) (int64, error) {
 	if id == 0 {
 		return 0, common.NewMessage("ID is empty!")
 	}
-	if err := DB.Transaction(func(tx *gorm.DB) error {
-		if err := deleteUserOAuthBindingsByUserId(tx, id); err != nil {
-			return err
-		}
-		if err := tx.Where("user_id = ?", id).Delete(&UserGroupGrant{}).Error; err != nil {
-			return err
-		}
-		if err := deleteUserModelRateLimitsByUserId(tx, id); err != nil {
-			return err
-		}
-		return tx.Unscoped().Delete(&User{}, "id = ?", id).Error
-	}); err != nil {
-		return err
-	}
-	cacheErr := invalidateUserCache(id)
-	rateLimitCacheErr := InvalidateUserModelRateLimitCache(id)
-	if rateLimitCacheErr != nil {
-		common.SysError("failed to invalidate user model rate-limit cache after user deletion: " + rateLimitCacheErr.Error())
-	}
-	if err := RefreshUserAuthStateCache(id); err != nil {
-		return err
-	}
-	if cacheErr != nil {
-		return cacheErr
-	}
-	return nil
+	user := User{Id: id}
+	return user.HardDelete()
 }
 
 func inviteUser(inviterId int) error {
@@ -1018,19 +1051,8 @@ func (user *User) ClearBinding(bindingType string) error {
 	return updateUserCache(*user)
 }
 
-func (user *User) Delete() error {
-	if user.Id == 0 {
-		return errors.New("id 为空！")
-	}
-	if err := DB.Delete(user).Error; err != nil {
-		return err
-	}
-
-	cacheErr := invalidateUserCache(user.Id)
-	if err := RefreshUserAuthStateCache(user.Id); err != nil {
-		return err
-	}
-	return cacheErr
+func (user *User) Delete() (int64, error) {
+	return user.delete(nil)
 }
 
 func DeleteUserForSession(identity AuthSessionIdentity) (int64, error) {
@@ -1042,19 +1064,102 @@ func (user *User) delete(identity *AuthSessionIdentity) (int64, error) {
 	if user.Id == 0 {
 		return 0, common.NewMessage("ID is empty!")
 	}
+	var nextAuthVersion int64
+	var revokedAccessTokens int64
 	if err := DB.Transaction(func(tx *gorm.DB) error {
-		if err := deleteUserOAuthBindingsByUserId(tx, user.Id); err != nil {
+		if identity != nil {
+			if err := ValidateAuthSessionWithTx(tx, *identity); err != nil {
+				return err
+			}
+			var role int
+			if err := tx.Model(&User{}).Where("id = ?", user.Id).Select("role").Scan(&role).Error; err != nil {
+				return err
+			}
+			if role == common.RoleRootUser {
+				return ErrCannotDeleteRootUser
+			}
+		}
+		var err error
+		nextAuthVersion, err = IncrementUserAuthVersionWithTx(tx, user.Id)
+		if err != nil {
+			return err
+		}
+		revokedAccessTokens, err = DeleteUserAccessTokensWithTx(tx, user.Id)
+		if err != nil {
+			return err
+		}
+		return tx.Delete(user).Error
+	}); err != nil {
+		return 0, err
+	}
+	if err := publishCommittedUserAuthVersion(user.Id, nextAuthVersion); err != nil {
+		return revokedAccessTokens, err
+	}
+	if _, err := RevokeAllUserSessions(user.Id, "user_deleted"); err != nil {
+		return revokedAccessTokens, err
+	}
+	return revokedAccessTokens, invalidateUserCache(user.Id)
+}
+
+func (user *User) HardDelete() (int64, error) {
+	if user.Id == 0 {
+		return 0, common.NewMessage("ID is empty!")
+	}
+	var tokens []Token
+	var deletedAuthVersion int64
+	var revokedAccessTokens int64
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		deletedAuthVersion, err = IncrementUserAuthVersionWithTx(tx, user.Id)
+		if err != nil {
+			return err
+		}
+		revokedAccessTokens, err = DeleteUserAccessTokensWithTx(tx, user.Id)
+		if err != nil {
+			return err
+		}
+		if common.RedisEnabled {
+			if err := tx.Unscoped().Select("id", commonKeyCol).Where("user_id = ?", user.Id).Find(&tokens).Error; err != nil {
+				return err
+			}
+		}
+		if err := deleteUserAuthenticationData(tx, user.Id); err != nil {
 			return err
 		}
 		return tx.Unscoped().Delete(user).Error
-	}); err != nil {
+	})
+	if err != nil {
+		return 0, err
+	}
+	if err := publishCommittedUserAuthVersion(user.Id, deletedAuthVersion); err != nil {
+		common.SysError(common.LogText("failed to publish auth tombstone after hard deleting user %d: %v", user.Id, err))
+	}
+	if err := invalidateTokensCache(tokens); err != nil {
+		common.SysError(common.LogText("failed to invalidate token cache after hard deleting user %d: %v", user.Id, err))
+	}
+	if err := invalidateUserCache(user.Id); err != nil {
+		common.SysError(common.LogText("failed to invalidate user cache after hard deleting user %d: %v", user.Id, err))
+	}
+	return revokedAccessTokens, nil
+}
+
+func deleteUserAuthenticationData(tx *gorm.DB, userId int) error {
+	if err := releaseAllExternalIdentitiesWithTx(tx, userId); err != nil {
 		return err
 	}
-	cacheErr := invalidateUserCache(user.Id)
-	if err := RefreshUserAuthStateCache(user.Id); err != nil {
-		return err
+	for _, authenticationData := range []any{
+		&TwoFABackupCode{},
+		&TwoFA{},
+		&UserSession{},
+		&AuthFlow{},
+		&PasskeyCredential{},
+		&Token{},
+	} {
+		if err := tx.Unscoped().Where("user_id = ?", userId).Delete(authenticationData).Error; err != nil {
+			return err
+		}
 	}
-	return cacheErr
+	return deleteUserOAuthBindingsByUserId(tx, userId)
 }
 
 // ValidateAndFill check password & user status

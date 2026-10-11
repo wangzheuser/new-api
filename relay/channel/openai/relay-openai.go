@@ -119,13 +119,15 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	var usage = &dto.Usage{}
 	var lastStreamData string
 	var secondLastStreamData string // 存储倒数第二个stream data，用于音频模型
+	seenStreamToolCalls := make(map[string]struct{})
+	var streamFunctionCallNames []string
 	var streamErr *types.NewAPIError
 	progressivePolicy := info.AcceptStreamPolicyVersion(resp.Header.Get("X-Stream-Policy")) == "progressive-v1"
 	flushStreamData := func(data string) *types.NewAPIError {
 		if err := HandleStreamFormat(c, info, data, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
 			return types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway)
 		}
-		if err := accumulateFlushedStreamOutput(info.RelayMode, data, &responseTextBuilder, &toolCount); err != nil {
+		if err := accumulateFlushedStreamOutput(info, info.RelayMode, data, &responseTextBuilder, &toolCount); err != nil {
 			return types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
 		}
 		if info.StreamStatus != nil {
@@ -169,6 +171,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 				}
 			}
 			lastStreamData = data
+			observeStreamChoices(info, data, seenStreamToolCalls, &streamFunctionCallNames)
 			terminalEvent, terminalStatus, err := inspectStreamData(info.RelayMode, data)
 			if err != nil {
 				logger.LogError(c, "error processing stream token data: "+err.Error())
@@ -254,7 +257,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 				}
 				return partialUsage, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway)
 			}
-			if err := accumulateFlushedStreamOutput(info.RelayMode, lastStreamData, &responseTextBuilder, &toolCount); err != nil {
+			if err := accumulateFlushedStreamOutput(info, info.RelayMode, lastStreamData, &responseTextBuilder, &toolCount); err != nil {
 				return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
 			}
 			if info.StreamStatus != nil {

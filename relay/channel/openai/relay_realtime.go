@@ -7,7 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
+	rootdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
@@ -15,7 +15,6 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
-	"github.com/QuantumNous/new-api/types"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
@@ -32,7 +31,15 @@ func applyRealtimeSystemPrompt(c *gin.Context, info *relaycommon.RelayInfo, even
 	}
 
 	modelName := info.GetRequestedModelName()
-	prompt, prepend, source, _ := model_setting.ResolveSystemPrompt(info.ChannelSetting, modelName, info.GetAttemptModelName(), info.IsContextFallbackActive())
+	settingBytes, err := common.Marshal(info.ChannelSetting)
+	if err != nil {
+		return false
+	}
+	var channelSetting rootdto.ChannelSettings
+	if err := common.Unmarshal(settingBytes, &channelSetting); err != nil {
+		return false
+	}
+	prompt, prepend, source, _ := model_setting.ResolveSystemPrompt(channelSetting, modelName, info.GetAttemptModelName(), info.IsContextFallbackActive())
 	if prompt == "" {
 		return false
 	}

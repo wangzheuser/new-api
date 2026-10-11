@@ -3,7 +3,6 @@ package service
 import (
 	"errors"
 	"fmt"
-	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -229,18 +228,14 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		// in this case, must be some error happened
 		// we cannot just return, because we may have to return the pre-consumed quota
 		quota = 0
-		logContent += "（可能是上游超时）"
+		logContent = append(logContent, common.NewMessage("Possibly an upstream timeout"))
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
 			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, modelName, relayInfo.FinalPreConsumedQuota))
 	}
 
 	if err := SettleBilling(ctx, relayInfo, quota); err != nil {
 		logger.LogError(ctx, "error settling billing: "+err.Error())
-		if extraContent == "" {
-			extraContent = "计费结算失败，保留预扣待对账"
-		} else {
-			extraContent += ", 计费结算失败，保留预扣待对账"
-		}
+		extraContent = append(extraContent, common.NewMessage("Billing settlement failed; pre-consumed quota is retained for reconciliation"))
 	} else if totalTokens > 0 {
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
@@ -297,7 +292,15 @@ func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData)
 	return quota
 }
 
-func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent string) {
+func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, rawExtraContent any) {
+	var extraContent string
+	var extraMessages []*common.Message
+	switch value := rawExtraContent.(type) {
+	case string:
+		extraContent = value
+	case []*common.Message:
+		extraMessages = value
+	}
 	EvaluateResponseOverrideBeforeSettlement(ctx, relayInfo, usage, http.StatusOK)
 
 	var tieredUsedVars map[string]bool
@@ -371,7 +374,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		// in this case, must be some error happened
 		// we cannot just return, because we may have to return the pre-consumed quota
 		quota = 0
-		logContent += "（可能是上游超时）"
+		logContent = append(logContent, common.NewMessage("Possibly an upstream timeout"))
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
 			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, relayInfo.GetBillingModelName(), relayInfo.FinalPreConsumedQuota))
 	}
@@ -389,8 +392,9 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	}
 
 	logModel := relayInfo.GetRequestedModelName()
+	logContent = append(logContent, extraMessages...)
 	if extraContent != "" {
-		logContent += ", " + extraContent
+		logContent = append(logContent, common.NewMessage(extraContent))
 	}
 	other := GenerateAudioOtherInfo(ctx, relayInfo, usage, modelRatio, groupRatio,
 		completionRatio.InexactFloat64(), audioRatio.InexactFloat64(), audioCompletionRatio.InexactFloat64(), modelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
@@ -428,12 +432,12 @@ func PreConsumeTokenQuota(relayInfo *relaycommon.RelayInfo, quota int) error {
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 	}
-	if !relayInfo.TokenUnlimited && token.RemainQuota < quota {
-		return types.NewErrorWithStatusCode(fmt.Errorf("token quota is not enough, token remain quota: %s, need quota: %s", logger.FormatQuota(token.RemainQuota), logger.FormatQuota(quota)), types.ErrorCodePreConsumeTokenQuotaFailed, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
-	}
-	err = model.DecreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, quota)
-	if err != nil {
-		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+	if !reserved {
+		remainQuota := 0
+		if token, tokenErr := model.GetTokenByKey(relayInfo.TokenKey, false); tokenErr == nil && token != nil {
+			remainQuota = token.RemainQuota
+		}
+		return types.NewErrorWithStatusCode(fmt.Errorf("token quota is not enough, token remain quota: %s, need quota: %s", logger.FormatQuota(remainQuota), logger.FormatQuota(quota)), types.ErrorCodePreConsumeTokenQuotaFailed, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 	}
 	return nil
 }
@@ -454,7 +458,7 @@ func postConsumeQuotaWithResult(relayInfo *relaycommon.RelayInfo, quota int, pre
 	if relayInfo.BillingSource == BillingSourceSubscription {
 		subscriptionId = relayInfo.SubscriptionId
 		if subscriptionId <= 0 {
-			return errors.New("subscription id is missing")
+			return result, errors.New("subscription id is missing")
 		}
 	}
 	tokenId := relayInfo.TokenId
@@ -462,7 +466,7 @@ func postConsumeQuotaWithResult(relayInfo *relaycommon.RelayInfo, quota int, pre
 		tokenId = 0
 	}
 	if err := model.ApplyBillingDelta(relayInfo.UserId, tokenId, relayInfo.TokenKey, subscriptionId, quota); err != nil {
-		return err
+		return result, err
 	}
 	if subscriptionId > 0 {
 		relayInfo.SubscriptionPostDelta += int64(quota)

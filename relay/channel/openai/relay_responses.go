@@ -76,8 +76,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	defer service.CloseResponseBodyGracefully(resp)
 
-	var usage = &dto.Usage{}
-	var responseTextBuilder strings.Builder
+	accumulator := service.NewResponsesUsageAccumulator(info)
 	var streamErr *types.NewAPIError
 
 	helper.StreamScannerHandlerWithOptions(c, resp, info, helper.StreamScannerOptions{RequireExplicitTerminal: true}, func(data string, sr *helper.StreamResult) {
@@ -89,11 +88,15 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			sr.Stop(err)
 			return
 		}
+		if streamResponse.Response != nil {
+			data = string(rewriteSGLangResponsesCreatedAt(info, []byte(data), "response.created_at", streamResponse.Response.CreatedAt))
+		}
 		if err := sendResponsesStreamData(c, streamResponse, data); err != nil {
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
 			sr.Stop(err)
 			return
 		}
+		accumulator.Observe(&streamResponse, common.StringToByteSlice(data))
 		switch streamResponse.Type {
 		case "error", "response.error", "response.failed", "response.cancelled":
 			oaiError := streamResponse.GetOpenAIError()
@@ -112,45 +115,12 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			)
 			sr.StopWithTerminal(streamResponse.Type, "failed", streamErr)
 		case "response.completed", "response.incomplete", "response.done":
-			if streamResponse.Response != nil {
-				if streamResponse.Response.Usage != nil {
-					usage.PromptTokens = streamResponse.Response.Usage.InputTokens
-					usage.CompletionTokens = streamResponse.Response.Usage.OutputTokens
-					usage.TotalTokens = streamResponse.Response.Usage.TotalTokens
-					if streamResponse.Response.Usage.InputTokensDetails != nil {
-						usage.PromptTokensDetails.CachedTokens = streamResponse.Response.Usage.InputTokensDetails.CachedTokens
-						usage.PromptTokensDetails.CacheWriteTokens = streamResponse.Response.Usage.InputTokensDetails.CacheWriteTokens
-					}
-				}
-				if streamResponse.Response.HasImageGenerationCall() {
-					c.Set("image_generation_call", true)
-					c.Set("image_generation_call_quality", streamResponse.Response.GetQuality())
-					c.Set("image_generation_call_size", streamResponse.Response.GetSize())
-				}
-			}
 			status := "completed"
 			if streamResponse.Type == "response.incomplete" {
 				status = "incomplete"
 			}
 			sr.DoneWithTerminal(streamResponse.Type, status)
-		case "response.output_text.delta":
-			// 处理输出文本
-			responseTextBuilder.WriteString(streamResponse.Delta)
-		case dto.ResponsesOutputTypeItemDone:
-			// 函数调用处理
-			if streamResponse.Item != nil {
-				switch streamResponse.Item.Type {
-				case dto.BuildInCallWebSearchCall:
-					if info != nil && info.ResponsesUsageInfo != nil && info.ResponsesUsageInfo.BuiltInTools != nil {
-						if webSearchTool, exists := info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolWebSearchPreview]; exists && webSearchTool != nil {
-							webSearchTool.CallCount++
-						}
-					}
-				}
-			}
 		}
-		sendResponsesStreamData(c, streamResponse, data)
-		accumulator.Observe(&streamResponse, common.StringToByteSlice(data))
 	})
 
 	if streamErr != nil {
@@ -160,21 +130,19 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		return nil, statusErr
 	}
 
-	if usage.CompletionTokens == 0 {
-		// 计算输出文本的 token 数量
-		tempStr := responseTextBuilder.String()
-		if len(tempStr) > 0 {
-			// 非正常结束，使用输出文本的 token 数量
-			completionTokens := service.CountTextToken(tempStr, info.UpstreamModelName)
-			usage.CompletionTokens = completionTokens
-		}
+	return accumulator.Finish(), nil
+}
+
+func rewriteSGLangResponsesCreatedAt(info *relaycommon.RelayInfo, payload []byte, path string, createdAt dto.IntValue) []byte {
+	if info.GetChannelType() != constant.ChannelTypeSGLang {
+		return payload
 	}
-
-	if usage.PromptTokens == 0 && usage.CompletionTokens != 0 {
-		usage.PromptTokens = info.GetEstimatePromptTokens()
+	if !gjson.GetBytes(payload, path).Exists() {
+		return payload
 	}
-
-	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
-
-	return usage, nil
+	patched, err := sjson.SetBytes(payload, path, int(createdAt))
+	if err != nil {
+		return payload
+	}
+	return patched
 }

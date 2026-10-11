@@ -7,9 +7,25 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/reasonmap"
+	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/samber/lo"
 )
+
+func rootUsageFromKit(usage *kitdto.Usage) *dto.Usage {
+	if usage == nil {
+		return nil
+	}
+	data, err := common.Marshal(usage)
+	if err != nil {
+		return nil
+	}
+	var converted dto.Usage
+	if err := common.Unmarshal(data, &converted); err != nil {
+		return nil
+	}
+	return &converted
+}
 
 func generateStopBlock(index int) *dto.ClaudeResponse {
 	return &dto.ClaudeResponse{
@@ -263,7 +279,7 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 			stopOpenBlocks()
 			oaiUsage := openAIResponse.Usage
 			if oaiUsage == nil {
-				oaiUsage = info.ClaudeConvertInfo.Usage
+				oaiUsage = rootUsageFromKit(info.ClaudeConvertInfo.Usage)
 			}
 			if oaiUsage != nil {
 				claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
@@ -286,7 +302,7 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 		// Some OpenAI-compatible upstreams end with a usage-only SSE chunk.
 		oaiUsage := openAIResponse.Usage
 		if oaiUsage == nil {
-			oaiUsage = info.ClaudeConvertInfo.Usage
+			oaiUsage = rootUsageFromKit(info.ClaudeConvertInfo.Usage)
 		}
 		if oaiUsage != nil {
 			stopOpenBlocks()
@@ -314,7 +330,7 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 			info.FinishReason = *chosenChoice.FinishReason
 			oaiUsage := openAIResponse.Usage
 			if oaiUsage == nil {
-				oaiUsage = info.ClaudeConvertInfo.Usage
+				oaiUsage = rootUsageFromKit(info.ClaudeConvertInfo.Usage)
 				// Some upstreams emit finish_reason first, then send a final usage-only chunk.
 				// Defer closing until usage is available so the final message_delta carries it.
 				return claudeResponses
@@ -435,7 +451,7 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 			stopOpenBlocks()
 			oaiUsage := openAIResponse.Usage
 			if oaiUsage == nil {
-				oaiUsage = info.ClaudeConvertInfo.Usage
+				oaiUsage = rootUsageFromKit(info.ClaudeConvertInfo.Usage)
 			}
 			if oaiUsage != nil {
 				claudeResponses = append(claudeResponses, &dto.ClaudeResponse{

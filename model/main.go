@@ -17,7 +17,6 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
 )
 
 var commonGroupCol string
@@ -54,19 +53,6 @@ func initCol() {
 var DB *gorm.DB
 
 var LOG_DB *gorm.DB
-
-// newGormConfig creates a database configuration that keeps query values out of logs.
-func newGormConfig(prepareStmt bool) *gorm.Config {
-	return &gorm.Config{
-		PrepareStmt: prepareStmt,
-		Logger: gormlogger.New(log.New(os.Stdout, "\r\n", log.LstdFlags), gormlogger.Config{
-			SlowThreshold:        200 * time.Millisecond,
-			LogLevel:             gormlogger.Warn,
-			Colorful:             true,
-			ParameterizedQueries: true,
-		}),
-	}
-}
 
 func createRootAccountIfNeed() error {
 	var user User

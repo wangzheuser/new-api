@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
@@ -31,7 +31,6 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	if err != nil {
 		return types.NewError(fmt.Errorf("failed to copy request to GeminiChatRequest: %w", err), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
-	systemPrompt, prependSystemPrompt := resolveSystemPrompt(info)
 
 	// model mapped 模型映射
 	err = helper.ModelMappedHelper(c, info, request)
@@ -49,12 +48,28 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 
 	adaptor.Init(info)
 
-	passThroughRequest := (model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled) && textRouteAllowsPassThrough(info)
-	if !passThroughRequest {
-		before := request.GetTokenCountMeta()
-		if applyGeminiSystemPrompt(c, request, systemPrompt, prependSystemPrompt) {
-			if accountingErr := accountInjectedSystemPrompt(c, info, before, request.GetTokenCountMeta()); accountingErr != nil {
-				return accountingErr
+	if info.ChannelSetting.SystemPrompt != "" {
+		if request.SystemInstructions == nil {
+			request.SystemInstructions = &dto.GeminiChatContent{
+				Parts: []dto.GeminiPart{
+					{Text: info.ChannelSetting.SystemPrompt},
+				},
+			}
+		} else if len(request.SystemInstructions.Parts) == 0 {
+			request.SystemInstructions.Parts = []dto.GeminiPart{{Text: info.ChannelSetting.SystemPrompt}}
+		} else if info.ChannelSetting.SystemPromptOverride {
+			common.SetContextKey(c, constant.ContextKeySystemPromptOverride, true)
+			merged := false
+			for i := range request.SystemInstructions.Parts {
+				if request.SystemInstructions.Parts[i].Text == "" {
+					continue
+				}
+				request.SystemInstructions.Parts[i].Text = info.ChannelSetting.SystemPrompt + "\n" + request.SystemInstructions.Parts[i].Text
+				merged = true
+				break
+			}
+			if !merged {
+				request.SystemInstructions.Parts = append([]dto.GeminiPart{{Text: info.ChannelSetting.SystemPrompt}}, request.SystemInstructions.Parts...)
 			}
 		}
 	}
@@ -72,28 +87,9 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 			request.SystemInstructions = nil
 		}
 	}
-	if policyErr := prepareTextInputPolicies(c, info, request, passThroughRequest); policyErr != nil {
-		return policyErr
-	}
-	if isUnconvertedProtocolRoute(info) {
-		usage, nativeErr := executeNativeTextRoute(c, info, adaptor, request, passThroughRequest)
-		if nativeErr != nil {
-			return nativeErr
-		}
-		service.PostTextConsumeQuota(c, info, usage, nil)
-		return nil
-	}
-	if isConvertedProtocolRoute(info) {
-		usage, convertedErr := executeConvertedTextRoute(c, info, adaptor, request)
-		if convertedErr != nil {
-			return convertedErr
-		}
-		service.PostTextConsumeQuota(c, info, usage, nil)
-		return nil
-	}
 
 	var requestBody io.Reader
-	if passThroughRequest {
+	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())

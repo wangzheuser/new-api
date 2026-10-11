@@ -61,6 +61,7 @@ type ConditionOperation struct {
 	Value          interface{} `json:"value"`            // 匹配的值
 	Invert         bool        `json:"invert"`           // 反选功能，true表示取反结果
 	PassMissingKey bool        `json:"pass_missing_key"` // 未获取到json key时的行为
+	regex          *regexp.Regexp
 }
 
 type ParamOperation struct {
@@ -1024,7 +1025,10 @@ func checkConditions(data []byte, contextJSON string, conditions []ConditionOper
 	return lo.SomeBy(results, func(item bool) bool { return item }), nil
 }
 
-func checkSingleCondition(data []byte, contextJSON string, condition ConditionOperation) (bool, error) {
+func checkSingleCondition(data []byte, contextJSON string, condition *ConditionOperation) (bool, error) {
+	if condition == nil {
+		return false, fmt.Errorf("condition is nil")
+	}
 	source := normalizeConditionSource(condition.Source)
 	if source == "" {
 		return false, fmt.Errorf("unsupported condition source: %s", condition.Source)

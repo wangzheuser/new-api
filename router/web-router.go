@@ -1,7 +1,7 @@
 package router
 
 import (
-	"io/fs"
+	"embed"
 	"net/http"
 	"strings"
 
@@ -12,43 +12,36 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// ThemeAssets holds the embedded frontend assets for both themes.
-type ThemeAssets struct {
-	DefaultBuildFS   fs.FS
-	DefaultIndexPage []byte
-	ClassicBuildFS   fs.FS
-	ClassicIndexPage []byte
+// WebAssets holds the embedded dashboard frontend assets.
+type WebAssets struct {
+	BuildFS   embed.FS
+	IndexPage []byte
 }
 
 func SetWebRouter(router *gin.Engine, assets WebAssets, pluginDispatcher gin.HandlerFunc) {
 	frontendFS := common.EmbedFolder(assets.BuildFS, "web/dist")
 	compress := gzip.Gzip(gzip.DefaultCompression)
 
-	router.Use(gzip.Gzip(gzip.DefaultCompression))
-	router.Use(middleware.GlobalWebRateLimit())
-	router.Use(middleware.Cache())
-	router.Use(static.Serve("/", themeFS))
-	router.NoRoute(func(c *gin.Context) {
-		c.Set(middleware.RouteTagKey, "web")
-		if isFrontendAssetPath(c.Request.URL.Path) {
-			c.Header("Cache-Control", "no-store")
-			c.Status(http.StatusNotFound)
-			return
-		}
-		if strings.HasPrefix(c.Request.RequestURI, "/v1") || strings.HasPrefix(c.Request.RequestURI, "/api") || strings.HasPrefix(c.Request.RequestURI, "/assets") {
-			controller.RelayNotFound(c)
-			return
-		}
-		c.Header("Cache-Control", "no-cache")
-		if common.GetTheme() == "classic" {
-			c.Data(http.StatusOK, "text/html; charset=utf-8", assets.ClassicIndexPage)
-		} else {
-			c.Data(http.StatusOK, "text/html; charset=utf-8", assets.DefaultIndexPage)
-		}
-	})
-}
-
-// isFrontendAssetPath reports whether a missing path is a compiled frontend asset.
-func isFrontendAssetPath(path string) bool {
-	return strings.HasPrefix(path, "/static/")
+	router.NoRoute(
+		pluginDispatcher,
+		middleware.RouteTag("web"),
+		func(c *gin.Context) {
+			// ServeFrontendFiles sends build files already compressed.
+			if !frontendFS.Exists("/", c.Request.URL.Path) {
+				compress(c)
+			}
+		},
+		middleware.AccessTokenAudit(),
+		middleware.GlobalWebRateLimit(frontendFS),
+		middleware.Cache(),
+		middleware.ServeFrontendFiles(frontendFS),
+		func(c *gin.Context) {
+			if strings.HasPrefix(c.Request.RequestURI, "/v1") || strings.HasPrefix(c.Request.RequestURI, "/api") || strings.HasPrefix(c.Request.RequestURI, "/assets") {
+				controller.RelayNotFound(c)
+				return
+			}
+			c.Header("Cache-Control", "no-cache")
+			c.Data(http.StatusOK, "text/html; charset=utf-8", assets.IndexPage)
+		},
+	)
 }

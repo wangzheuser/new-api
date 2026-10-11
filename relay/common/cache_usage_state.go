@@ -25,7 +25,20 @@ func (info *RelayInfo) InitInputPolicyState() {
 	info.ContextTruncation = nil
 	info.ValidateInputPolicyBody = nil
 	info.CacheUsageSimulation = nil
-	p, source, enabled := model_setting.ResolveCacheUsageSimulation(info.ChannelOtherSettings.CacheUsageSimulation)
+	channelPolicy := info.ChannelOtherSettings.CacheUsageSimulation
+	var rootPolicy *dto.CacheUsageSimulationPolicy
+	if channelPolicy != nil {
+		rootPolicy = &dto.CacheUsageSimulationPolicy{
+			ForceDisabled:          channelPolicy.ForceDisabled,
+			Enabled:                channelPolicy.Enabled,
+			Mode:                   channelPolicy.Mode,
+			CreationTriggerPercent: channelPolicy.CreationTriggerPercent,
+			ReadTriggerPercent:     channelPolicy.ReadTriggerPercent,
+			CreationTokenPercent:   channelPolicy.CreationTokenPercent,
+			ReadTokenPercent:       channelPolicy.ReadTokenPercent,
+		}
+	}
+	p, source, enabled := model_setting.ResolveCacheUsageSimulation(rootPolicy)
 	if !enabled {
 		return
 	}

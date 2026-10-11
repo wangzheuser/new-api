@@ -319,7 +319,7 @@ func Register(c *gin.Context) {
 		// 生成默认令牌
 		token := model.Token{
 			UserId:             insertedUser.Id, // 使用插入后的用户ID
-			Name:               i18n.T(c, i18n.MsgUserDefaultTokenName, map[string]any{"Username": cleanUser.Username}),
+			Name:               fmt.Sprintf("Token for %s", cleanUser.Username),
 			Key:                key,
 			CreatedTime:        common.GetTimestamp(),
 			AccessedTime:       common.GetTimestamp(),
@@ -1162,6 +1162,8 @@ func ManageUser(c *gin.Context) {
 		return
 	}
 	myRole := c.GetInt("role")
+	var authorization *model.AuthFlowAuthorization
+	var revokedAccessTokens int64
 	if !canManageTargetRole(myRole, user.Role) {
 		common.ApiErrorT(c, "No permission to update users of same or higher permission level")
 		return
@@ -1180,87 +1182,15 @@ func ManageUser(c *gin.Context) {
 			common.ApiErrorT(c, "Cannot delete super administrator account")
 			return
 		}
-		authorization := requireAdminUserProof(c, service.VerificationScopeAdminUserDelete, service.AdminUserContext{UserID: user.Id})
+		authorization = requireAdminUserProof(c, service.VerificationScopeAdminUserDelete, service.AdminUserContext{UserID: user.Id})
 		if authorization == nil {
 			return
 		}
-		revokedAccessTokens, err := user.Delete()
+		revokedAccessTokens, err = user.Delete()
 		if err != nil {
 			common.ApiError(c, err)
 			return
 		}
-	case "promote":
-		if myRole != common.RoleRootUser {
-			common.ApiErrorI18n(c, i18n.MsgUserAdminCannotPromote)
-			return
-		}
-		if user.Role >= common.RoleAdminUser {
-			common.ApiErrorI18n(c, i18n.MsgUserAlreadyAdmin)
-			return
-		}
-		user.Role = common.RoleAdminUser
-	case "demote":
-		if user.Role == common.RoleRootUser {
-			common.ApiErrorI18n(c, i18n.MsgUserCannotDemoteRootUser)
-			return
-		}
-		if user.Role == common.RoleCommonUser {
-			common.ApiErrorI18n(c, i18n.MsgUserAlreadyCommon)
-			return
-		}
-		user.Role = common.RoleCommonUser
-	case "add_quota":
-		switch req.Mode {
-		case "add":
-			if req.Value <= 0 {
-				common.ApiErrorI18n(c, i18n.MsgUserQuotaChangeZero)
-				return
-			}
-			if err := model.IncreaseUserQuota(user.Id, req.Value, true); err != nil {
-				common.ApiError(c, err)
-				return
-			}
-			recordManageAuditFor(c, user.Id, "user.quota_add", map[string]interface{}{
-				"quota": logger.LogQuota(req.Value),
-			})
-		case "subtract":
-			if req.Value <= 0 {
-				common.ApiErrorI18n(c, i18n.MsgUserQuotaChangeZero)
-				return
-			}
-			if err := model.DecreaseUserQuota(user.Id, req.Value, true); err != nil {
-				common.ApiError(c, err)
-				return
-			}
-			recordManageAuditFor(c, user.Id, "user.quota_subtract", map[string]interface{}{
-				"quota": logger.LogQuota(req.Value),
-			})
-		case "override":
-			oldQuota := user.Quota
-			if err := model.DB.Model(&model.User{}).Where("id = ?", user.Id).Update("quota", req.Value).Error; err != nil {
-				common.ApiError(c, err)
-				return
-			}
-			recordManageAuditFor(c, user.Id, "user.quota_override", map[string]interface{}{
-				"from": logger.LogQuota(oldQuota),
-				"to":   logger.LogQuota(req.Value),
-			})
-		default:
-			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
-			return
-		}
-		recordManageAuditFor(c, user.Id, "user.manage", map[string]any{
-			"action":                req.Action,
-			"username":              user.Username,
-			"id":                    user.Id,
-			"verification_method":   authorization.Method,
-			"revoked_access_tokens": revokedAccessTokens,
-		})
-		c.JSON(http.StatusOK, gin.H{
-			"success": true,
-			"message": "",
-		})
-		return
 	case "promote":
 		if myRole != common.RoleRootUser {
 			common.ApiErrorT(c, "Regular administrators cannot promote other users to administrator")
@@ -1286,7 +1216,7 @@ func ManageUser(c *gin.Context) {
 		return
 	}
 
-	authorization := requireAdminUserProof(c, service.VerificationScopeAdminUserManage, service.AdminUserManageContext{UserID: user.Id, Action: req.Action})
+	authorization = requireAdminUserProof(c, service.VerificationScopeAdminUserManage, service.AdminUserManageContext{UserID: user.Id, Action: req.Action})
 	if authorization == nil {
 		return
 	}
@@ -1322,16 +1252,13 @@ func ManageUser(c *gin.Context) {
 		}
 	}
 	// 用户业务缓存与鉴权缓存分离；鉴权状态已在更新成功后刷新。
-	if req.Action == "disable" || req.Action == "promote" || req.Action == "demote" {
-		if err := model.InvalidateUserCache(user.Id); err != nil {
-			common.SysLog(fmt.Sprintf("failed to invalidate user cache for user %d: %s", user.Id, err.Error()))
-		}
-	}
+	// Update/authorization cache refresh is handled by the model update path.
 	recordManageAuditFor(c, user.Id, "user.manage", map[string]any{
-		"action":              req.Action,
-		"username":            user.Username,
-		"id":                  user.Id,
-		"verification_method": authorization.Method,
+		"action":                req.Action,
+		"username":              user.Username,
+		"id":                    user.Id,
+		"verification_method":   authorization.Method,
+		"revoked_access_tokens": revokedAccessTokens,
 	})
 	clearUser := model.User{
 		Role:   user.Role,
@@ -1341,53 +1268,6 @@ func ManageUser(c *gin.Context) {
 		"success": true,
 		"message": "",
 		"data":    clearUser,
-	})
-	return
-}
-
-type emailBindRequest struct {
-	Email string `json:"email"`
-	Code  string `json:"code"`
-}
-
-func EmailBind(c *gin.Context) {
-	var req emailBindRequest
-	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
-		common.ApiError(c, errors.New("invalid request body"))
-		return
-	}
-	email := req.Email
-	email = model.NormalizeEmail(email)
-	code := req.Code
-	if messageKey, args := validateEmailRestrictions(email); messageKey != "" {
-		common.ApiErrorI18n(c, messageKey, args)
-		return
-	}
-	if !common.VerifyCodeWithKey(email, code, common.EmailVerificationPurpose) {
-		common.ApiErrorI18n(c, i18n.MsgUserVerificationCodeError)
-		return
-	}
-	session := sessions.Default(c)
-	id := session.Get("id")
-	user := model.User{
-		Id: id.(int),
-	}
-	err := user.FillUserById()
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	if err := model.BindEmailToUser(&user, email); err != nil {
-		if errors.Is(err, model.ErrEmailAlreadyTaken) {
-			common.ApiErrorI18n(c, i18n.MsgUserEmailAlreadyTaken)
-			return
-		}
-		common.ApiError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
 	})
 	return
 }

@@ -173,14 +173,16 @@ func inspectStreamData(relayMode int, data string) (string, string, error) {
 }
 
 // accumulateFlushedStreamOutput adds only a chunk that was successfully flushed downstream.
-func accumulateFlushedStreamOutput(relayMode int, data string, responseTextBuilder *strings.Builder, toolCount *int) error {
+func accumulateFlushedStreamOutput(info *relaycommon.RelayInfo, relayMode int, data string, responseTextBuilder *strings.Builder, toolCount *int) error {
 	switch relayMode {
 	case relayconstant.RelayModeChatCompletions:
 		var streamResponse dto.ChatCompletionsStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
 			return err
 		}
-		info.ObserveResponseModel(streamResponse.Model)
+		if info != nil {
+			info.ObserveResponseModel(streamResponse.Model)
+		}
 		return ProcessStreamResponse(streamResponse, responseTextBuilder, toolCount)
 	case relayconstant.RelayModeCompletions:
 		var streamResponse dto.CompletionsStreamResponse

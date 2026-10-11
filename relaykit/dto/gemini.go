@@ -75,13 +75,15 @@ func (r *GeminiChatRequest) GetTokenCountMeta() *types.TokenCountMeta {
 		maxTokens = int(*r.GenerationConfig.MaxOutputTokens)
 	}
 
-	contents := r.Contents
-	if r.SystemInstructions != nil {
-		contents = append([]GeminiChatContent{*r.SystemInstructions}, contents...)
-	}
-
 	var inputTexts []string
-	for _, content := range contents {
+	if r.SystemInstructions != nil {
+		for _, part := range r.SystemInstructions.Parts {
+			if part.Text != "" {
+				inputTexts = append(inputTexts, part.Text)
+			}
+		}
+	}
+	for _, content := range r.Contents {
 		for _, part := range content.Parts {
 			if part.Text != "" {
 				inputTexts = append(inputTexts, part.Text)
@@ -541,12 +543,10 @@ type GeminiChatResponse struct {
 	HasUsageMetadata bool                      `json:"-"`
 }
 
-// GeminiErrorResponse follows the Google API error envelope returned by Gemini endpoints.
 type GeminiErrorResponse struct {
 	Error GeminiError `json:"error"`
 }
 
-// GeminiError contains the HTTP code and canonical Google RPC status.
 type GeminiError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`

@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"runtime"
@@ -260,7 +261,6 @@ func CleanupLogFiles(c *gin.Context) {
 			"message": fmt.Sprintf("部分文件删除失败（%d/%d）", len(cleanupResult.FailedFiles), cleanupResult.AttemptedCount),
 			"data":    result,
 		})
-		common.ApiErrorStatus(c, http.StatusOK, msg, gin.H{"data": result})
 		return
 	}
 

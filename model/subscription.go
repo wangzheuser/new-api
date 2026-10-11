@@ -767,7 +767,7 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 			// still allow completion for already purchased orders
 		}
 		upgradeGroup = strings.TrimSpace(plan.UpgradeGroup)
-		_, err = CreateUserSubscriptionFromPlanTx(tx, order.UserId, plan, SubscriptionApplyOptions{
+		applyResult, err := CreateUserSubscriptionFromPlanTx(tx, order.UserId, plan, SubscriptionApplyOptions{
 			Source:               "order",
 			ApplyMode:            SubscriptionApplyModePlanDefault,
 			EnforcePurchaseLimit: true,
@@ -775,8 +775,8 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 		if err != nil {
 			return err
 		}
-		if subscription.PrevUserGroup != "" {
-			upgradeGroup = strings.TrimSpace(subscription.UpgradeGroup)
+		if applyResult != nil && applyResult.Subscription != nil && applyResult.Subscription.PrevUserGroup != "" {
+			upgradeGroup = strings.TrimSpace(applyResult.Subscription.UpgradeGroup)
 		}
 		if err := upsertSubscriptionTopUpTx(tx, &order); err != nil {
 			return err
@@ -905,7 +905,7 @@ func AdminBindSubscriptionWithOptions(userId int, planId int, applyMode string, 
 		return nil, err
 	}
 	if result != nil && result.Subscription != nil && result.Subscription.Status == "active" && strings.TrimSpace(result.Subscription.UpgradeGroup) != "" {
-		_ = UpdateUserGroupCache(userId, result.Subscription.UpgradeGroup)
+		refreshSubscriptionUserGroupCache(userId, "admin subscription binding")
 	}
 	refreshSubscriptionUserAuthCache(userId)
 	return result, nil
@@ -968,11 +968,12 @@ func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 			}
 		}
 
-		if _, err := CreateUserSubscriptionFromPlanTx(tx, userId, plan, SubscriptionApplyOptions{
+		applyResult, err := CreateUserSubscriptionFromPlanTx(tx, userId, plan, SubscriptionApplyOptions{
 			Source:               PaymentMethodBalance,
 			ApplyMode:            SubscriptionApplyModePlanDefault,
 			EnforcePurchaseLimit: true,
-		}); err != nil {
+		})
+		if err != nil {
 			return err
 		}
 
@@ -997,8 +998,8 @@ func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 		logPlanTitle = plan.Title
 		logMoney = plan.PriceAmount
 		chargedQuota = requiredQuota
-		if subscription.PrevUserGroup != "" {
-			upgradeGroup = strings.TrimSpace(subscription.UpgradeGroup)
+		if applyResult != nil && applyResult.Subscription != nil && applyResult.Subscription.PrevUserGroup != "" {
+			upgradeGroup = strings.TrimSpace(applyResult.Subscription.UpgradeGroup)
 		}
 		return nil
 	})
@@ -1016,7 +1017,7 @@ func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 	}
 	refreshSubscriptionUserAuthCache(userId)
 	msg := fmt.Sprintf("使用余额购买订阅成功，套餐: %s，支付金额: %.2f，扣除额度: %d", logPlanTitle, logMoney, chargedQuota)
-	RecordLog(userId, LogTypeTopup, msg)
+	RecordLog(userId, LogTypeTopup, common.NewMessage(msg))
 	return nil
 }
 
@@ -1381,7 +1382,7 @@ func AdminUpdateUserSubscription(userSubscriptionId int, update UserSubscription
 		return nil, err
 	}
 	if result.GroupChanged != "" {
-		_ = UpdateUserGroupCache(userId, result.GroupChanged)
+		refreshSubscriptionUserGroupCache(userId, "subscription status update")
 	}
 	refreshSubscriptionUserAuthCache(userId)
 	return result, nil
@@ -1753,7 +1754,7 @@ func reconcileDueSubscriptionsForUser(userId int, now int64) (int, int, string, 
 		return activatedCount, expiredCount, "", err
 	}
 	if groupChanged != "" {
-		_ = UpdateUserGroupCache(userId, groupChanged)
+		refreshSubscriptionUserGroupCache(userId, "subscription reconciliation")
 	}
 	if activatedCount > 0 || expiredCount > 0 {
 		refreshSubscriptionUserAuthCache(userId)

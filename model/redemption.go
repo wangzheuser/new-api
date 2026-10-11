@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -279,15 +280,15 @@ func Redeem(key string, userId int) (result *RedemptionResult, err error) {
 		if err := cacheIncrUserQuota(userId, int64(result.Quota)); err != nil {
 			common.SysLog("failed to increase user quota cache after redemption: " + err.Error())
 		}
-		RecordLog(userId, LogTypeTopup, fmt.Sprintf("通过兑换码充值 %s，兑换码ID %d", logger.LogQuota(redemption.Quota), redemption.Id))
+		RecordLog(userId, LogTypeTopup, common.NewMessage(fmt.Sprintf("通过兑换码充值 %s，兑换码ID %d", logger.LogQuota(redemption.Quota), redemption.Id)))
 		return result, nil
 	}
 
 	if upgradeGroup != "" {
-		_ = UpdateUserGroupCache(userId, upgradeGroup)
+		_ = RefreshUserGroupCache(userId)
 	}
 	refreshSubscriptionUserAuthCache(userId)
-	RecordLog(userId, LogTypeTopup, fmt.Sprintf("通过兑换码兑换订阅 %s，兑换码ID %d", result.PlanTitle, redemption.Id))
+	RecordLog(userId, LogTypeTopup, common.NewMessage(fmt.Sprintf("通过兑换码兑换订阅 %s，兑换码ID %d", result.PlanTitle, redemption.Id)))
 	return result, nil
 }
 

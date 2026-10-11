@@ -13,6 +13,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	relaychannel "github.com/QuantumNous/new-api/relay/channel"
@@ -173,7 +174,8 @@ func GetChannelOps(c *gin.Context) {
 		}
 	}
 	common.ApiSuccess(c, gin.H{
-		"retry_times":           common.RetryTimes,
+		"retry_times":           snapshot.RetryTimes,
+		"request_policy":        gin.H{"automatic_disable": automaticDisable, "source": source},
 		"auto_disable_defaults": operation_setting.GetChannelAutoDisableSetting(),
 		"redis_enabled":         common.RedisEnabled,
 	})
@@ -1227,6 +1229,8 @@ func UpdateChannel(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	baseURLFromPluginDefault := channel.Type == constant.ChannelTypeTaskPlugin &&
+		(channel.BaseURL == nil || strings.TrimSpace(*channel.BaseURL) == "")
 	originProxy := originChannel.GetSetting().Proxy
 	proxyChanged := false
 	_, settingProvided := requestData["setting"]
@@ -2205,12 +2209,16 @@ func ManageMultiKeys(c *gin.Context) {
 		channel.ChannelInfo.MultiKeyDisabledTime = newDisabledTime
 		channel.ChannelInfo.MultiKeyDisabledReason = newDisabledReason
 
+		shouldCloseWebSocket := disableMultiKeyChannelIfUnavailable(channel)
 		err = channel.UpdateWithHealth()
 		if err != nil {
 			common.ApiError(c, err)
 			return
 		}
 		model.InitChannelCache()
+		if shouldCloseWebSocket {
+			closeActiveChannelWebSockets([]int{channel.Id})
+		}
 		service.ClearMultiKeyTemporaryDisable(channel.Id, keys[keyIndex])
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
@@ -2270,6 +2278,7 @@ func ManageMultiKeys(c *gin.Context) {
 		channel.ChannelInfo.MultiKeyDisabledTime = newDisabledTime
 		channel.ChannelInfo.MultiKeyDisabledReason = newDisabledReason
 
+		shouldCloseWebSocket := disableMultiKeyChannelIfUnavailable(channel)
 		err = channel.UpdateWithHealth()
 		if err != nil {
 			common.ApiError(c, err)

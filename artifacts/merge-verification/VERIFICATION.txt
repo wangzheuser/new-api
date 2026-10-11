@@ -1,0 +1,23 @@
+merge verification
+changed branch/field: dev <- main, preserving dev-specific changes; DTO compatibility, audit signatures, token/task controllers, router/video adapters.
+MODIFIED_FILE: /Users/777java/777/projects/github/new-api/artifacts/merge-verification/MODIFIED_FILE
+DIFF_FILE: /Users/777java/777/projects/github/new-api/artifacts/merge-verification/DIFF_FILE
+VERIFICATION.txt: /Users/777java/777/projects/github/new-api/artifacts/merge-verification/VERIFICATION.txt
+ROLLBACK.sh: /Users/777java/777/projects/github/new-api/artifacts/merge-verification/ROLLBACK.sh
+BASELINE command: git show codex/backup-dev-before-main-merge-20261011-415087a8c:relaykit/dto/channel_settings.go | sha256sum
+BASELINE result: path absent on backup branch because relaykit DTO file was introduced by merge; exit status 128.
+MODIFIED command: sha256sum relaykit/dto/channel_settings.go
+MODIFIED result: 958c67a800f525ed35397501aa9cae8237cb721502ce64c5693d777946aa9c2a; exit status 0.
+MODIFIED build command: go build -mod=mod ./...
+MODIFIED build result: success; exit status 0.
+MODIFIED frontend command: (cd web && bun run typecheck && bun run build)
+MODIFIED frontend result: success; exit status 0.
+ROLLBACK command: ./artifacts/merge-verification/ROLLBACK.sh artifacts/merge-verification/MODIFIED_FILE.rollback-copy artifacts/merge-verification/rollback-test-target.go.txt
+ROLLBACK result: restored target hash a722f152428eecf197fff5c9225ce1a37eed833ccf74789243398401e47835f9; exit status 0.
+restored behavior/status: rollback copy restored byte-for-byte; MODIFIED_FILE remains changed and current worktree remains on dev.
+full root test command: go test ./...
+full root test result: 1998 passed, 25 packages failed to compile or test; exit status 1. Failures are recorded in the handoff and block release/deployment.
+independent relaykit command: (cd relaykit && GOWORK=off go build ./... && GOWORK=off go test ./...)
+independent relaykit result: build and tests passed; exit status 0.
+independent tokenkit command: (cd tokenkit && GOWORK=off go build ./...)
+independent tokenkit result: build passed; exit status 0.

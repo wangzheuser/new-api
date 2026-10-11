@@ -512,6 +512,7 @@ func (a *TaskAdaptor) ParseResponse(c *gin.Context, resp *http.Response, info *r
 	defer func() {
 		if acceptedStream && taskErr != nil {
 			taskErr.NoRetry = true
+			taskErr.SkipRetry = true
 		}
 	}()
 	if !streaming && acceptedStream {
@@ -537,6 +538,7 @@ func (a *TaskAdaptor) ParseResponse(c *gin.Context, resp *http.Response, info *r
 	if err != nil {
 		failure := service.TaskErrorWrapper(err, "read_response_body_failed", http.StatusBadGateway)
 		failure.NoRetry = streaming
+		failure.SkipRetry = streaming
 		return nil, failure
 	}
 	headers := make(map[string][]string, len(resp.Header))

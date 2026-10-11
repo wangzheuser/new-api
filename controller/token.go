@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
@@ -223,6 +225,10 @@ func GetTokenKey(c *gin.Context) {
 		"id":   token.Id,
 		"name": token.Name,
 	})
+	recordDelegatedTokenAudit(c, userId, "token.key_view", map[string]interface{}{
+		"id":   token.Id,
+		"name": token.Name,
+	})
 }
 
 func GetTokenStatus(c *gin.Context) {
@@ -326,8 +332,8 @@ func AddToken(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	token := model.Token{}
-	err = c.ShouldBindJSON(&token)
+	request := tokenRequest{}
+	err = c.ShouldBindJSON(&request)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -365,6 +371,14 @@ func AddToken(c *gin.Context) {
 	if err := validateUserTokenGroup(userId, token.Group); err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	if token.Group == "auto" {
+		if !setTokenAutoGroups(c, &token, request.AutoGroups.Groups) {
+			return
+		}
+	} else {
+		token.CrossGroupRetry = false
+		_ = token.SetAutoGroups(nil)
 	}
 	key, err := common.GenerateKey()
 	if err != nil {
@@ -412,13 +426,11 @@ func DeleteToken(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	err = model.DeleteTokenById(id, userId)
+	token, err := model.GetTokenByIds(id, userId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	params := tokenAuditParams(c)
-	params["id"], params["name"] = token.Id, token.Name
 	err = token.Delete()
 	if err != nil {
 		common.ApiError(c, err)
@@ -441,8 +453,8 @@ func UpdateToken(c *gin.Context) {
 		return
 	}
 	statusOnly := c.Query("status_only")
-	token := model.Token{}
-	err = c.ShouldBindJSON(&token)
+	request := tokenRequest{}
+	err = c.ShouldBindJSON(&request)
 	if err != nil {
 		common.ApiError(c, err)
 		return

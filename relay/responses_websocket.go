@@ -16,7 +16,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	appconstant "github.com/QuantumNous/new-api/constant"
 	appdto "github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/middleware"
 	appmodel "github.com/QuantumNous/new-api/model"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
@@ -333,7 +332,10 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 			}
 			s.lockedModel, s.lockedChannelID, s.lockedGroup = modelName, channel.Id, info.UsingGroup
 			s.lockedKey, s.lockedKeyIndex = info.ApiKey, info.ChannelMultiKeyIndex
-			s.lockedRoute, _ = channel.GetOtherSettings().AdvancedCustom.MatchPathForModel(c.Request.URL.Path, modelName)
+			matchedRoute, _ := channel.GetOtherSettings().AdvancedCustom.MatchPathForModel(c.Request.URL.Path, modelName)
+			if routeJSON, marshalErr := common.Marshal(matchedRoute); marshalErr == nil {
+				_ = common.Unmarshal(routeJSON, &s.lockedRoute)
+			}
 			s.lockedContext = make(map[appconstant.ContextKey]any)
 			for _, key := range []appconstant.ContextKey{
 				appconstant.ContextKeyChannelId, appconstant.ContextKeyChannelName, appconstant.ContextKeyChannelType,
@@ -359,7 +361,6 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 	accumulator := service.NewResponsesUsageAccumulator(info)
 	info.StreamStatus = relaycommon.NewStreamStatus()
 	info.StreamStatus.RequireTerminal()
-	common.SetContextKey(c, appconstant.ContextKeyResponseStreamStatus, info.StreamStatus)
 	timeout := time.Duration(appconstant.StreamingTimeout) * time.Second
 	if timeout <= 0 {
 		timeout = 300 * time.Second
@@ -920,17 +921,12 @@ func selectResponsesWSChannel(c *gin.Context, modelName string, retryParam *serv
 	}) {
 		constraints.AddFilter(appdto.ChannelFilter{Kind: appdto.FilterResponsesWebSocket})
 	}
-	channel, _, selectErr := service.SelectChannelForRequest(c, modelName, retryParam)
-	if selectErr != nil {
-		message := selectErr.Message
-		if selectErr.MessageID != "" {
-			message = i18n.T(c, selectErr.MessageID, selectErr.Params)
-		}
-		code := selectErr.Code
-		if code == "" {
-			code = types.ErrorCodeGetChannelFailed
-		}
-		return nil, types.NewErrorWithStatusCode(errors.New(message), code, selectErr.StatusCode, types.ErrOptionWithSkipRetry())
+	channel, _, _, err := service.CacheGetRandomSatisfiedChannelWithRoute(retryParam)
+	if err != nil {
+		return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+	}
+	if channel == nil {
+		return nil, types.NewErrorWithStatusCode(errors.New("no channel available"), types.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
 	}
 	if err := middleware.SetupContextForSelectedChannel(c, channel, modelName); err != nil {
 		return nil, err

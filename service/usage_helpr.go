@@ -6,9 +6,10 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/tokenkit"
 	"github.com/gin-gonic/gin"
 )
 
@@ -35,13 +36,14 @@ func ResponseText2Usage(c *gin.Context, responseText string, modeName string, pr
 
 // EvaluateResponseOverrideBeforeSettlement records usage provenance and evaluates
 // the complete candidate response immediately before billing settlement.
-func EvaluateResponseOverrideBeforeSettlement(c *gin.Context, info *relaycommon.RelayInfo, usage *dto.Usage, upstreamStatusCode int) *relaycommon.ResponseOverrideDecision {
+func EvaluateResponseOverrideBeforeSettlement(c *gin.Context, info *relaycommon.RelayInfo, rawUsage any, upstreamStatusCode int) *relaycommon.ResponseOverrideDecision {
 	if c == nil || info == nil {
 		return nil
 	}
 	if common.GetContextKeyBool(c, constant.ContextKeyLocalCountTokens) {
 		info.SetResponseUsageState(relaycommon.ResponseUsageEstimated)
 	} else if info.ResponseSemantics.Response.UsageState != relaycommon.ResponseUsageUpstream {
+		usage := relayUsage(rawUsage)
 		if usage != nil && usage.TotalTokens > 0 {
 			info.SetResponseUsageState(relaycommon.ResponseUsageEstimated)
 		} else {

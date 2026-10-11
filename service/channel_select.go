@@ -8,10 +8,9 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -55,6 +54,17 @@ type RetryParam struct {
 	PreferredChannelID      int
 	ExcludedKeyFingerprints map[int]map[string]struct{}
 	resetNextTry            bool
+}
+
+// AppendUsedChannel records a channel on the request for diagnostics and
+// retry selection. The list is intentionally request-local.
+func AppendUsedChannel(c *gin.Context, channelID int) {
+	if c == nil || channelID <= 0 {
+		return
+	}
+	used := c.GetStringSlice("used_channels")
+	used = append(used, strconv.Itoa(channelID))
+	c.Set("used_channels", used)
 }
 
 // ExcludeChannelKey prevents one request from selecting the same failed credential again.
@@ -230,6 +240,58 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 		}
 	}
 	return channel, selectGroup, nil
+}
+
+func pinnedTaskPluginIdentities(c *gin.Context, expected string) ([]int, []string) {
+	if c == nil || expected == "" {
+		return nil, nil
+	}
+	if value, exists := c.Get(jsplugin.ContextKeyPinnedEndpoint); exists {
+		pinned, ok := value.(jsplugin.PinnedEndpoint)
+		if ok && pinned.Generation != nil && len(pinned.Candidates) > 1 {
+			expectedFound := false
+			channelTypes := make([]int, 0, len(pinned.Candidates))
+			pluginKeys := make([]string, 0, len(pinned.Candidates))
+			seen := make(map[int]struct{}, len(pinned.Candidates))
+			for _, candidate := range pinned.Candidates {
+				if candidate.Plugin == nil {
+					continue
+				}
+				if candidate.Plugin.Meta.Key == expected {
+					expectedFound = true
+				}
+				pluginKeys = append(pluginKeys, candidate.Plugin.Meta.Key)
+				for _, channelType := range candidate.Plugin.Meta.ChannelTypes {
+					if channelType == 0 || channelType == constant.ChannelTypeTaskPlugin {
+						continue
+					}
+					if _, duplicate := seen[channelType]; duplicate {
+						continue
+					}
+					if plugin, indexed := pinned.Generation.GetByChannelType(channelType); indexed && plugin == candidate.Plugin {
+						seen[channelType] = struct{}{}
+						channelTypes = append(channelTypes, channelType)
+					}
+				}
+			}
+			if expectedFound {
+				return channelTypes, pluginKeys
+			}
+		}
+	}
+	value, exists := c.Get(jsplugin.ContextKeyPinnedPlugin)
+	pinned, ok := value.(jsplugin.PinnedPlugin)
+	if !exists || !ok || pinned.Generation == nil || pinned.Plugin == nil || pinned.Plugin.Meta.Key != expected {
+		return nil, nil
+	}
+	channelTypes := make([]int, 0, len(pinned.Plugin.Meta.ChannelTypes))
+	for _, channelType := range pinned.Plugin.Meta.ChannelTypes {
+		if channelType == 0 || channelType == constant.ChannelTypeTaskPlugin {
+			continue
+		}
+		channelTypes = append(channelTypes, channelType)
+	}
+	return channelTypes, []string{expected}
 }
 
 // CacheGetRandomSatisfiedChannelWithRoute selects a channel and returns its protocol plan.

@@ -46,111 +46,9 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		)
 	}
 
-	request, err := common.DeepCopy(responsesReq)
-	if err != nil {
-		return types.NewError(fmt.Errorf("failed to copy request to GeneralOpenAIRequest: %w", err), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
-	}
-
-	err = helper.ModelMappedHelper(c, info, request)
-	if err != nil {
-		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
-	}
-
-	adaptor := GetAdaptor(info.ApiType)
-	if adaptor == nil {
-		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
-	}
-	adaptor.Init(info)
-	var requestBody io.Reader
-	passThroughRequest := (model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled) && textRouteAllowsPassThrough(info)
-	if !passThroughRequest {
-		systemPrompt, prepend := resolveSystemPrompt(info)
-		before := request.GetTokenCountMeta()
-		applied, err := applyResponsesSystemPrompt(c, request, systemPrompt, prepend)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-		}
-		if applied {
-			if accountingErr := accountInjectedSystemPrompt(c, info, before, request.GetTokenCountMeta()); accountingErr != nil {
-				return accountingErr
-			}
-		}
-	}
-	if policyErr := prepareTextInputPolicies(c, info, request, passThroughRequest); policyErr != nil {
-		return policyErr
-	}
-	if isUnconvertedProtocolRoute(info) {
-		nativeRequest := any(request)
-		if !passThroughRequest {
-			convertedRequest, convertErr := adaptor.ConvertOpenAIResponsesRequest(c, info, *request)
-			if convertErr != nil {
-				return types.NewError(convertErr, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-			}
-			nativeRequest = convertedRequest
-		}
-		usage, nativeErr := executeNativeTextRoute(c, info, adaptor, nativeRequest, passThroughRequest)
-		if nativeErr != nil {
-			return nativeErr
-		}
-		if strings.HasPrefix(info.GetBillingModelName(), "gpt-4o-audio") {
-			service.PostAudioConsumeQuota(c, info, usage, "")
-		} else {
-			service.PostTextConsumeQuota(c, info, usage, nil)
-		}
-		return nil
-	}
-	if isConvertedProtocolRoute(info) {
-		usage, convertedErr := executeConvertedTextRoute(c, info, adaptor, request)
-		if convertedErr != nil {
-			return convertedErr
-		}
-		if strings.HasPrefix(info.GetBillingModelName(), "gpt-4o-audio") {
-			service.PostAudioConsumeQuota(c, info, usage, "")
-		} else {
-			service.PostTextConsumeQuota(c, info, usage, nil)
-		}
-		return nil
-	}
-	if passThroughRequest {
-		storage, err := common.GetBodyStorage(c)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
-		}
-		requestBody = common.ReaderOnly(storage)
-	} else {
-		convertedRequest, err := adaptor.ConvertOpenAIResponsesRequest(c, info, *request)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-		}
-		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
-		jsonData, err := common.Marshal(convertedRequest)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-		}
-
-		// remove disabled fields for OpenAI Responses API
-		jsonData, err = relaycommon.RemoveDisabledFields(jsonData, info.ChannelOtherSettings, info.ChannelSetting.PassThroughBodyEnabled)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-		}
-
-		// apply param override
-		if len(info.ParamOverride) > 0 {
-			jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
-			if err != nil {
-				return newAPIErrorFromParamOverride(err)
-			}
-		}
-
-		logger.LogDebug(c, "requestBody: %s", jsonData)
-		body, size, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-		}
-		defer closer.Close()
-		jsonData = nil
-		info.UpstreamRequestBodySize = size
-		requestBody = body
+	adaptor, requestBody, closer, apiErr := PrepareResponsesRequest(c, info, responsesReq)
+	if apiErr != nil {
+		return apiErr
 	}
 	defer closer.Close()
 
@@ -182,15 +80,23 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 
 	usageDto := usage.(*dto.Usage)
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact {
+		originModelName := info.OriginModelName
+		originPriceData := info.PriceData
+
+		_, err := helper.ModelPriceHelper(c, info, info.GetEstimatePromptTokens(), &types.TokenCountMeta{})
+		if err != nil {
+			info.OriginModelName = originModelName
+			info.PriceData = originPriceData
+			return types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithSkipRetry(), types.ErrOptionWithStatusCode(http.StatusBadRequest))
+		}
 		service.PostTextConsumeQuota(c, info, usageDto, nil)
+
+		info.OriginModelName = originModelName
+		info.PriceData = originPriceData
 		return nil
 	}
 
-	if strings.HasPrefix(info.GetBillingModelName(), "gpt-4o-audio") {
-		service.PostAudioConsumeQuota(c, info, usageDto, "")
-	} else {
-		service.PostTextConsumeQuota(c, info, usageDto, nil)
-	}
+	ConsumeResponsesQuota(c, info, usageDto)
 	return nil
 }
 

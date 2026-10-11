@@ -6,15 +6,15 @@ import (
 	"math"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	relaymedia "github.com/QuantumNous/new-api/service/relayconvert/internal/media"
-	relaymeta "github.com/QuantumNous/new-api/service/relayconvert/internal/meta"
-	sharedgemini "github.com/QuantumNous/new-api/service/relayconvert/internal/shared/gemini"
-	"github.com/QuantumNous/new-api/setting/model_setting"
-	"github.com/QuantumNous/new-api/types"
-	"github.com/gin-gonic/gin"
+	"context"
+
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
+	relaymedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/media"
+	sharedgemini "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/gemini"
+	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
+	kittypes "github.com/QuantumNous/new-api/relaykit/types"
 )
 
 func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto.GeneralOpenAIRequest, info convmeta.Meta) (*dto.GeminiChatRequest, error) {
@@ -254,18 +254,13 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 		reasoningPartCount := 0
 		if reasoningContent := message.GetReasoningContent(); reasoningContent != "" &&
 			(message.Role == "assistant" || message.Role == "model") {
-			// Replayed reasoning is a thought part; signature bypass remains on the callable/text part.
-			parts = append(parts, dto.GeminiPart{
-				Text:    reasoningContent,
-				Thought: true,
-			})
+			parts = append(parts, dto.GeminiPart{Text: reasoningContent, Thought: true})
 			reasoningPartCount = 1
-			info.AddReasoningHistoryAudit(
-				types.RelayFormatOpenAI,
-				types.RelayFormatGemini,
-				relaycommon.ReasoningHistoryReasonPreserved,
-				1, 0, 0, 0,
-			)
+			if recorder, ok := info.(interface {
+				AddReasoningHistoryAudit(kittypes.RelayFormat, kittypes.RelayFormat, string, int, int, int, int)
+			}); ok {
+				recorder.AddReasoningHistoryAudit(kittypes.RelayFormatOpenAI, kittypes.RelayFormatGemini, kittypes.ReasoningHistoryReasonPreserved, 1, 0, 0, 0)
+			}
 		}
 		if message.ToolCalls != nil {
 			for _, call := range message.ParseToolCalls() {
@@ -370,7 +365,7 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 		}
 
 		if shouldAttachThoughtSignature && !signatureAttached && len(parts) > 0 {
-			sharedgemini.AttachFirstTextThoughtSignature(parts[reasoningPartCount:])
+			sharedgemini.AttachFirstTextThoughtSignature(opts, parts[reasoningPartCount:])
 		}
 
 		content.Parts = parts

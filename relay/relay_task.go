@@ -486,7 +486,11 @@ func sunoFetchRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *dto.Ta
 	}
 	var tasks []any
 	if len(condition.IDs) > 0 {
-		taskModels, err := model.GetByTaskIds(userId, condition.IDs)
+		taskIDs := make([]string, 0, len(condition.IDs))
+		for _, id := range condition.IDs {
+			taskIDs = append(taskIDs, fmt.Sprint(id))
+		}
+		taskModels, err := model.GetByTaskIdsForPlatforms(userId, []constant.TaskPlatform{constant.TaskPlatformSuno}, taskIDs)
 		if err != nil {
 			taskResp = service.TaskErrorWrapper(err, "get_tasks_failed", http.StatusInternalServerError)
 			return

@@ -171,6 +171,8 @@ type RelayInfo struct {
 	RoutingModelName         string // 用于渠道选择与计费的内部模型，初始化后不再修改
 	AttemptModelName         string // 当前尝试的逻辑模型，可在单跳上下文兜底时切换
 	OriginModelName          string
+	BillingModelName         string
+	ResponseModel            *ResponseModel
 	RequestURLPath           string
 	RequestHeaders           map[string]string
 	ShouldIncludeUsage       bool
@@ -183,11 +185,14 @@ type RelayInfo struct {
 	IsFirstRequest           bool
 	AudioUsage               bool
 	ReasoningEffort          string
+	ReasoningConversion      *dto.ReasoningConversionState
 	UserSetting              dto.UserSetting
 	UserEmail                string
 	UserQuota                int
 	RelayFormat              types.RelayFormat
-	ChannelRoutePlan         *types.ChannelRoutePlan
+	ChannelRoutePlan         *hosttypes.ChannelRoutePlan
+	ClaudeToChatStreamState  any
+	ChatToGeminiStreamState  any
 	ProtocolEndpointMismatch bool
 	SendResponseCount        int
 	ReceivedResponseCount    int
@@ -235,6 +240,9 @@ type RelayInfo struct {
 	ResponseSemantics                     ResponseSemantics
 	ResponseOverride                      *ResponseOverrideDecision
 	ConversationCapture                   *ConversationCapture
+	conversionDiagnosticKeys              map[conversionDiagnosticKey]struct{}
+	conversionDiagnostics                 []types.ConversionDiagnostic
+	conversionDiagnosticsTruncated        bool
 
 	PriceData hosttypes.PriceData
 
@@ -249,6 +257,9 @@ type RelayInfo struct {
 	TieredBillingSnapshot *billingexpr.BillingSnapshot
 	BillingRequestInput   *billingexpr.RequestInput
 	ContextFallback       *ContextFallbackDecision
+	BillingImageCount     *int
+	ImageRequestCount     int
+	ImageQuotaBeforeGroup float64
 
 	Request dto.Request
 
@@ -262,8 +273,16 @@ type RelayInfo struct {
 	// 若为空，调用 GetFinalRequestRelayFormat 会回退到 RequestConversionChain 的最后一项或 RelayFormat。
 	FinalRequestRelayFormat types.RelayFormat
 
-	StreamStatus    *StreamStatus
-	streamLifecycle *streamLifecycleState
+	StreamStatus                 *StreamStatus
+	VendorToolUsage              func(raw []byte) map[string]int
+	WebSearchBillingKey          string
+	requestInferredToolKey       string
+	PerformanceOutputTokens      int64
+	PerformanceBusinessRejection bool
+	convOptions                  *convmeta.Options
+	responsesToolState           *convmeta.ResponsesToolState
+	UpstreamRequestBodySize      int64
+	streamLifecycle              *streamLifecycleState
 
 	ThinkingContentInfo
 	TokenCountMeta
@@ -487,7 +506,7 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	if channelType == constant.ChannelTypeVertexAi {
 		channelMeta.ApiVersion = c.GetString("region")
 	}
-	if routePlan, ok := common.GetContextKeyType[types.ChannelRoutePlan](c, constant.ContextKeyChannelRoutePlan); ok {
+	if routePlan, ok := common.GetContextKeyType[hosttypes.ChannelRoutePlan](c, constant.ContextKeyChannelRoutePlan); ok {
 		info.ChannelRoutePlan = &routePlan
 	}
 
@@ -831,7 +850,6 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		reqId = common.NewRequestId()
 	}
 	reasoningEffort := reasoningEffortFromRequest(request)
-	originModelName := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 	info := &RelayInfo{
 		Request:         request,
 		ReasoningEffort: reasoningEffort,
@@ -1038,7 +1056,7 @@ func (info *RelayInfo) ResolveStreamRetryCommitPolicy() StreamRetryCommitPolicy 
 	}
 	// Planned text routes write every downstream business event through StreamStatus-aware helpers.
 	switch info.ChannelRoutePlan.RouteMode {
-	case types.ChannelRouteModeNative, types.ChannelRouteModeNormalized, types.ChannelRouteModeConverted:
+	case hosttypes.ChannelRouteModeNative, hosttypes.ChannelRouteModeNormalized, hosttypes.ChannelRouteModeConverted:
 		return StreamRetryCommitPolicyPayload
 	default:
 		return StreamRetryCommitPolicyHTTP
@@ -1130,7 +1148,151 @@ func (info *RelayInfo) GetRoutingModelName() string {
 
 // GetBillingModelName 返回 fallback 发生前已冻结的初始计费模型。
 func (info *RelayInfo) GetBillingModelName() string {
+	if info == nil {
+		return ""
+	}
+	if info.BillingModelName != "" {
+		return info.BillingModelName
+	}
 	return info.GetRoutingModelName()
+}
+
+func (info *RelayInfo) GetOriginModelName() string {
+	if info == nil {
+		return ""
+	}
+	return info.OriginModelName
+}
+
+func (info *RelayInfo) GetUpstreamModelName() string {
+	if info == nil || info.ChannelMeta == nil {
+		return ""
+	}
+	return info.UpstreamModelName
+}
+
+func (info *RelayInfo) HasChannelMeta() bool { return info != nil && info.ChannelMeta != nil }
+func (info *RelayInfo) GetChannelID() int {
+	if info == nil || info.ChannelMeta == nil {
+		return 0
+	}
+	return info.ChannelId
+}
+func (info *RelayInfo) GetChannelType() int {
+	if info == nil || info.ChannelMeta == nil {
+		return 0
+	}
+	return info.ChannelType
+}
+func (info *RelayInfo) GetIsStream() bool { return info != nil && info.IsStream }
+func (info *RelayInfo) GetReasoningEffort() string {
+	if info == nil {
+		return ""
+	}
+	return info.ReasoningEffort
+}
+func (info *RelayInfo) SetReasoningEffort(effort string) {
+	if info != nil {
+		info.ReasoningEffort = strings.TrimSpace(effort)
+	}
+}
+func (info *RelayInfo) ReasoningState() *dto.ReasoningConversionState {
+	if info == nil {
+		return nil
+	}
+	return info.ReasoningConversion
+}
+func (info *RelayInfo) EnsureClaudeConvertInfo() *convmeta.ClaudeConvertInfo {
+	if info == nil {
+		return &convmeta.ClaudeConvertInfo{LastMessagesType: convmeta.LastMessageTypeNone}
+	}
+	if info.ClaudeConvertInfo == nil {
+		info.ClaudeConvertInfo = &convmeta.ClaudeConvertInfo{LastMessagesType: convmeta.LastMessageTypeNone}
+	}
+	return info.ClaudeConvertInfo
+}
+func (info *RelayInfo) ResponsesToolState() *convmeta.ResponsesToolState {
+	if info == nil {
+		return nil
+	}
+	return info.responsesToolState
+}
+func (info *RelayInfo) SetResponsesToolState(state *convmeta.ResponsesToolState) {
+	if info != nil {
+		info.responsesToolState = state
+	}
+}
+func (info *RelayInfo) GetSendResponseCount() int {
+	if info == nil {
+		return 0
+	}
+	return info.SendResponseCount
+}
+func (info *RelayInfo) IncrSendResponseCount() {
+	if info != nil {
+		info.SendResponseCount++
+	}
+}
+
+// ConvOptions returns a request-scoped snapshot used by relaykit converters.
+func (info *RelayInfo) ConvOptions() *convmeta.Options {
+	if info != nil && info.convOptions != nil {
+		return info.convOptions
+	}
+	claudeSettings := model_setting.GetClaudeSettings()
+	geminiSettings := model_setting.GetGeminiSettings()
+	options := &convmeta.Options{
+		Claude: convmeta.ClaudeOptions{
+			ThinkingAdapterEnabled:                claudeSettings.ThinkingAdapterEnabled,
+			ThinkingAdapterBudgetTokensPercentage: claudeSettings.ThinkingAdapterBudgetTokensPercentage,
+			DefaultMaxTokens:                      claudeSettings.GetDefaultMaxTokens,
+		},
+		Gemini: convmeta.GeminiOptions{
+			ThinkingAdapterEnabled:                geminiSettings.ThinkingAdapterEnabled,
+			ThinkingAdapterBudgetTokensPercentage: geminiSettings.ThinkingAdapterBudgetTokensPercentage,
+			FunctionCallThoughtSignatureEnabled:   geminiSettings.FunctionCallThoughtSignatureEnabled,
+			SupportsImagine:                       model_setting.IsGeminiModelSupportImagine,
+			SafetySetting:                         model_setting.GetGeminiSafetySetting,
+		},
+		OpenRouterDialect:      info != nil && info.GetChannelType() == constant.ChannelTypeOpenRouter,
+		PreserveThinkingSuffix: model_setting.ShouldPreserveThinkingSuffix,
+		PreserveEffortTail:     model_setting.ShouldPreserveEffortTail,
+	}
+	if info != nil {
+		if info.ChannelMeta != nil {
+			options.ToolLossPolicy = types.ConversionLossPolicy(info.ChannelOtherSettings.ToolLossPolicy)
+		}
+		info.convOptions = options
+	}
+	return options
+}
+
+func (info *RelayInfo) UpdateImageCount(count int64) {
+	if info == nil || count <= 0 || count > int64(dto.MaxImageN) {
+		return
+	}
+	if info.PriceData.UsePrice {
+		info.PriceData.AddOtherRatio("n", float64(count))
+	}
+	if info.BillingImageCount != nil {
+		n := int(count)
+		info.BillingImageCount = &n
+	}
+}
+
+func (info *RelayInfo) RequestedImageCount() int {
+	if info == nil {
+		return 1
+	}
+	if info.ImageRequestCount > 0 {
+		return info.ImageRequestCount
+	}
+	if request, ok := info.Request.(*dto.ImageRequest); ok && request != nil {
+		if n, err := request.ImageCount(false); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 1
 }
 
 // GetAttemptModelName 返回当前渠道尝试应使用的逻辑模型。

@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -334,7 +335,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
-	otherStr := other.JSONString()
+	otherStr := common.MapToJsonStr(other)
 	// 判断是否需要记录 IP
 	needRecordIp := false
 	if settingMap, err := GetUserSetting(userId, false); err == nil {
@@ -376,21 +377,21 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 }
 
 type RecordConsumeLogParams struct {
-	ChannelId           int                    `json:"channel_id"`
-	PromptTokens        int                    `json:"prompt_tokens"`
-	CompletionTokens    int                    `json:"completion_tokens"`
-	InputTokens         *int                   `json:"input_tokens,omitempty"`
-	CacheCreationTokens int                    `json:"cache_creation_tokens"`
-	CacheReadTokens     int                    `json:"cache_read_tokens"`
-	ModelName           string                 `json:"model_name"`
-	TokenName           string                 `json:"token_name"`
-	Quota               int                    `json:"quota"`
-	Content             string                 `json:"content"`
-	TokenId             int                    `json:"token_id"`
-	UseTimeSeconds      int                    `json:"use_time_seconds"`
-	IsStream            bool                   `json:"is_stream"`
-	Group               string                 `json:"group"`
-	Other               map[string]interface{} `json:"other"`
+	ChannelId           int    `json:"channel_id"`
+	PromptTokens        int    `json:"prompt_tokens"`
+	CompletionTokens    int    `json:"completion_tokens"`
+	InputTokens         *int   `json:"input_tokens,omitempty"`
+	CacheCreationTokens int    `json:"cache_creation_tokens"`
+	CacheReadTokens     int    `json:"cache_read_tokens"`
+	ModelName           string `json:"model_name"`
+	TokenName           string `json:"token_name"`
+	Quota               int    `json:"quota"`
+	Content             any    `json:"content"`
+	TokenId             int    `json:"token_id"`
+	UseTimeSeconds      int    `json:"use_time_seconds"`
+	IsStream            bool   `json:"is_stream"`
+	Group               string `json:"group"`
+	Other               any    `json:"other"`
 }
 
 // RecordConsumeLog persists one settled consumption record and its normalized token breakdown.
@@ -411,7 +412,24 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	requestId := c.GetString(common.RequestIdKey)
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
 	createdAt := common.GetTimestamp()
-	otherStr := common.MapToJsonStr(params.Other)
+	otherStr := ""
+	switch other := params.Other.(type) {
+	case *LogOther:
+		otherStr = other.JSONString()
+	case map[string]any:
+		otherStr = common.MapToJsonStr(other)
+	case string:
+		otherStr = other
+	}
+	content := ""
+	switch value := params.Content.(type) {
+	case string:
+		content = value
+	case []*common.Message:
+		content = NewLogOther().setContent(value)
+	case *common.Message:
+		content = NewLogOther().setContent([]*common.Message{value})
+	}
 	inputTokens := params.PromptTokens
 	if params.InputTokens != nil {
 		// 使用计费阶段归一化后的常规输入，避免缓存 Token 在汇总时重复计算。
@@ -429,7 +447,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		Username:            username,
 		CreatedAt:           createdAt,
 		Type:                LogTypeConsume,
-		Content:             params.Content,
+		Content:             content,
 		PromptTokens:        params.PromptTokens,
 		CompletionTokens:    params.CompletionTokens,
 		InputTokens:         inputTokens,

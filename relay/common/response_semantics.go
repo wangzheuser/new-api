@@ -17,6 +17,7 @@ const (
 	ResponseOutcomeIncomplete = "incomplete"
 	ResponseOutcomeRejected   = "rejected"
 	ResponseOutcomeFailed     = "failed"
+	ResponseOutcomeCancelled  = "cancelled"
 	ResponseOutcomeUnknown    = "unknown"
 
 	ResponseRejectionNone    = "none"

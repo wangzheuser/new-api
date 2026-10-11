@@ -105,3 +105,27 @@ func cacheGetTokenByKey(key string) (*Token, error) {
 	token.Key = key
 	return &token, nil
 }
+
+// cacheDeleteToken removes one token hash after a committed mutation.
+func cacheDeleteToken(key string) error {
+	if !common.RedisEnabled || key == "" {
+		return nil
+	}
+	return common.RDB.Del(context.Background(), getTokenCacheKey(key)).Err()
+}
+
+func invalidateTokensCache(tokens []Token) error {
+	if !common.RedisEnabled {
+		return nil
+	}
+	var firstErr error
+	for _, token := range tokens {
+		if token.Key == "" {
+			continue
+		}
+		if err := invalidateTokenCacheForMutation(token.Key); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}

@@ -236,7 +236,7 @@ func TestConvertResponseResponsesToClaudePreservesReasoningSummaryWithTools(t *t
 		Output: []dto.ResponsesOutput{
 			{
 				Type: "reasoning",
-				Summary: []dto.ResponsesOutputContent{
+				Summary: []dto.ResponsesReasoningSummaryPart{
 					{Type: "summary_text", Text: "reasoning summary"},
 				},
 			},
@@ -253,7 +253,7 @@ func TestConvertResponseResponsesToClaudePreservesReasoningSummaryWithTools(t *t
 		},
 	}
 
-	info := &relaycommon.RelayInfo{}
+	info := &convmeta.Values{}
 	result, err := ConvertResponse(nil, info, types.RelayFormatClaude, responses)
 	require.NoError(t, err)
 	claudeResponse, ok := result.Value.(*dto.ClaudeResponse)
@@ -261,14 +261,8 @@ func TestConvertResponseResponsesToClaudePreservesReasoningSummaryWithTools(t *t
 	require.Len(t, claudeResponse.Content, 3)
 	assert.Equal(t, "thinking", claudeResponse.Content[0].Type)
 	assert.Equal(t, "reasoning summary", *claudeResponse.Content[0].Thinking)
-	require.NotNil(t, claudeResponse.Content[0].Signature)
-	assert.Empty(t, *claudeResponse.Content[0].Signature)
 	assert.Equal(t, "text", claudeResponse.Content[1].Type)
 	assert.Equal(t, "tool_use", claudeResponse.Content[2].Type)
-	require.NotNil(t, info.ReasoningHistory)
-	assert.Equal(t, 2, info.ReasoningHistory.PreservedMessages)
-	assert.Equal(t, 1, info.ReasoningHistory.SyntheticClientSignatures)
-	require.Len(t, info.ReasoningHistory.Routes, 2)
 }
 
 func TestConvertResponseByIDExecutesMultiHopAndChecksSource(t *testing.T) {

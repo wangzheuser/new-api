@@ -3,8 +3,8 @@ package claudemessages
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -15,10 +15,10 @@ func TestResponseClaude2OpenAIPreservesAllReasoningTextAndTools(t *testing.T) {
 		Model:      "model-test",
 		StopReason: "tool_use",
 		Content: []dto.ClaudeMediaMessage{
-			{Type: "thinking", Thinking: common.GetPointer("first ")},
-			{Type: "text", Text: common.GetPointer("visible ")},
-			{Type: "thinking", Thinking: common.GetPointer("second")},
-			{Type: "text", Text: common.GetPointer("answer")},
+			{Type: "thinking", Thinking: kitutil.GetPointer("first ")},
+			{Type: "text", Text: kitutil.GetPointer("visible ")},
+			{Type: "thinking", Thinking: kitutil.GetPointer("second")},
+			{Type: "text", Text: kitutil.GetPointer("answer")},
 			{Type: "tool_use", Id: "call_1", Name: "lookup", Input: map[string]any{"q": "x"}},
 		},
 	})
@@ -35,10 +35,10 @@ func TestResponseClaude2OpenAIPreservesAllReasoningTextAndTools(t *testing.T) {
 func TestStreamResponseClaude2OpenAIIgnoresSignatureDelta(t *testing.T) {
 	response := StreamResponseClaude2OpenAI(&dto.ClaudeResponse{
 		Type:  "content_block_delta",
-		Index: common.GetPointer(0),
+		Index: kitutil.GetPointer(0),
 		Delta: &dto.ClaudeMediaMessage{
 			Type:      "signature_delta",
-			Signature: common.GetPointer("opaque-signature"),
+			Signature: kitutil.GetPointer("opaque-signature"),
 		},
 	})
 

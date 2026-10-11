@@ -26,8 +26,44 @@ const seriesSchema = "dbcd0a3c01b55203"
 
 const publicMinRequestCount int64 = 100
 
+// MaxRecentModels bounds historical lookups made by one summary request.
+const MaxRecentModels = 50
+const recentSuccessSampleLimit = 24
+const recentSuccessHistoryHours = 7 * 24
+
 func Init() {
 	go flushLoop()
+}
+
+// RecordRelaySample records one completed relay using the billing-path output count.
+func RecordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens int64) {
+	if info == nil {
+		return
+	}
+	now := time.Now()
+	hasTtft := info.IsStream && info.HasSendResponse()
+	ttftMs := int64(0)
+	if hasTtft {
+		ttftMs = info.FirstResponseTime.Sub(info.StartTime).Milliseconds()
+	}
+	latencyMs := now.Sub(info.StartTime).Milliseconds()
+	generationMs := latencyMs
+	if hasTtft {
+		generationMs = now.Sub(info.FirstResponseTime).Milliseconds()
+	}
+	if generationMs <= 0 {
+		generationMs = latencyMs
+	}
+	Record(Sample{
+		Model:        info.OriginModelName,
+		Group:        info.UsingGroup,
+		LatencyMs:    latencyMs,
+		TtftMs:       ttftMs,
+		HasTtft:      hasTtft,
+		Success:      success,
+		OutputTokens: outputTokens,
+		GenerationMs: generationMs,
+	})
 }
 
 // RecordRelayResult samples one finished relay exactly once, at the request
@@ -407,6 +443,7 @@ func mergeCounters(merged map[bucketKey]counters, key bucketKey, value counters)
 
 func buildQueryResult(modelName string, merged map[bucketKey]counters) QueryResult {
 	groupBuckets := map[string]map[int64]counters{}
+	modelBuckets := map[string]map[int64]counters{}
 	requestCount := int64(0)
 	for key, value := range merged {
 		if value.requestCount == 0 {

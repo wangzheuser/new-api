@@ -15,6 +15,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
@@ -23,7 +24,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/ollama"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/relaykit/dto"
+	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 
@@ -397,7 +398,13 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 			return nil, fmt.Errorf("failed to get channel key: %w", apiErr)
 		}
 		key = strings.TrimSpace(key)
-		models, err := gemini.FetchGeminiModels(baseURL, key, channel.GetSetting())
+		var relaySettings kitdto.ChannelSettings
+		if data, marshalErr := common.Marshal(channel.GetSetting()); marshalErr != nil {
+			return nil, marshalErr
+		} else if unmarshalErr := common.Unmarshal(data, &relaySettings); unmarshalErr != nil {
+			return nil, unmarshalErr
+		}
+		models, err := gemini.FetchGeminiModels(baseURL, key, relaySettings)
 		if err != nil {
 			return nil, err
 		}
@@ -476,16 +483,24 @@ func fetchAdvancedCustomUpstreamModelIDs(channel *model.Channel, baseURL string)
 		return nil, fmt.Errorf("failed to get channel key: %w", apiErr)
 	}
 	key = strings.TrimSpace(key)
+	var relayOtherSettings kitdto.ChannelOtherSettings
+	data, err := common.Marshal(channel.GetOtherSettings())
+	if err != nil {
+		return nil, err
+	}
+	if err := common.Unmarshal(data, &relayOtherSettings); err != nil {
+		return nil, err
+	}
 
 	info := &relaycommon.RelayInfo{
 		RelayFormat:    types.RelayFormatOpenAI,
 		RelayMode:      relayconstant.RelayModeUnknown,
-		RequestURLPath: dto.AdvancedCustomModelListPath,
+		RequestURLPath: kitdto.AdvancedCustomModelListPath,
 		ChannelMeta: &relaycommon.ChannelMeta{
 			ChannelType:          channel.Type,
 			ChannelBaseUrl:       baseURL,
 			ApiKey:               key,
-			ChannelOtherSettings: channel.GetOtherSettings(),
+			ChannelOtherSettings: relayOtherSettings,
 		},
 	}
 
@@ -958,7 +973,16 @@ func DetectChannelUpstreamModelUpdates(c *gin.Context) {
 		return
 	}
 
-	settings := channel.GetOtherSettings()
+	var settings dto.ChannelOtherSettings
+	data, marshalErr := common.Marshal(channel.GetOtherSettings())
+	if marshalErr != nil {
+		common.ApiError(c, marshalErr)
+		return
+	}
+	if err := common.Unmarshal(data, &settings); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	modelsChanged, autoAdded, err := checkAndPersistChannelUpstreamModelUpdates(channel, &settings, true, false)
 	if err != nil {
 		common.ApiError(c, err)

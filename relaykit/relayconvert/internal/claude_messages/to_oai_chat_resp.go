@@ -222,8 +222,10 @@ func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextRe
 		Created: kitutil.GetTimestamp(),
 	}
 	var responseText strings.Builder
+	responseTextOffset := 0
 	var responseThinking strings.Builder
 	tools := make([]dto.ToolCallResponse, 0)
+	annotations := make([]any, 0)
 
 	fullTextResponse.Id = claudeResponse.Id
 	for _, message := range claudeResponse.Content {
@@ -243,7 +245,14 @@ func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextRe
 				responseThinking.WriteString(*message.Thinking)
 			}
 		case "text":
-			responseText.WriteString(message.GetText())
+			text := message.GetText()
+			offset := responseTextOffset
+			responseText.WriteString(text)
+			responseTextOffset += utf8.RuneCountInString(text)
+			converted, err := claudeCitationsToChat(message.Citations, text, offset)
+			if err == nil {
+				annotations = append(annotations, converted...)
+			}
 		}
 	}
 	choice := dto.OpenAITextResponseChoice{
@@ -254,6 +263,9 @@ func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextRe
 		FinishReason: StopReasonClaudeToOpenAI(claudeResponse.StopReason),
 	}
 	choice.SetStringContent(responseText.String())
+	if encodedAnnotations, err := marshalChatAnnotations(annotations); err == nil && len(encodedAnnotations) > 0 {
+		choice.Message.Annotations = encodedAnnotations
+	}
 	if responseThinking.Len() > 0 {
 		thinking := responseThinking.String()
 		choice.Message.ReasoningContent = &thinking
@@ -534,8 +546,10 @@ func FormatClaudeResponseInfo(claudeResponse *dto.ClaudeResponse, oaiResponse *d
 
 		claudeInfo.Done = true
 	} else if claudeResponse.Type == "content_block_start" {
-		if claudeResponse.ContentBlock != nil && claudeResponse.ContentBlock.Type == "tool_use" {
-			claudeInfo.ResponseText.WriteString(claudeResponse.ContentBlock.Name)
+		// Tool calls are most of an agent turn's output; count them for usage fallback.
+		if block := claudeResponse.ContentBlock; block != nil && block.Type == "tool_use" {
+			claudeInfo.ResponseText.WriteString(block.Name)
+			claudeInfo.ToolUseCount++
 		}
 	} else {
 		return false

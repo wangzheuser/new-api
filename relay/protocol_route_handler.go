@@ -10,13 +10,13 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/service/relayconvert"
 	"github.com/QuantumNous/new-api/service/relaynormalize"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -113,7 +113,8 @@ func executeNativeTextRoute(c *gin.Context, info *relaycommon.RelayInfo, adaptor
 		if err != nil {
 			return nil, types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
 		}
-		body = common.ReaderOnly(storage)
+		body = common.NewReplayableBodyReader(storage)
+		defer storage.Close()
 		if c.Request.ContentLength > 0 {
 			info.UpstreamRequestBodySize = c.Request.ContentLength
 		}
@@ -160,11 +161,11 @@ func prepareTextRouteRequest(c *gin.Context, info *relaycommon.RelayInfo, reques
 	if apiError != nil {
 		return nil, nil, apiError
 	}
-	body, size, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
+	body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 	if err != nil {
 		return nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
-	info.UpstreamRequestBodySize = size
+	info.UpstreamRequestBodySize = int64(len(jsonData))
 	return body, closer, nil
 }
 

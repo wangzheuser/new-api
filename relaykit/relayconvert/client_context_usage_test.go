@@ -1,9 +1,9 @@
 package relayconvert
 
 import (
-	"github.com/QuantumNous/new-api/dto"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"testing"
@@ -15,7 +15,7 @@ func TestConvertedClaudeSparseUsageKeepsBilling(t *testing.T) {
 		t.Run(string(target), func(t *testing.T) {
 			state, err := NewResponseStreamState(types.RelayFormatClaude, target, ResponseStreamOptions{})
 			require.NoError(t, err)
-			info := &relaycommon.RelayInfo{}
+			info := &convmeta.Values{}
 			start := &dto.ClaudeResponse{Type: "message_start", Message: &dto.ClaudeMediaMessage{Usage: &dto.ClaudeUsage{InputTokens: 100, CacheReadInputTokens: 40, CacheCreationInputTokens: 20}}}
 			_, err = ConvertStreamResponseChunk(nil, info, state, start)
 			require.NoError(t, err)

@@ -128,7 +128,10 @@ func ObserveResponsesOutcome(info *relaycommon.RelayInfo, event *dto.ResponsesSt
 	}
 	switch {
 	case event.Type == "error" || event.Type == "response.failed" || event.Type == "response.error" || responseStatus == "failed":
-		code, errorType := event.Code, ""
+		code, errorType := "", ""
+		if event.Code != nil {
+			code = fmt.Sprint(event.Code)
+		}
 		if event.Response != nil {
 			if oaiErr := event.Response.GetOpenAIError(); oaiErr != nil {
 				if oaiErr.Code != nil {

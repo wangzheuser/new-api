@@ -245,7 +245,7 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 	// 1. 退还资金来源（钱包或订阅）
 	if err := taskApplyDelta(ctx, task, -quota); err != nil {
 		logger.LogWarn(ctx, fmt.Sprintf("退还资金来源失败 task %s: %s", task.TaskID, err.Error()))
-		return
+		return false
 	}
 
 	// 2. 记录日志

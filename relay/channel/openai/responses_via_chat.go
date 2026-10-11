@@ -97,6 +97,23 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 		return true
 	}
+	failResponsesStream := func(err error) bool {
+		failureResults, handled := state.FailResponsesStream("server_error", err.Error(), "")
+		if !handled {
+			return false
+		}
+		for _, result := range failureResults {
+			event, ok := result.Value.(relayconvert.ChatToResponsesStreamEvent)
+			if !ok {
+				streamErr = types.NewOpenAIError(fmt.Errorf("expected OAI responses stream event, got %T", result.Value), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+				return true
+			}
+			if !sendEvent(event) {
+				return true
+			}
+		}
+		return true
+	}
 
 	helper.StreamScannerHandlerWithOptions(c, resp, info, helper.StreamScannerOptions{RequireExplicitTerminal: true}, func(data string, sr *helper.StreamResult) {
 		if streamErr != nil {

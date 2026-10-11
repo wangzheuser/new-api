@@ -195,21 +195,9 @@ func RedeemUserImpersonationTicket(c *gin.Context) {
 		"target_username": targetUser.Username,
 		"target_role":     targetUser.Role,
 	}
-	model.RecordOperationAuditLog(adminUser.Id, auditContentEN("user.impersonation_redeem", params), c.ClientIP(), "user.impersonation_redeem", params, map[string]interface{}{
-		"admin_id":       adminUser.Id,
-		"admin_username": adminUser.Username,
-		"admin_role":     adminUser.Role,
-		"auth_method":    "impersonation_ticket",
-	}, map[string]interface{}{
-		"method":     c.Request.Method,
-		"route":      c.FullPath(),
-		"path":       c.Request.URL.Path,
-		"status":     http.StatusOK,
-		"success":    true,
-		"request_id": c.GetString(common.RequestIdKey),
-		"client_ip":  c.ClientIP(),
-		"user_agent": c.Request.UserAgent(),
-	})
+	model.RecordOperationAuditLog(adminUser.Id, adminUser.Role, auditContentEN("user.impersonation_redeem", params), c.ClientIP(), "user.impersonation_redeem", params,
+		&model.AuditAdminInfo{AdminID: adminUser.Id, AdminUsername: adminUser.Username, AdminRole: adminUser.Role, AuthMethod: "impersonation_ticket"},
+		&model.AuditRequestInfo{Method: c.Request.Method, Route: c.FullPath(), Path: c.Request.URL.Path, Status: http.StatusOK, Success: true}, c)
 
 	common.ApiSuccess(c, gin.H{
 		"id":           targetUser.Id,

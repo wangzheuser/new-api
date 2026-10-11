@@ -1,35 +1,66 @@
 package helper
 
 import (
-	"strings"
+	"errors"
+	"fmt"
 
-	basecommon "github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/relay/common"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	rootcommon "github.com/QuantumNous/new-api/common"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	hostreasoning "github.com/QuantumNous/new-api/setting/reasoning"
 	"github.com/gin-gonic/gin"
 )
 
 func ModelMappedHelper(c *gin.Context, info *relaycommon.RelayInfo, request dto.Request) error {
 	if info.ChannelMeta == nil {
-		info.ChannelMeta = &common.ChannelMeta{}
+		info.ChannelMeta = &relaycommon.ChannelMeta{}
 	}
 
-	isResponsesCompact := info.RelayMode == relayconstant.RelayModeResponsesCompact
-	originModelName := info.GetAttemptModelName()
-	mappingModelName := originModelName
-	if isResponsesCompact && strings.HasSuffix(originModelName, ratio_setting.CompactModelSuffix) {
-		mappingModelName = strings.TrimSuffix(originModelName, ratio_setting.CompactModelSuffix)
-	}
+	// map model name
+	modelMapping := c.GetString("model_mapping")
+	if modelMapping != "" && modelMapping != "{}" {
+		modelMap := make(map[string]string)
+		err := rootcommon.Unmarshal([]byte(modelMapping), &modelMap)
+		if err != nil {
+			return fmt.Errorf("unmarshal_model_mapping_failed")
+		}
 
-	// Selection and forwarding must resolve exactly the same model aliases.
-	mapped, err := basecommon.ResolveMappedModel(c.GetString("model_mapping"), mappingModelName)
-	if err != nil {
-		return err
+		// 支持链式模型重定向，最终使用链尾的模型
+		currentModel := info.OriginModelName
+		visitedModels := map[string]bool{
+			currentModel: true,
+		}
+		for {
+			mappedModel, exists := modelMap[currentModel]
+			baseModel := hostreasoning.BaseModelName(currentModel)
+			if (!exists || mappedModel == "") && baseModel != currentModel {
+				mappedModel, exists = modelMap[baseModel]
+			}
+			if exists && mappedModel != "" {
+				// 模型重定向循环检测，避免无限循环
+				if visitedModels[mappedModel] {
+					if mappedModel == currentModel {
+						if currentModel == info.OriginModelName {
+							info.IsModelMapped = false
+							return nil
+						}
+
+						info.IsModelMapped = true
+						break
+					}
+					return errors.New("model_mapping_contains_cycle")
+				}
+				visitedModels[mappedModel] = true
+				currentModel = mappedModel
+				info.IsModelMapped = true
+			} else {
+				break
+			}
+		}
+		if info.IsModelMapped {
+			info.UpstreamModelName = currentModel
+		}
 	}
-	info.IsModelMapped = mapped != originModelName
-	info.UpstreamModelName = mapped
 
 	if request != nil {
 		request.SetModelName(info.UpstreamModelName)

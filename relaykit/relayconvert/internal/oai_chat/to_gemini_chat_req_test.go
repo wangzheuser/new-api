@@ -3,22 +3,15 @@ package oaichat
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	sharedgemini "github.com/QuantumNous/new-api/service/relayconvert/internal/shared/gemini"
-	"github.com/QuantumNous/new-api/setting/model_setting"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
+	sharedgemini "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/gemini"
+	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestOpenAIChatRequestToGeminiGenerateContentPlacesReasoningBeforeFunctionCall(t *testing.T) {
-	settings := model_setting.GetGeminiSettings()
-	original := settings.FunctionCallThoughtSignatureEnabled
-	settings.FunctionCallThoughtSignatureEnabled = true
-	t.Cleanup(func() {
-		settings.FunctionCallThoughtSignatureEnabled = original
-	})
-
 	reasoning := "reasoning history"
 	assistant := dto.Message{Role: "assistant", Content: "visible", ReasoningContent: &reasoning}
 	assistant.SetToolCalls([]dto.ToolCallRequest{{
@@ -31,7 +24,7 @@ func TestOpenAIChatRequestToGeminiGenerateContentPlacesReasoningBeforeFunctionCa
 			{Role: "user", Content: "question"},
 			assistant,
 		},
-	}, nil)
+	}, &convmeta.Values{Options: &convmeta.Options{Gemini: convmeta.GeminiOptions{FunctionCallThoughtSignatureEnabled: true}}})
 	require.NoError(t, err)
 	require.Len(t, got.Contents, 2)
 	parts := got.Contents[1].Parts
@@ -41,7 +34,7 @@ func TestOpenAIChatRequestToGeminiGenerateContentPlacesReasoningBeforeFunctionCa
 	assert.Empty(t, parts[0].ThoughtSignature)
 	require.NotNil(t, parts[1].FunctionCall)
 	var signature string
-	require.NoError(t, common.Unmarshal(parts[1].ThoughtSignature, &signature))
+	require.NoError(t, kitutil.Unmarshal(parts[1].ThoughtSignature, &signature))
 	assert.Equal(t, sharedgemini.ThoughtSignatureBypassValue, signature)
 	assert.Equal(t, "visible", parts[2].Text)
 }

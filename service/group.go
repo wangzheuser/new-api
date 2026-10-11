@@ -3,6 +3,8 @@ package service
 import (
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -42,6 +44,13 @@ func GetUserUsableGroups(userGroup string) map[string]string {
 func GroupInUserUsableGroups(userGroup, groupName string) bool {
 	_, ok := GetUserUsableGroups(userGroup)[groupName]
 	return ok
+}
+
+func IsUserSelectableGroup(userGroup, groupName string) bool {
+	if groupName == "" || groupName == "auto" {
+		return false
+	}
+	return GroupInUserUsableGroups(userGroup, groupName) && ratio_setting.ContainsGroupRatio(groupName)
 }
 
 // GetUserEffectiveGroups returns configured groups plus active manual and subscription grants.
@@ -112,6 +121,54 @@ func GetUserAutoGroup(userGroup string) []string {
 		autoGroups = append(autoGroups, group)
 	}
 	return autoGroups
+}
+
+func FilterUserTokenAutoGroups(userGroup string, groups []string) []string {
+	maxCount := setting.GetMaxTokenAutoGroups()
+	filtered := make([]string, 0, min(len(groups), maxCount))
+	seen := make(map[string]struct{})
+	for _, group := range groups {
+		if !IsUserSelectableGroup(userGroup, group) {
+			continue
+		}
+		if _, ok := seen[group]; ok {
+			continue
+		}
+		seen[group] = struct{}{}
+		filtered = append(filtered, group)
+		if len(filtered) == maxCount {
+			break
+		}
+	}
+	return filtered
+}
+
+func GetRequestAutoGroups(c *gin.Context, userGroup string) []string {
+	value, ok := common.GetContextKey(c, constant.ContextKeyTokenAutoGroups)
+	if !ok {
+		return GetUserAutoGroup(userGroup)
+	}
+	groups, ok := value.([]string)
+	if !ok {
+		return []string{}
+	}
+	return FilterUserTokenAutoGroups(userGroup, groups)
+}
+
+// GetGroupsEnabledModels returns enabled models in group order without duplicates.
+func GetGroupsEnabledModels(groups []string) []string {
+	seen := make(map[string]struct{})
+	models := make([]string, 0)
+	for _, group := range groups {
+		for _, modelName := range model.GetGroupEnabledModels(group) {
+			if _, ok := seen[modelName]; ok {
+				continue
+			}
+			seen[modelName] = struct{}{}
+			models = append(models, modelName)
+		}
+	}
+	return models
 }
 
 // GetUserEffectiveAutoGroups returns auto groups available through configuration or subscriptions.

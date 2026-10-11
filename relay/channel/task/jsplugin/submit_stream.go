@@ -1,6 +1,7 @@
 package jsplugin
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"mime"
@@ -11,7 +12,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
-	"github.com/QuantumNous/new-api/relay/helper"
 )
 
 // readSubmitEvents owns only SSE framing and bounded JSON state. The plugin
@@ -33,7 +33,8 @@ func (a *TaskAdaptor) readSubmitEvents(parent context.Context, resp *http.Respon
 	timer := time.AfterFunc(idleTimeout, func() { cancel(fmt.Errorf("task submit stream idle timeout")) })
 	defer timer.Stop()
 
-	scanner := helper.NewStreamScanner(resp.Body, maxTaskPluginPersistedJSONBytes+1)
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 64<<10), maxTaskPluginPersistedJSONBytes+1)
 	hook := "parseSubmitEvent"
 	var accumulated *pluginruntime.JSONState
 	if pluginruntime.UsesSubmitEventDelta(a.plugin.Meta, a.plugin.Engine) {

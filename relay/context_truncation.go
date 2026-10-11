@@ -17,7 +17,17 @@ import (
 
 // prepareTextInputPolicies operates only on the handler's attempt-local request copy.
 func prepareTextInputPolicies(c *gin.Context, info *relaycommon.RelayInfo, request dto.Request, passThrough bool) *types.NewAPIError {
-	rule, source, enabled := model_setting.ResolveContextTruncation(info.ChannelOtherSettings.ContextTruncation, info.GetAttemptModelName())
+	var channelPolicy *dto.ContextTruncationPolicy
+	if info.ChannelOtherSettings.ContextTruncation != nil {
+		encoded, marshalErr := common.Marshal(info.ChannelOtherSettings.ContextTruncation)
+		if marshalErr == nil {
+			channelPolicy = &dto.ContextTruncationPolicy{}
+			if unmarshalErr := common.Unmarshal(encoded, channelPolicy); unmarshalErr != nil {
+				channelPolicy = nil
+			}
+		}
+	}
+	rule, source, enabled := model_setting.ResolveContextTruncation(channelPolicy, info.GetAttemptModelName())
 	state := &relaycommon.ContextTruncationState{Rule: rule, Source: source, Model: info.GetAttemptModelName(), Enabled: enabled}
 	info.ContextTruncation = state
 	if !enabled {

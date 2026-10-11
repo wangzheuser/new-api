@@ -7,11 +7,13 @@ import (
 )
 
 type TaskError struct {
-	Code          string             `json:"code"`
-	Message       string             `json:"message"`
-	Data          any                `json:"data"`
-	StatusCode    int                `json:"-"`
-	SkipRetry     bool               `json:"-"`
+	Code       string `json:"code"`
+	Message    string `json:"message"`
+	Data       any    `json:"data"`
+	StatusCode int    `json:"-"`
+	SkipRetry  bool   `json:"-"`
+	// NoRetry keeps compatibility with older task retry callers.
+	NoRetry       bool               `json:"-"`
 	LocalError    bool               `json:"-"`
 	Error         error              `json:"-"`
 	UpstreamError *types.NewAPIError `json:"-"`

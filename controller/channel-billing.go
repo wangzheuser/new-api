@@ -423,6 +423,14 @@ func updateChannelMoonshotBalance(channel *model.Channel) (float64, error) {
 
 func fetchAdvancedCustomBalance(channel *model.Channel) (channelBalanceResult, error) {
 	key := strings.TrimSpace(channel.Key)
+	var channelOtherSettings dto.ChannelOtherSettings
+	settingBytes, err := common.Marshal(channel.GetOtherSettings())
+	if err != nil {
+		return channelBalanceResult{}, sanitizeFetchModelsError(err, key)
+	}
+	if err := common.Unmarshal(settingBytes, &channelOtherSettings); err != nil {
+		return channelBalanceResult{}, sanitizeFetchModelsError(err, key)
+	}
 	info := &relaycommon.RelayInfo{
 		RelayFormat:    types.RelayFormatOpenAI,
 		RelayMode:      relayconstant.RelayModeUnknown,
@@ -431,7 +439,7 @@ func fetchAdvancedCustomBalance(channel *model.Channel) (channelBalanceResult, e
 			ChannelType:          constant.ChannelTypeAdvancedCustom,
 			ChannelBaseUrl:       channel.GetBaseURL(),
 			ApiKey:               key,
-			ChannelOtherSettings: channel.GetOtherSettings(),
+			ChannelOtherSettings: channelOtherSettings,
 		},
 	}
 	requestURL, headers, err := (&advancedcustom.Adaptor{}).BuildBalanceRequest(info)
@@ -635,9 +643,9 @@ func updateAllChannelsBalance() error {
 		result, err := updateChannelBalance(channel)
 		if err != nil {
 			continue
-		} else {
+		} else if result.RawResponse == "" {
 			// A successful, supported balance response of zero is quota exhaustion.
-			if balance <= 0 {
+			if result.Balance <= 0 {
 				apiErr := types.NewOpenAIError(
 					errors.New("balance quota exhausted"),
 					types.ErrorCodeBadResponseStatusCode,

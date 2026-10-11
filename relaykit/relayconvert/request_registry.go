@@ -421,7 +421,7 @@ func isNilRequest(request any) bool {
 	}
 }
 
-func convertChatRequestToResponses(_ *gin.Context, info *relaycommon.RelayInfo, request any) (any, error) {
+func convertChatRequestToResponses(c context.Context, info convmeta.Meta, request any) (any, error) {
 	chatRequest, ok := request.(*dto.GeneralOpenAIRequest)
 	if !ok {
 		if value, ok := request.(dto.GeneralOpenAIRequest); ok {
@@ -431,7 +431,7 @@ func convertChatRequestToResponses(_ *gin.Context, info *relaycommon.RelayInfo, 
 	if chatRequest == nil {
 		return nil, fmt.Errorf("expected OpenAI chat completions request, got %T", request)
 	}
-	return oaichat.ChatCompletionsRequestToResponsesRequestWithInfo(chatRequest, info)
+	return oaichat.ChatCompletionsRequestToResponsesRequestWithInfo(c, chatRequest, info)
 }
 
 func convertClaudeRequestToOpenAI(c context.Context, info convmeta.Meta, request any) (any, error) {
@@ -447,7 +447,20 @@ func convertClaudeRequestToOpenAI(c context.Context, info convmeta.Meta, request
 	return claudemessages.ClaudeMessagesRequestToOpenAIChat(c, *claudeRequest, info)
 }
 
-func convertOpenAIRequestToClaude(c *gin.Context, info *relaycommon.RelayInfo, request any) (any, error) {
+func convertClaudeRequestToOpenAIResponses(c context.Context, info convmeta.Meta, request any) (any, error) {
+	claudeRequest, ok := request.(*dto.ClaudeRequest)
+	if !ok {
+		if value, ok := request.(dto.ClaudeRequest); ok {
+			claudeRequest = &value
+		}
+	}
+	if claudeRequest == nil {
+		return nil, fmt.Errorf("expected Anthropic Messages request, got %T", request)
+	}
+	return claudemessages.ClaudeMessagesRequestToOpenAIResponses(c, *claudeRequest, info)
+}
+
+func convertOpenAIRequestToClaude(c context.Context, info convmeta.Meta, request any) (any, error) {
 	openAIRequest, ok := request.(*dto.GeneralOpenAIRequest)
 	if !ok {
 		if value, ok := request.(dto.GeneralOpenAIRequest); ok {
@@ -457,7 +470,7 @@ func convertOpenAIRequestToClaude(c *gin.Context, info *relaycommon.RelayInfo, r
 	if openAIRequest == nil {
 		return nil, fmt.Errorf("expected OpenAI chat completions request, got %T", request)
 	}
-	return oaichat.OpenAIChatRequestToClaudeMessages(c, *openAIRequest, info)
+	return oaichat.OpenAIChatRequestToClaudeMessages(c, info, *openAIRequest)
 }
 
 func convertGeminiRequestToOpenAI(c context.Context, info convmeta.Meta, request any) (any, error) {
@@ -502,7 +515,7 @@ func convertOpenAIResponsesRequestToGeminiChat(c context.Context, info convmeta.
 	return oairesponses.OpenAIResponsesRequestToGeminiChat(c, responsesRequest, info)
 }
 
-func convertResponsesRequestToChat(_ *gin.Context, info *relaycommon.RelayInfo, request any) (any, error) {
+func convertResponsesRequestToChat(c context.Context, _ convmeta.Meta, request any) (any, error) {
 	responsesRequest, ok := request.(*dto.OpenAIResponsesRequest)
 	if !ok {
 		if value, ok := request.(dto.OpenAIResponsesRequest); ok {
@@ -512,5 +525,5 @@ func convertResponsesRequestToChat(_ *gin.Context, info *relaycommon.RelayInfo, 
 	if responsesRequest == nil {
 		return nil, fmt.Errorf("expected OpenAI responses request, got %T", request)
 	}
-	return oairesponses.ResponsesRequestToChatCompletionsRequestWithInfo(responsesRequest, info)
+	return oairesponses.ResponsesRequestToChatCompletionsRequest(c, responsesRequest)
 }

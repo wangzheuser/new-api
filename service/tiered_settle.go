@@ -6,7 +6,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 )
@@ -23,7 +22,8 @@ type TieredResultWrapper = billingexpr.TieredResult
 // include all sub-categories (cache, image, audio). Claude-format APIs
 // report them as text-only. This function normalizes to text-only when
 // sub-categories are separately priced.
-func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVars map[string]bool) billingexpr.TokenParams {
+func BuildTieredTokenParams(rawUsage any, isClaudeUsageSemantic bool, usedVars map[string]bool) billingexpr.TokenParams {
+	usage := relayUsage(rawUsage)
 	p := float64(usage.PromptTokens)
 	c := float64(usage.CompletionTokens)
 	cr := float64(usage.PromptTokensDetails.CachedTokens)

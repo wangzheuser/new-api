@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/convdiag"
+	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
+	kittypes "github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/samber/lo"
 )
 
@@ -76,12 +78,11 @@ func convertChatResponseFormatToResponsesText(reqFormat *dto.ResponseFormat) jso
 	return textRaw
 }
 
-func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*dto.OpenAIResponsesRequest, error) {
-	return ChatCompletionsRequestToResponsesRequestWithInfo(req, nil)
+func ChatCompletionsRequestToResponsesRequest(ctx context.Context, req *dto.GeneralOpenAIRequest) (*dto.OpenAIResponsesRequest, error) {
+	return ChatCompletionsRequestToResponsesRequestWithInfo(ctx, req, nil)
 }
 
-// ChatCompletionsRequestToResponsesRequestWithInfo converts Chat history and records payload-free reasoning audit data.
-func ChatCompletionsRequestToResponsesRequestWithInfo(req *dto.GeneralOpenAIRequest, info *relaycommon.RelayInfo) (*dto.OpenAIResponsesRequest, error) {
+func ChatCompletionsRequestToResponsesRequestWithInfo(ctx context.Context, req *dto.GeneralOpenAIRequest, info convmeta.Meta) (*dto.OpenAIResponsesRequest, error) {
 	if req == nil {
 		return nil, errors.New("request is nil")
 	}
@@ -160,27 +161,25 @@ func ChatCompletionsRequestToResponsesRequestWithInfo(req *dto.GeneralOpenAIRequ
 			continue
 		}
 
-		if role == "assistant" {
-			if reasoningContent := msg.GetReasoningContent(); reasoningContent != "" {
-				// Responses keeps reasoning as a sibling item immediately before its assistant turn.
-				inputItems = append(inputItems, map[string]any{
-					"type": "reasoning",
-					"id":   fmt.Sprintf("rs_%s", common.GetUUID()),
-					"summary": []map[string]any{
-						{"type": "summary_text", "text": reasoningContent},
-					},
-				})
-				info.AddReasoningHistoryAudit(
-					types.RelayFormatOpenAI,
-					types.RelayFormatOpenAIResponses,
-					relaycommon.ReasoningHistoryReasonPreserved,
-					1, 0, 0, 0,
-				)
-			}
-		}
-
 		item := map[string]any{
 			"role": role,
+		}
+		if role == "assistant" {
+			if reasoningContent := msg.GetReasoningContent(); reasoningContent != "" {
+				inputItems = append(inputItems, map[string]any{
+					"type": "reasoning",
+					"id":   fmt.Sprintf("rs_%s", kitutil.GetUUID()),
+					"summary": []map[string]any{{
+						"type": "summary_text",
+						"text": reasoningContent,
+					}},
+				})
+				if recorder, ok := info.(interface {
+					AddReasoningHistoryAudit(kittypes.RelayFormat, kittypes.RelayFormat, string, int, int, int, int)
+				}); ok {
+					recorder.AddReasoningHistoryAudit(kittypes.RelayFormatOpenAI, kittypes.RelayFormatOpenAIResponses, kittypes.ReasoningHistoryReasonPreserved, 1, 0, 0, 0)
+				}
+			}
 		}
 
 		if msg.Content == nil {

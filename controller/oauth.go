@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -21,11 +22,12 @@ import (
 const oauthAuthFlowTTL = 10 * time.Minute
 
 type oauthStateRequest struct {
-	Provider string          `json:"provider"`
-	Intent   string          `json:"intent"`
-	Aff      string          `json:"aff,omitempty"`
-	Scope    string          `json:"scope,omitempty"`
-	Context  json.RawMessage `json:"context,omitempty"`
+	Provider         string          `json:"provider"`
+	Intent           string          `json:"intent"`
+	Aff              string          `json:"aff,omitempty"`
+	RegistrationCode string          `json:"registration_code,omitempty"`
+	Scope            string          `json:"scope,omitempty"`
+	Context          json.RawMessage `json:"context,omitempty"`
 }
 
 type oauthFlowPayload struct {
@@ -43,33 +45,18 @@ func providerParams(name string) map[string]any {
 
 // GenerateOAuthCode generates a state code for OAuth CSRF protection
 func GenerateOAuthCode(c *gin.Context) {
+	var request oauthStateRequest
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		common.ApiErrorT(c, "Invalid parameters")
+		return
+	}
 	session := sessions.Default(c)
-	state := common.GetRandomString(12)
-	affCode := c.Query("aff")
-	registrationCode := ""
-	if c.Request.Method == http.MethodPost {
-		var req struct {
-			AffCode          string `json:"aff_code"`
-			RegistrationCode string `json:"registration_code"`
-		}
-		if err := common.DecodeJson(c.Request.Body, &req); err != nil {
-			common.ApiError(c, err)
-			return
-		}
-		affCode = req.AffCode
-		registrationCode = req.RegistrationCode
-	}
-	if affCode != "" {
-		session.Set("aff", affCode)
-	}
-	if registrationCode != "" {
-		session.Set("registration_code", registrationCode)
+	if request.RegistrationCode != "" {
+		session.Set("registration_code", request.RegistrationCode)
 	} else {
 		session.Delete("registration_code")
 	}
-	session.Set("oauth_state", state)
-	err := session.Save()
-	if err != nil {
+	if err := session.Save(); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -330,6 +317,7 @@ func handleOAuthVerification(c *gin.Context, provider string, oauthUser *oauth.O
 }
 
 func handleOAuthLogin(c *gin.Context, provider oauth.Provider, oauthUser *oauth.OAuthUser, token *oauth.OAuthToken, flow *model.AuthFlow) {
+	session := sessions.Default(c)
 	// 7. Find or create user
 	var payload oauthFlowPayload
 	if err := common.UnmarshalJsonStr(flow.Payload, &payload); err != nil {
@@ -369,7 +357,7 @@ func handleOAuthLogin(c *gin.Context, provider oauth.Provider, oauthUser *oauth.
 
 	// 9. Setup login
 	session.Delete("registration_code")
-	setupLogin(user, c)
+	setupLogin(user, migration, c)
 }
 
 // handleOAuthBind handles binding OAuth account to existing user
@@ -426,6 +414,7 @@ func handleOAuthBind(c *gin.Context, providerName string, provider oauth.Provide
 // legacy GitHub binding that still waits for the login verification, it also
 // returns the rewrite to carry into the challenge.
 func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *oauth.OAuthUser, token *oauth.OAuthToken, affiliateCode string) (*model.User, *service.LegacyGitHubMigration, error) {
+	session := sessions.Default(c)
 	user := &model.User{}
 	if provider.ProviderUserIDColumn() == "telegram_id" {
 		err := provider.FillUserByProviderID(user, oauthUser.ProviderUserID)

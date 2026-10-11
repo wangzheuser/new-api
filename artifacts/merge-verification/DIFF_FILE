@@ -1,0 +1,3 @@
+git show backup:relaykit/dto/channel_settings.go | sha256sum
+BASELINE: git show codex/backup-dev-before-main-merge-20261011-415087a8c:relaykit/dto/channel_settings.go | sha256sum => path absent (new file on merged branch), exit=128
+MODIFIED: sha256sum relaykit/dto/channel_settings.go => 958c67a800f525ed35397501aa9cae8237cb721502ce64c5693d777946aa9c2a, exit=0

@@ -171,6 +171,11 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 	if s.trusted || targetQuota <= s.preConsumedQuota {
 		return nil
 	}
+	imageRequest := false
+	if s.relayInfo != nil {
+		_, imageRequest = s.relayInfo.Request.(*dto.ImageRequest)
+		imageRequest = imageRequest || s.relayInfo.ImageRequestCount > 0
+	}
 
 	delta := targetQuota - s.preConsumedQuota
 	if delta <= 0 {
@@ -409,7 +414,6 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		session := &BillingSession{
 			relayInfo: relayInfo,
 			funding:   &WalletFunding{userId: relayInfo.UserId},
-			lang:      i18n.StatedLang(c),
 		}
 		if apiErr := session.preConsume(c, preConsumedQuota); apiErr != nil {
 			return nil, apiErr
@@ -424,7 +428,6 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		}
 		session := &BillingSession{
 			relayInfo: relayInfo,
-			lang:      i18n.StatedLang(c),
 			funding: &SubscriptionFunding{
 				requestId:        relayInfo.RequestId,
 				userId:           relayInfo.UserId,
