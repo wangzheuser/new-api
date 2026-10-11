@@ -8,12 +8,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/types"
 )
 
 const (
-	// MaxChannelSettingBytes 保持 channels.setting 与 MySQL TEXT 上限兼容。
 	MaxChannelSettingBytes      = 64*1024 - 1
 	MaxModelSystemPromptEntries = 256
 	MaxModelSystemPromptBytes   = 64 * 1024
@@ -25,7 +23,6 @@ const (
 )
 
 type ProtocolConversionQuality string
-
 type ProtocolHandlingMode string
 
 const (
@@ -43,17 +40,16 @@ type ProtocolCapability struct {
 }
 
 type ModelProtocolProfile struct {
-	Native map[constant.EndpointType]ProtocolCapability `json:"native"`
+	Native map[types.EndpointType]ProtocolCapability `json:"native"`
 }
 
 type ChannelProtocolPolicy struct {
-	Native         map[constant.EndpointType]ProtocolCapability `json:"native,omitempty"`
-	ModelOverrides map[string]ModelProtocolProfile              `json:"model_overrides,omitempty"`
-	AutoConvert    bool                                         `json:"auto_convert"`
-	MaxQuality     ProtocolConversionQuality                    `json:"max_quality"`
+	Native         map[types.EndpointType]ProtocolCapability `json:"native,omitempty"`
+	ModelOverrides map[string]ModelProtocolProfile           `json:"model_overrides,omitempty"`
+	AutoConvert    bool                                      `json:"auto_convert"`
+	MaxQuality     ProtocolConversionQuality                 `json:"max_quality"`
 }
 
-// ModelContextFallback 定义某个源路由模型的上下文阈值与单次兜底目标。
 type ModelContextFallback struct {
 	SourceContextWindowTokens   int64  `json:"source_context_window_tokens"`
 	ThresholdPercent            int    `json:"threshold_percent,omitempty"`
@@ -63,7 +59,6 @@ type ModelContextFallback struct {
 	TargetChannelIDs            []int  `json:"target_channel_ids,omitempty"`
 }
 
-// EffectiveThresholdPercent 返回规则的有效阈值百分比。
 func (r ModelContextFallback) EffectiveThresholdPercent() int {
 	if r.ThresholdPercent == 0 {
 		return DefaultContextThreshold
@@ -71,261 +66,88 @@ func (r ModelContextFallback) EffectiveThresholdPercent() int {
 	return r.ThresholdPercent
 }
 
-// ThresholdTokens 使用整数运算计算源模型的触发阈值。
 func (r ModelContextFallback) ThresholdTokens() int64 {
 	percent := int64(r.EffectiveThresholdPercent())
 	return r.SourceContextWindowTokens/100*percent + r.SourceContextWindowTokens%100*percent/100
 }
 
 type ChannelSettings struct {
-	ForceFormat            bool                            `json:"force_format,omitempty"`
-	ThinkingToContent      bool                            `json:"thinking_to_content,omitempty"`
-	Proxy                  string                          `json:"proxy"`
-	PassThroughBodyEnabled bool                            `json:"pass_through_body_enabled,omitempty"`
-	SystemPrompt           string                          `json:"system_prompt,omitempty"`
-	SystemPromptOverride   bool                            `json:"system_prompt_override,omitempty"`
-	ModelSystemPrompts     map[string]string               `json:"model_system_prompts,omitempty"`
-	ModelInputModalities   types.ModelInputModalities      `json:"model_input_modalities,omitempty"`
-	ModelContextFallbacks  map[string]ModelContextFallback `json:"model_context_fallbacks,omitempty"`
-	ProtocolPolicy         *ChannelProtocolPolicy          `json:"protocol_policy,omitempty"`
+	TaskPluginKey             string                          `json:"task_plugin_key,omitempty"`
+	ForceFormat               bool                            `json:"force_format,omitempty"`
+	ThinkingToContent         bool                            `json:"thinking_to_content,omitempty"`
+	Proxy                     string                          `json:"proxy"`
+	PassThroughBodyEnabled    bool                            `json:"pass_through_body_enabled,omitempty"`
+	ResponsesWebSocketEnabled bool                            `json:"responses_websocket_enabled,omitempty"`
+	SystemPrompt              string                          `json:"system_prompt,omitempty"`
+	SystemPromptOverride      bool                            `json:"system_prompt_override,omitempty"`
+	ModelSystemPrompts        map[string]string               `json:"model_system_prompts,omitempty"`
+	ModelInputModalities      types.ModelInputModalities      `json:"model_input_modalities,omitempty"`
+	ModelContextFallbacks     map[string]ModelContextFallback `json:"model_context_fallbacks,omitempty"`
+	ProtocolPolicy            *ChannelProtocolPolicy          `json:"protocol_policy,omitempty"`
+	// TaskExtendPluginKeys lists the task plugins a New API channel (type 60)
+	// is extended with. The upstream gateway may host many plugins, so the
+	// channel serves every listed plugin's models while the request still pins
+	// the executing plugin. TaskPluginKey remains the single type-61 binding
+	// and stays valid on a New API channel as well.
+	TaskExtendPluginKeys []string `json:"task_extend_plugin_keys,omitempty"`
+	// HTTPProtocol controls outbound HTTP version negotiation for this channel.
+	// Accepted values: "", "auto" (default), "http1".
+	HTTPProtocol string `json:"http_protocol,omitempty"`
+	// HTTP2ConnectionShards spreads HTTP/2 traffic across N independent transports
+	// (1-8). Zero/unset means 1. Ignored when HTTPProtocol is "http1".
+	HTTP2ConnectionShards int `json:"http2_connection_shards,omitempty"`
+	// TLSInsecureSkipVerify accepts upstream certificates that fail
+	// verification, such as self-signed ones, for this channel only.
+	TLSInsecureSkipVerify bool `json:"tls_insecure_skip_verify,omitempty"`
 }
 
-// ModelSystemPromptPolicy stores global model-specific system prompts.
-type ModelSystemPromptPolicy struct {
-	Models map[string]string `json:"models"`
-}
-
-// Validate checks global model prompt keys and values.
-func (p ModelSystemPromptPolicy) Validate() error {
-	if len(p.Models) > MaxModelSystemPromptEntries {
-		return fmt.Errorf("model system prompt entries cannot exceed %d", MaxModelSystemPromptEntries)
-	}
-	for model, prompt := range p.Models {
-		if strings.TrimSpace(model) == "" || strings.TrimSpace(model) != model || len(model) > 255 {
-			return fmt.Errorf("invalid model system prompt model: %s", model)
-		}
-		if strings.TrimSpace(prompt) == "" || len(prompt) > MaxModelSystemPromptBytes {
-			return fmt.Errorf("invalid model system prompt for model: %s", model)
-		}
-	}
-	return nil
-}
-
-// EffectiveMaxQuality returns the configured conversion ceiling.
-func (p ChannelProtocolPolicy) EffectiveMaxQuality() ProtocolConversionQuality {
-	if p.MaxQuality == "" {
-		return ProtocolConversionQualityFair
-	}
-	return p.MaxQuality
-}
-
-// NativeForModel resolves an exact model override before the channel defaults.
-func (p ChannelProtocolPolicy) NativeForModel(model string) (map[constant.EndpointType]ProtocolCapability, string) {
-	if override, ok := p.ModelOverrides[model]; ok {
-		return override.Native, "model_override"
-	}
-	return p.Native, "channel_default"
-}
-
-// HasNormalizedCapability reports whether any channel or model capability requires wire normalization.
-func (p ChannelProtocolPolicy) HasNormalizedCapability() bool {
-	for _, capability := range p.Native {
-		if capability.EffectiveMode() == ProtocolHandlingModeNormalized {
-			return true
-		}
-	}
-	for _, profile := range p.ModelOverrides {
-		for _, capability := range profile.Native {
-			if capability.EffectiveMode() == ProtocolHandlingModeNormalized {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// EffectiveMode keeps existing capability JSON backward compatible by treating an empty mode as native.
-func (c ProtocolCapability) EffectiveMode() ProtocolHandlingMode {
-	if c.Mode == "" {
-		return ProtocolHandlingModeNative
-	}
-	return c.Mode
-}
-
-// EffectiveReasoningHistoryPolicy keeps normalized Claude capabilities backward compatible.
-func (c ProtocolCapability) EffectiveReasoningHistoryPolicy() types.ReasoningHistoryPolicy {
-	if c.ReasoningHistory == "" {
-		return types.ReasoningHistoryPolicyPreserve
-	}
-	return c.ReasoningHistory
-}
-
-// Validate validates protocol capability declarations stored on a channel.
-func (p ChannelProtocolPolicy) Validate() error {
-	if err := validateNativeProtocolCapabilities(p.Native, "channel"); err != nil {
-		return err
-	}
-	if len(p.ModelOverrides) > MaxModelProtocolOverrides {
-		return fmt.Errorf("model protocol overrides cannot exceed %d", MaxModelProtocolOverrides)
-	}
-	for model, profile := range p.ModelOverrides {
-		trimmedModel := strings.TrimSpace(model)
-		if trimmedModel == "" || trimmedModel != model || len(model) > 255 {
-			return fmt.Errorf("invalid model protocol override: %s", model)
-		}
-		if err := validateNativeProtocolCapabilities(profile.Native, "model "+model); err != nil {
-			return err
-		}
-	}
-	quality := p.EffectiveMaxQuality()
-	if quality != ProtocolConversionQualityGood && quality != ProtocolConversionQualityFair {
-		return fmt.Errorf("invalid protocol conversion quality: %s", p.MaxQuality)
-	}
-	return nil
-}
-
-func validateNativeProtocolCapabilities(capabilities map[constant.EndpointType]ProtocolCapability, scope string) error {
-	if len(capabilities) == 0 {
-		return fmt.Errorf("%s native protocol capabilities are required", scope)
-	}
-	for endpointType, capability := range capabilities {
-		if !IsTextProtocolEndpointType(endpointType) {
-			return fmt.Errorf("invalid text protocol endpoint type: %s", endpointType)
-		}
-		if !capability.NonStream && !capability.Stream {
-			return fmt.Errorf("protocol capability %s for %s must enable non-stream or stream", endpointType, scope)
-		}
-		mode := capability.EffectiveMode()
-		if mode != ProtocolHandlingModeNative && mode != ProtocolHandlingModeNormalized {
-			return fmt.Errorf("invalid protocol handling mode %s for %s in %s", capability.Mode, endpointType, scope)
-		}
-		if mode == ProtocolHandlingModeNormalized &&
-			endpointType != constant.EndpointTypeAnthropic &&
-			endpointType != constant.EndpointTypeOpenAIResponse {
-			return fmt.Errorf("normalized protocol handling is unsupported for %s in %s", endpointType, scope)
-		}
-		if capability.ReasoningHistory != "" {
-			if mode != ProtocolHandlingModeNormalized || endpointType != constant.EndpointTypeAnthropic {
-				return fmt.Errorf("reasoning history policy is only supported for normalized anthropic capabilities in %s", scope)
-			}
-			policy := capability.EffectiveReasoningHistoryPolicy()
-			if policy != types.ReasoningHistoryPolicyPreserve && policy != types.ReasoningHistoryPolicyStrip {
-				return fmt.Errorf("invalid reasoning history policy %s for %s in %s", capability.ReasoningHistory, endpointType, scope)
-			}
-		}
-	}
-	return nil
-}
-
-// IsTextProtocolEndpointType reports whether an endpoint belongs to the v1 text protocol policy.
-func IsTextProtocolEndpointType(endpointType constant.EndpointType) bool {
-	switch endpointType {
-	case constant.EndpointTypeOpenAI,
-		constant.EndpointTypeOpenAIResponse,
-		constant.EndpointTypeAnthropic,
-		constant.EndpointTypeGemini:
-		return true
-	default:
+// BindsTaskPlugin reports whether the channel is bound to the task plugin,
+// either through the single binding or the New API extension list.
+func (s ChannelSettings) BindsTaskPlugin(key string) bool {
+	if key == "" {
 		return false
 	}
+	return s.TaskPluginKey == key || slices.Contains(s.TaskExtendPluginKeys, key)
 }
 
-// ResolveSystemPrompt 返回指定原始模型应使用的渠道系统提示词，以及是否需要前置拼接客户端提示词。
-func (s ChannelSettings) ResolveSystemPrompt(model string) (string, bool) {
-	if prompt, ok := s.ModelSystemPrompts[model]; ok && strings.TrimSpace(prompt) != "" {
-		return prompt, true
+// TaskPluginBindings returns the sorted, de-duplicated set of task plugins the
+// channel binds through either field, so callers can compare bindings as a set.
+func (s ChannelSettings) TaskPluginBindings() []string {
+	bindings := make([]string, 0, len(s.TaskExtendPluginKeys)+1)
+	if s.TaskPluginKey != "" {
+		bindings = append(bindings, s.TaskPluginKey)
 	}
-	return s.SystemPrompt, s.SystemPromptOverride
+	for _, key := range s.TaskExtendPluginKeys {
+		if key != "" && !slices.Contains(bindings, key) {
+			bindings = append(bindings, key)
+		}
+	}
+	slices.Sort(bindings)
+	return bindings
 }
 
-// ResolveSystemPromptForAttempt 在兜底路由中优先保持客户端模型语义，再匹配实际尝试模型。
-func (s ChannelSettings) ResolveSystemPromptForAttempt(requestedModel, attemptModel string, fallbackActive bool) (string, bool, string, string) {
-	if prompt, ok := s.ModelSystemPrompts[requestedModel]; ok && strings.TrimSpace(prompt) != "" {
-		return prompt, true, "model_requested", requestedModel
-	}
-	if fallbackActive && attemptModel != "" && attemptModel != requestedModel {
-		if prompt, ok := s.ModelSystemPrompts[attemptModel]; ok && strings.TrimSpace(prompt) != "" {
-			return prompt, true, "model_attempt", attemptModel
-		}
-	}
-	return s.SystemPrompt, s.SystemPromptOverride, "channel_default", ""
-}
+const (
+	HTTPProtocolAuto         = "auto"
+	HTTPProtocolHTTP1        = "http1"
+	MaxHTTP2ConnectionShards = 8
+)
 
-// ResolveContextFallback 按客户端原始请求模型精确查找渠道兜底规则。
-func (s ChannelSettings) ResolveContextFallback(requestedModel string) (ModelContextFallback, bool) {
-	rule, ok := s.ModelContextFallbacks[requestedModel]
-	return rule, ok
-}
-
-// ValidateSystemPrompts 校验模型专属系统提示词配置。
-func (s ChannelSettings) ValidateSystemPrompts() error {
-	if len(s.ModelSystemPrompts) > MaxModelSystemPromptEntries {
-		return fmt.Errorf("model system prompt entries cannot exceed %d", MaxModelSystemPromptEntries)
+// ValidateHTTPTransport validates save-time HTTP transport channel settings.
+func (s *ChannelSettings) ValidateHTTPTransport() error {
+	if s == nil {
+		return nil
 	}
-	for model, prompt := range s.ModelSystemPrompts {
-		trimmedModel := strings.TrimSpace(model)
-		if trimmedModel == "" {
-			return fmt.Errorf("model system prompt model cannot be empty")
-		}
-		if trimmedModel != model {
-			return fmt.Errorf("model system prompt model cannot contain surrounding whitespace: %s", model)
-		}
-		if len(model) > 255 {
-			return fmt.Errorf("model system prompt model is too long: %s", model)
-		}
-		if strings.TrimSpace(prompt) == "" {
-			return fmt.Errorf("model system prompt cannot be empty: %s", model)
-		}
-		if len(prompt) > MaxModelSystemPromptBytes {
-			return fmt.Errorf("model system prompt is too long: %s", model)
-		}
+	protocol := strings.ToLower(strings.TrimSpace(s.HTTPProtocol))
+	switch protocol {
+	case "", HTTPProtocolAuto, HTTPProtocolHTTP1:
+	default:
+		return fmt.Errorf("invalid http_protocol: %s", s.HTTPProtocol)
 	}
-	return nil
-}
-
-// ValidateContextFallbacks 校验渠道模型上下文兜底规则。
-func (s ChannelSettings) ValidateContextFallbacks() error {
-	if len(s.ModelContextFallbacks) > MaxModelContextFallbacks {
-		return fmt.Errorf("model context fallback entries cannot exceed %d", MaxModelContextFallbacks)
+	if s.HTTP2ConnectionShards < 0 || s.HTTP2ConnectionShards > MaxHTTP2ConnectionShards {
+		return fmt.Errorf("invalid http2_connection_shards: %d", s.HTTP2ConnectionShards)
 	}
-	for sourceModel, rule := range s.ModelContextFallbacks {
-		trimmedSource := strings.TrimSpace(sourceModel)
-		if trimmedSource == "" || trimmedSource != sourceModel || len(sourceModel) > 255 {
-			return fmt.Errorf("invalid model context fallback source model: %s", sourceModel)
-		}
-		if rule.SourceContextWindowTokens <= 0 {
-			return fmt.Errorf("source context window must be positive: %s", sourceModel)
-		}
-		threshold := rule.EffectiveThresholdPercent()
-		if threshold < 1 || threshold > 100 {
-			return fmt.Errorf("context fallback threshold must be between 1 and 100: %s", sourceModel)
-		}
-		fallbackModel := strings.TrimSpace(rule.FallbackModel)
-		if fallbackModel == "" || fallbackModel != rule.FallbackModel || len(fallbackModel) > 255 {
-			return fmt.Errorf("invalid context fallback model: %s", sourceModel)
-		}
-		if fallbackModel == sourceModel {
-			return fmt.Errorf("context fallback model must differ from source model: %s", sourceModel)
-		}
-		if rule.FallbackContextWindowTokens <= 0 {
-			return fmt.Errorf("fallback context window must be positive: %s", sourceModel)
-		}
-		if rule.RouteMode != ContextFallbackModeSame && rule.RouteMode != ContextFallbackModeCross {
-			return fmt.Errorf("invalid context fallback route mode: %s", sourceModel)
-		}
-		if rule.RouteMode == ContextFallbackModeSame && len(rule.TargetChannelIDs) > 0 {
-			return fmt.Errorf("same-channel fallback cannot specify target channel ids: %s", sourceModel)
-		}
-		seenChannelIDs := make(map[int]struct{}, len(rule.TargetChannelIDs))
-		for _, channelID := range rule.TargetChannelIDs {
-			if channelID <= 0 {
-				return fmt.Errorf("context fallback target channel id must be positive: %s", sourceModel)
-			}
-			if _, exists := seenChannelIDs[channelID]; exists {
-				return fmt.Errorf("duplicate context fallback target channel id %d: %s", channelID, sourceModel)
-			}
-			seenChannelIDs[channelID] = struct{}{}
-		}
+	if protocol == HTTPProtocolHTTP1 && s.HTTP2ConnectionShards > 1 {
+		return fmt.Errorf("http2_connection_shards must be 1 when http_protocol is http1")
 	}
 	return nil
 }
@@ -344,90 +166,37 @@ const (
 	AwsKeyTypeApiKey AwsKeyType = "api_key"
 )
 
-// ChannelAutoDisableOverride replaces the global numeric thresholds for one channel.
-type ChannelAutoDisableOverride struct {
-	SampleSize        int `json:"sample_size"`
-	MinimumSampleSize int `json:"minimum_sample_size"`
-	ErrorRatePercent  int `json:"error_rate_percent"`
-	DisableMinutes    int `json:"disable_minutes"`
-}
-
-// MultiKeyAutoDisableOverride replaces the global per-key disable policy for one channel.
-type MultiKeyAutoDisableOverride struct {
-	TemporaryStatusCodes    string `json:"temporary_status_codes"`
-	PersistentStatusCodes   string `json:"persistent_status_codes"`
-	TemporaryDisableMinutes int    `json:"temporary_disable_minutes"`
-}
-
-// MultiKeyTemporaryDisableInfo describes one TTL-backed key or channel cooldown.
-type MultiKeyTemporaryDisableInfo struct {
-	DisabledUntil     int64   `json:"disabled_until"`
-	StatusCode        int     `json:"last_status_code"`
-	Reason            string  `json:"reason,omitempty"`
-	Scope             string  `json:"scope,omitempty"`
-	Model             string  `json:"model,omitempty"`
-	Category          string  `json:"category,omitempty"`
-	Source            string  `json:"source,omitempty"`
-	State             string  `json:"state,omitempty"`
-	Failures          int     `json:"failures,omitempty"`
-	Version           string  `json:"version,omitempty"`
-	KeyFingerprint    string  `json:"key_fingerprint,omitempty"`
-	SampleSize        int     `json:"sample_size,omitempty"`
-	MinimumSampleSize int     `json:"minimum_sample_size,omitempty"`
-	Requests          int64   `json:"requests,omitempty"`
-	Errors            int64   `json:"errors,omitempty"`
-	ErrorRate         float64 `json:"error_rate_percent,omitempty"`
-	RecoverAt         int64   `json:"recover_at,omitempty"`
-}
-
-// TemporaryAutoDisableInfo describes one Redis-backed temporary channel disable decision.
-type TemporaryAutoDisableInfo struct {
-	DisabledUntil     int64   `json:"disabled_until"`
-	ConfigFingerprint string  `json:"config_fingerprint,omitempty"`
-	KeyFingerprint    string  `json:"key_fingerprint,omitempty"`
-	SampleSize        int     `json:"sample_size"`
-	MinimumSampleSize int     `json:"minimum_sample_size"`
-	Requests          int64   `json:"requests"`
-	Errors            int64   `json:"errors"`
-	ErrorRate         float64 `json:"error_rate_percent"`
-	StatusCodes       string  `json:"status_codes"`
-	Scope             string  `json:"scope,omitempty"`
-	Model             string  `json:"model,omitempty"`
-	StatusCode        int     `json:"status_code,omitempty"`
-	Reason            string  `json:"reason,omitempty"`
-	Category          string  `json:"category,omitempty"`
-	Source            string  `json:"source,omitempty"`
-	State             string  `json:"state,omitempty"`
-	Mechanism         string  `json:"mechanism,omitempty"`
-	Version           string  `json:"version,omitempty"`
-	RecoverAt         int64   `json:"recover_at,omitempty"`
-}
-
 type ChannelOtherSettings struct {
-	ContextTruncation                     *ContextTruncationPolicy     `json:"context_truncation,omitempty"`
-	CacheUsageSimulation                  *CacheUsageSimulationPolicy  `json:"cache_usage_simulation,omitempty"`
-	AzureResponsesVersion                 string                       `json:"azure_responses_version,omitempty"`
-	VertexKeyType                         VertexKeyType                `json:"vertex_key_type,omitempty"` // "json" or "api_key"
-	OpenRouterEnterprise                  *bool                        `json:"openrouter_enterprise,omitempty"`
-	ClaudeBetaQuery                       bool                         `json:"claude_beta_query,omitempty"`          // Claude 渠道是否强制追加 ?beta=true
-	AllowServiceTier                      bool                         `json:"allow_service_tier,omitempty"`         // 是否允许 service_tier 透传（默认过滤以避免额外计费）
-	AllowInferenceGeo                     bool                         `json:"allow_inference_geo,omitempty"`        // 是否允许 inference_geo 透传（仅 Claude，默认过滤以满足数据驻留合规
-	AllowSpeed                            bool                         `json:"allow_speed,omitempty"`                // 是否允许 speed 透传（仅 Claude，默认过滤以避免意外切换推理速度模式）
-	AllowSafetyIdentifier                 bool                         `json:"allow_safety_identifier,omitempty"`    // 是否允许 safety_identifier 透传（默认过滤以保护用户隐私）
-	DisableStore                          bool                         `json:"disable_store,omitempty"`              // 是否禁用 store 透传（默认允许透传，禁用后可能导致 Codex 无法使用）
-	AllowIncludeObfuscation               bool                         `json:"allow_include_obfuscation,omitempty"`  // 是否允许 stream_options.include_obfuscation 透传（默认过滤以避免关闭流混淆保护）
-	DisableTaskPollingSleep               bool                         `json:"disable_task_polling_sleep,omitempty"` // 是否跳过异步任务轮询间隔
-	ConversationLogEnabled                bool                         `json:"conversation_log_enabled,omitempty"`   // 是否采集该渠道的完整文本对话
-	AwsKeyType                            AwsKeyType                   `json:"aws_key_type,omitempty"`
-	UpstreamModelUpdateCheckEnabled       bool                         `json:"upstream_model_update_check_enabled,omitempty"`        // 是否检测上游模型更新
-	UpstreamModelUpdateAutoSyncEnabled    bool                         `json:"upstream_model_update_auto_sync_enabled,omitempty"`    // 是否自动同步上游模型更新
-	UpstreamModelUpdateLastCheckTime      int64                        `json:"upstream_model_update_last_check_time,omitempty"`      // 上次检测时间
-	UpstreamModelUpdateLastDetectedModels []string                     `json:"upstream_model_update_last_detected_models,omitempty"` // 上次检测到的可加入模型
-	UpstreamModelUpdateLastRemovedModels  []string                     `json:"upstream_model_update_last_removed_models,omitempty"`  // 上次检测到的可删除模型
-	UpstreamModelUpdateIgnoredModels      []string                     `json:"upstream_model_update_ignored_models,omitempty"`       // 手动忽略的模型
-	AdvancedCustom                        *AdvancedCustomConfig        `json:"advanced_custom,omitempty"`
-	AutoDisableOverride                   *ChannelAutoDisableOverride  `json:"auto_disable_override,omitempty"`
-	MultiKeyAutoDisableOverride           *MultiKeyAutoDisableOverride `json:"multi_key_auto_disable_override,omitempty"`
+	ContextTruncation                     *ContextTruncationPolicy    `json:"context_truncation,omitempty"`
+	CacheUsageSimulation                  *CacheUsageSimulationPolicy `json:"cache_usage_simulation,omitempty"`
+	AzureResponsesVersion                 string                      `json:"azure_responses_version,omitempty"`
+	VertexKeyType                         VertexKeyType               `json:"vertex_key_type,omitempty"` // "json" or "api_key"
+	OpenRouterEnterprise                  *bool                       `json:"openrouter_enterprise,omitempty"`
+	ClaudeBetaQuery                       bool                        `json:"claude_beta_query,omitempty"`          // Claude 渠道是否强制追加 ?beta=true
+	AllowServiceTier                      bool                        `json:"allow_service_tier,omitempty"`         // 是否允许 service_tier 透传（默认过滤以避免额外计费）
+	AllowInferenceGeo                     bool                        `json:"allow_inference_geo,omitempty"`        // 是否允许 inference_geo 透传（仅 Claude，默认过滤以满足数据驻留合规
+	AllowSpeed                            bool                        `json:"allow_speed,omitempty"`                // 是否允许 speed 透传（仅 Claude，默认过滤以避免意外切换推理速度模式）
+	AllowSafetyIdentifier                 bool                        `json:"allow_safety_identifier,omitempty"`    // 是否允许 safety_identifier 透传（默认过滤以保护用户隐私）
+	DisableStore                          bool                        `json:"disable_store,omitempty"`              // 是否禁用 store 透传（默认允许透传，禁用后可能导致 Codex 无法使用）
+	AllowIncludeObfuscation               bool                        `json:"allow_include_obfuscation,omitempty"`  // 是否允许 stream_options.include_obfuscation 透传（默认过滤以避免关闭流混淆保护）
+	DisableTaskPollingSleep               bool                        `json:"disable_task_polling_sleep,omitempty"` // 是否跳过异步任务轮询间隔
+	ConversationLogEnabled                bool                        `json:"conversation_log_enabled,omitempty"`
+	AwsKeyType                            AwsKeyType                  `json:"aws_key_type,omitempty"`
+	UpstreamModelUpdateCheckEnabled       bool                        `json:"upstream_model_update_check_enabled,omitempty"`        // 是否检测上游模型更新
+	UpstreamModelUpdateAutoSyncEnabled    bool                        `json:"upstream_model_update_auto_sync_enabled,omitempty"`    // 是否自动同步上游模型更新
+	UpstreamModelUpdateLastCheckTime      int64                       `json:"upstream_model_update_last_check_time,omitempty"`      // 上次检测时间
+	UpstreamModelUpdateLastDetectedModels []string                    `json:"upstream_model_update_last_detected_models,omitempty"` // 上次检测到的可加入模型
+	UpstreamModelUpdateLastRemovedModels  []string                    `json:"upstream_model_update_last_removed_models,omitempty"`  // 上次检测到的可删除模型
+	UpstreamModelUpdateIgnoredModels      []string                    `json:"upstream_model_update_ignored_models,omitempty"`       // 手动忽略的模型
+	AdvancedCustom                        *AdvancedCustomConfig       `json:"advanced_custom,omitempty"`
+	// OllamaOpenAIChat routes Ollama chat completions to the OpenAI-compatible
+	// /v1/chat/completions endpoint. When unset, chat completions keep using
+	// the native /api/chat protocol.
+	OllamaOpenAIChat bool `json:"ollama_openai_chat,omitempty"`
+	// ToolLossPolicy is a channel-level opt-in for request-phase conversion
+	// rejection. Empty follows the default allow policy. Accepted values:
+	// "", "allow", "safe", "strict".
+	ToolLossPolicy string `json:"tool_loss_policy,omitempty"`
 }
 
 func (s *ChannelOtherSettings) IsOpenRouterEnterprise() bool {
