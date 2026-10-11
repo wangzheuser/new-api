@@ -1,9 +1,8 @@
 package service
 
 import (
-	"strings"
-
-	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 )
 
 const (
@@ -25,49 +24,40 @@ func effectiveBillingUsage(usage *dto.Usage) *dto.Usage {
 }
 
 func usageBillingPathForLog(isLocalCountTokens bool, usage *dto.Usage) string {
-	if isLocalCountTokens {
-		return usageBillingPathLocal
-	}
-	if usage == nil || usage.BillingUsage == nil {
+	effectiveUsage, ok := usageFromBillingUsage(usage)
+	if !ok {
+		if isLocalCountTokens {
+			return usageBillingPathLocal
+		}
 		return usageBillingPathUpstream
 	}
-	source := strings.TrimSpace(usage.BillingUsage.Source)
-	semantic := strings.TrimSpace(usage.BillingUsage.Semantic)
-	if strings.EqualFold(source, dto.BillingUsageSourceOAIChat) ||
-		strings.EqualFold(source, dto.BillingUsageSourceOAIResponses) ||
-		strings.EqualFold(semantic, dto.BillingUsageSemanticOpenAI) {
+
+	switch effectiveUsage.UsageSemantic {
+	case dto.BillingUsageSemanticOpenAI:
 		if usage.BillingUsage.Estimated {
 			return usageBillingPathOpenAIEstimated
 		}
 		return usageBillingPathOpenAI
-	}
-	if strings.EqualFold(source, dto.BillingUsageSourceClaudeMessages) ||
-		strings.EqualFold(semantic, dto.BillingUsageSemanticAnthropic) {
+	case dto.BillingUsageSemanticAnthropic:
 		if usage.BillingUsage.Estimated {
 			return usageBillingPathAnthropicEstimated
 		}
 		return usageBillingPathAnthropic
-	}
-	if strings.EqualFold(source, dto.BillingUsageSourceGeminiChat) ||
-		strings.EqualFold(semantic, dto.BillingUsageSemanticGemini) {
+	case dto.BillingUsageSemanticGemini:
 		if usage.BillingUsage.Estimated {
 			return usageBillingPathGeminiEstimated
 		}
 		return usageBillingPathGemini
 	}
+
 	return usageBillingPathUpstream
 }
 
-func appendUsageBillingPathForLog(other map[string]interface{}, isLocalCountTokens bool, usage *dto.Usage) {
+func appendUsageBillingPathForLog(other *model.LogOther, isLocalCountTokens bool, usage *dto.Usage) {
 	if other == nil {
 		return
 	}
-	adminInfo, ok := other["admin_info"].(map[string]interface{})
-	if !ok || adminInfo == nil {
-		adminInfo = make(map[string]interface{})
-		other["admin_info"] = adminInfo
-	}
-	adminInfo["usage_billing_path"] = usageBillingPathForLog(isLocalCountTokens, usage)
+	other.SetAdmin("usage_billing_path", usageBillingPathForLog(isLocalCountTokens, usage))
 }
 
 func usageFromBillingUsage(usage *dto.Usage) (*dto.Usage, bool) {

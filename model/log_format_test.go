@@ -5,6 +5,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -12,10 +13,10 @@ import (
 // saturation marker (nested under other.admin_info) is removed for non-admin
 // log views, since formatUserLogs strips the whole admin_info object.
 func TestFormatUserLogsStripsQuotaSaturation(t *testing.T) {
-	other := common.MapToJsonStr(map[string]interface{}{
+	other := common.MapToJsonStr(map[string]any{
 		"model_price": 0.004,
-		"admin_info": map[string]interface{}{
-			"quota_saturation": map[string]interface{}{
+		"admin_info": map[string]any{
+			"quota_saturation": map[string]any{
 				"op":      "QuotaFromDecimal",
 				"kind":    "overflow",
 				"clamped": common.MaxQuota,

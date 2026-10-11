@@ -1,27 +1,57 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/jsplugin"
+	relaychannel "github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/system_setting"
-
 	"github.com/gin-gonic/gin"
+	"golang.org/x/net/http/httpguts"
 )
+
+var errTaskMediaRequestRejected = errors.New("task media request rejected")
+
+var taskMediaResponseHeaderTimeout = 60 * time.Second
+var taskMediaDataURLMaxEncodedBytes = 64 << 20
+
+type taskMediaProxyError struct {
+	status  int
+	code    string
+	message string
+	err     error
+}
+
+func (e *taskMediaProxyError) Error() string {
+	if e.err == nil {
+		return e.message
+	}
+	return e.message + ": " + e.err.Error()
+}
+
+func (e *taskMediaProxyError) Unwrap() error {
+	return e.err
+}
 
 // videoProxyError returns a standardized OpenAI-style error response.
 func videoProxyError(c *gin.Context, status int, errType, message string) {
+	c.Header("Cache-Control", "private, no-store")
 	c.JSON(status, gin.H{
 		"error": gin.H{
 			"message": message,
@@ -37,10 +67,9 @@ func VideoProxy(c *gin.Context) {
 		return
 	}
 
-	userID := c.GetInt("id")
-	task, exists, err := model.GetByTaskId(userID, taskID)
+	task, exists, err := getTaskForArtifactRequest(c, taskID)
 	if err != nil {
-		logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to query task %s: %s", taskID, err.Error()))
+		logger.LogError(c.Request.Context(), common.LogText("Failed to query task %s: %s", taskID, err.Error()))
 		videoProxyError(c, http.StatusInternalServerError, "server_error", "Failed to query task")
 		return
 	}
@@ -48,34 +77,46 @@ func VideoProxy(c *gin.Context) {
 		videoProxyError(c, http.StatusNotFound, "invalid_request_error", "Task not found")
 		return
 	}
-
 	if task.Status != model.TaskStatusSuccess {
 		videoProxyError(c, http.StatusBadRequest, "invalid_request_error",
 			fmt.Sprintf("Task is not completed yet, current status: %s", task.Status))
 		return
 	}
 
-	channel, err := model.CacheGetChannel(task.ChannelId)
-	if err != nil {
-		logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to get channel for task %s: %s", taskID, err.Error()))
-		videoProxyError(c, http.StatusInternalServerError, "server_error", "Failed to retrieve channel information")
-		return
+	var descriptor *relaychannel.TaskContentRequest
+	if taskHasPluginExecution(task) {
+		artifacts, projectionErr := projectTaskArtifacts(task)
+		if projectionErr == nil {
+			for _, artifact := range artifacts {
+				if artifact.Type != "video" {
+					continue
+				}
+				adaptor, adaptorErr := initTaskArtifactAdaptor(task)
+				if adaptorErr == nil {
+					if provider, ok := adaptor.(relaychannel.TaskContentRequestProvider); ok {
+						descriptor, adaptorErr = provider.BuildContentRequest(c.Request.Context(), task, artifact.Key, relaychannel.TaskArtifactClientRequest{
+							Method:  c.Request.Method,
+							Headers: taskArtifactClientHeaders(c.Request.Header),
+						})
+					}
+				}
+				if adaptorErr != nil {
+					logger.LogWarn(c.Request.Context(), common.LogText("Failed to resolve plugin video content for task %s: %v", taskID, adaptorErr))
+					descriptor = nil
+				}
+				break
+			}
+		} else {
+			logger.LogWarn(c.Request.Context(), common.LogText("Failed to project plugin video for task %s", taskID))
+		}
 	}
-	baseURL := channel.GetBaseURL()
-	if baseURL == "" {
-		baseURL = "https://api.openai.com"
-	}
-
-	var videoURL string
-	proxy := channel.GetSetting().Proxy
-	client := service.GetSSRFProtectedHTTPClient()
-	if proxy != "" {
-		// 渠道代理路径的连接由代理侧建立，无法做拨号时逐 IP 校验，
-		// 因此后面对 videoURL 保留请求前的一次性 SSRF 校验。
-		client, err = service.GetHttpClientWithProxy(proxy)
-		if err != nil {
-			logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to create proxy client for task %s: %s", taskID, err.Error()))
-			videoProxyError(c, http.StatusInternalServerError, "server_error", "Failed to create proxy client")
+	if descriptor == nil {
+		resultURL := task.GetResultURL()
+		if isTaskMediaFallbackLoop(resultURL, task.TaskID) {
+			writeTaskMediaProxyError(c, &taskMediaProxyError{
+				status: http.StatusGone, code: "artifact_gone",
+				message: "Artifact content is no longer available",
+			})
 			return
 		}
 	}
@@ -200,6 +241,9 @@ func copyVideoResponseHeaders(dst, src http.Header) {
 }
 
 func writeVideoDataURL(c *gin.Context, dataURL string) error {
+	if len(dataURL) > taskMediaDataURLMaxEncodedBytes {
+		return errTaskMediaRequestRejected
+	}
 	parts := strings.SplitN(dataURL, ",", 2)
 	if len(parts) != 2 {
 		return fmt.Errorf("invalid data url")
@@ -216,18 +260,31 @@ func writeVideoDataURL(c *gin.Context, dataURL string) error {
 	if mimeType == "" {
 		mimeType = "video/mp4"
 	}
+	if len(mimeType) > 255 || !httpguts.ValidHeaderFieldValue(mimeType) {
+		return fmt.Errorf("invalid data url media type")
+	}
 
-	videoBytes, err := base64.StdEncoding.DecodeString(payload)
-	if err != nil {
-		videoBytes, err = base64.RawStdEncoding.DecodeString(payload)
-		if err != nil {
-			return err
+	var encoding *base64.Encoding
+	var contentLength int64
+	for _, candidate := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding} {
+		decodedLength, err := io.Copy(io.Discard, base64.NewDecoder(candidate, strings.NewReader(payload)))
+		if err == nil {
+			encoding = candidate
+			contentLength = decodedLength
+			break
 		}
+	}
+	if encoding == nil {
+		return fmt.Errorf("invalid base64 data")
 	}
 
 	c.Writer.Header().Set("Content-Type", mimeType)
-	c.Writer.Header().Set("Cache-Control", "public, max-age=86400")
+	c.Writer.Header().Set("Content-Length", strconv.FormatInt(contentLength, 10))
+	setTaskMediaResponseSecurityHeaders(c.Writer.Header())
 	c.Writer.WriteHeader(http.StatusOK)
-	_, err = c.Writer.Write(videoBytes)
+	if c.Request.Method == http.MethodHead {
+		return nil
+	}
+	_, err := io.Copy(c.Writer, base64.NewDecoder(encoding, strings.NewReader(payload)))
 	return err
 }

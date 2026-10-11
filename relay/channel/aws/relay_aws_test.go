@@ -5,15 +5,139 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream"
+	"github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream/eventstreamapi"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const awsTestModel = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+
+type awsHTTPClientFunc func(*http.Request) (*http.Response, error)
+
+func (f awsHTTPClientFunc) Do(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+type awsNotifyingResponseWriter struct {
+	*httptest.ResponseRecorder
+	notifyOn []byte
+	notified chan int
+	once     sync.Once
+}
+
+func newAwsNotifyingResponseWriter(notifyOn string) *awsNotifyingResponseWriter {
+	return &awsNotifyingResponseWriter{
+		ResponseRecorder: httptest.NewRecorder(),
+		notifyOn:         []byte(notifyOn),
+		notified:         make(chan int, 1),
+	}
+}
+
+func (w *awsNotifyingResponseWriter) Write(data []byte) (int, error) {
+	return w.ResponseRecorder.Write(data)
+}
+
+func (w *awsNotifyingResponseWriter) Flush() {
+	w.ResponseRecorder.Flush()
+	if bytes.Contains(w.Body.Bytes(), w.notifyOn) {
+		w.once.Do(func() {
+			w.notified <- w.Body.Len()
+		})
+	}
+}
+
+func newAwsTestClient(httpClient bedrockruntime.HTTPClient) *bedrockruntime.Client {
+	return bedrockruntime.New(bedrockruntime.Options{
+		Region:       "us-east-1",
+		BaseEndpoint: aws.String("https://bedrock.test"),
+		Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(
+			"access-key", "secret-key", "",
+		)),
+		HTTPClient: httpClient,
+		Retryer:    aws.NopRetryer{},
+	})
+}
+
+func newAwsTestContext(writer http.ResponseWriter, requestContext context.Context) *gin.Context {
+	c, _ := gin.CreateTestContext(writer)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(requestContext)
+	return c
+}
+
+func newAwsTestRelayInfo() *relaycommon.RelayInfo {
+	return &relaycommon.RelayInfo{
+		StartTime:          time.Now(),
+		IsStream:           true,
+		OriginModelName:    awsTestModel,
+		RelayFormat:        relaytypes.RelayFormatOpenAI,
+		ShouldIncludeUsage: true,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: awsTestModel,
+		},
+	}
+}
+
+func newAwsInvokeModelInput() *bedrockruntime.InvokeModelInput {
+	return &bedrockruntime.InvokeModelInput{
+		ModelId:     aws.String(awsTestModel),
+		Body:        []byte(`{}`),
+		Accept:      aws.String("application/json"),
+		ContentType: aws.String("application/json"),
+	}
+}
+
+func newAwsStreamInput() *bedrockruntime.InvokeModelWithResponseStreamInput {
+	return &bedrockruntime.InvokeModelWithResponseStreamInput{
+		ModelId:     aws.String(awsTestModel),
+		Body:        []byte(`{}`),
+		Accept:      aws.String("application/json"),
+		ContentType: aws.String("application/json"),
+	}
+}
+
+func writeAwsStreamEvent(writer io.Writer, data string) error {
+	payload, err := common.Marshal(struct {
+		Bytes []byte `json:"bytes"`
+	}{Bytes: []byte(data)})
+	if err != nil {
+		return err
+	}
+
+	return eventstream.NewEncoder().Encode(writer, eventstream.Message{
+		Headers: eventstream.Headers{
+			{Name: eventstreamapi.MessageTypeHeader, Value: eventstream.StringValue(eventstreamapi.EventMessageType)},
+			{Name: eventstreamapi.EventTypeHeader, Value: eventstream.StringValue("chunk")},
+			{Name: eventstreamapi.ContentTypeHeader, Value: eventstream.StringValue("application/json")},
+		},
+		Payload: payload,
+	})
+}
+
+func newAwsStreamResponse(request *http.Request, body io.ReadCloser) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Header: http.Header{
+			"Content-Type":                []string{"application/vnd.amazon.eventstream"},
+			"X-Amzn-Bedrock-Content-Type": []string{"application/json"},
+		},
+		Body:    body,
+		Request: request,
+	}
+}
 
 func TestDoAwsClientRequest_AppliesRuntimeHeaderOverrideToAnthropicBeta(t *testing.T) {
 	t.Parallel()
