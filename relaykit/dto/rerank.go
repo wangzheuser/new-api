@@ -2,7 +2,6 @@ package dto
 
 import (
 	"fmt"
-	"net/http"
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -18,7 +17,7 @@ type RerankRequest struct {
 	OverLapTokens   *int   `json:"overlap_tokens,omitempty"`
 }
 
-func (r *RerankRequest) IsStream(c *http.Request) bool {
+func (r *RerankRequest) IsStream(c any) bool {
 	return false
 }
 

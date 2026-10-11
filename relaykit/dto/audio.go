@@ -2,7 +2,6 @@ package dto
 
 import (
 	"encoding/json"
-	"net/http"
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -40,7 +39,7 @@ func (r *AudioRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	return meta
 }
 
-func (r *AudioRequest) IsStream(c *http.Request) bool {
+func (r *AudioRequest) IsStream(c any) bool {
 	return r.StreamFormat == "sse"
 }
 

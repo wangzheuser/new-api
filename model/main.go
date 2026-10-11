@@ -19,10 +19,10 @@ import (
 	"gorm.io/gorm"
 )
 
-var commonGroupCol string
-var commonKeyCol string
-var commonTrueVal string
-var commonFalseVal string
+var commonGroupCol = "`group`"
+var commonKeyCol = "`key`"
+var commonTrueVal = "1"
+var commonFalseVal = "0"
 
 var logKeyCol string
 var logGroupCol string
@@ -262,11 +262,13 @@ func migrateDB() error {
 		&Channel{},
 		&Token{},
 		&User{},
+		&UserAccessToken{},
 		&PasskeyCredential{},
 		&Option{},
 		&Redemption{},
 		&Ability{},
 		&Log{},
+		&AuditLog{},
 		&Midjourney{},
 		&TopUp{},
 		&QuotaData{},
@@ -295,6 +297,9 @@ func migrateDB() error {
 		&AuthzRole{},
 	)
 	if err != nil {
+		return err
+	}
+	if err := EnsureLegacyAccessTokenRetireAt(time.Now().Unix()); err != nil {
 		return err
 	}
 	if os.Getenv("LOG_SQL_DSN") == "" {
@@ -333,11 +338,13 @@ func migrateDBFast() error {
 		{&Channel{}, "Channel"},
 		{&Token{}, "Token"},
 		{&User{}, "User"},
+		{&UserAccessToken{}, "UserAccessToken"},
 		{&PasskeyCredential{}, "PasskeyCredential"},
 		{&Option{}, "Option"},
 		{&Redemption{}, "Redemption"},
 		{&Ability{}, "Ability"},
 		{&Log{}, "Log"},
+		{&AuditLog{}, "AuditLog"},
 		{&Midjourney{}, "Midjourney"},
 		{&TopUp{}, "TopUp"},
 		{&QuotaData{}, "QuotaData"},
@@ -392,6 +399,9 @@ func migrateDBFast() error {
 			return err
 		}
 	}
+	if err := EnsureLegacyAccessTokenRetireAt(time.Now().Unix()); err != nil {
+		return err
+	}
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		if err := ensureSubscriptionPlanTableSQLite(); err != nil {
 			return err
@@ -421,6 +431,9 @@ func migrateLOGDB() error {
 		return migrateClickHouseLogDB()
 	}
 	if err := LOG_DB.AutoMigrate(&Log{}, &ConversationLog{}); err != nil {
+		return err
+	}
+	if err := MigrateAuditLogs(); err != nil {
 		return err
 	}
 	return ensureLogQueryIndexes(LOG_DB)

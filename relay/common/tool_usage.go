@@ -73,9 +73,10 @@ func (info *RelayInfo) SetBillableToolCount(name string, count int) {
 	info.ensureBuiltInTools()
 	if existing, ok := info.ResponsesUsageInfo.BuiltInTools[name]; ok && existing != nil {
 		existing.CallCount = count
+		existing.Reported = true
 		return
 	}
-	info.ResponsesUsageInfo.BuiltInTools[name] = &BuildInToolInfo{ToolName: name, CallCount: count}
+	info.ResponsesUsageInfo.BuiltInTools[name] = &BuildInToolInfo{ToolName: name, CallCount: count, Reported: true}
 }
 
 // ApplyVendorToolUsage writes the vendor-billed counts of one upstream

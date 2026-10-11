@@ -31,6 +31,7 @@ func GeminiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 	if err := common.Unmarshal(responseBody, &geminiResponse); err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
+	info.ObserveResponseModel(geminiResponse.ModelVersion)
 	info.MergeResponseSemantics(types.RelayFormatGemini, responseBody)
 	if len(geminiResponse.Candidates) == 0 {
 		usage := buildUsageFromGeminiResponse(c, info, &geminiResponse)

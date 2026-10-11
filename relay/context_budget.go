@@ -7,6 +7,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/contexttruncate"
+	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 )
@@ -44,6 +45,16 @@ func decodeContextRequest(request dto.Request, body []byte) error {
 	case *dto.OpenAIResponsesCompactionRequest:
 		return replaceContextRequest(request, body)
 	case *dto.GeminiChatRequest:
+		return replaceContextRequest(request, body)
+	case *kitdto.GeneralOpenAIRequest:
+		return replaceContextRequest(request, body)
+	case *kitdto.ClaudeRequest:
+		return replaceContextRequest(request, body)
+	case *kitdto.OpenAIResponsesRequest:
+		return replaceContextRequest(request, body)
+	case *kitdto.OpenAIResponsesCompactionRequest:
+		return replaceContextRequest(request, body)
+	case *kitdto.GeminiChatRequest:
 		return replaceContextRequest(request, body)
 	default:
 		return fmt.Errorf("context_truncation_unsupported_conversion")

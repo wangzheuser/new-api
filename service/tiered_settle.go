@@ -6,6 +6,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relaydto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 )
@@ -24,6 +25,9 @@ type TieredResultWrapper = billingexpr.TieredResult
 // sub-categories are separately priced.
 func BuildTieredTokenParams(rawUsage any, isClaudeUsageSemantic bool, usedVars map[string]bool) billingexpr.TokenParams {
 	usage := relayUsage(rawUsage)
+	if usage == nil {
+		usage = &relaydto.Usage{}
+	}
 	p := float64(usage.PromptTokens)
 	c := float64(usage.CompletionTokens)
 	cr := float64(usage.PromptTokensDetails.CachedTokens)
@@ -82,7 +86,7 @@ func BuildTieredTokenParams(rawUsage any, isClaudeUsageSemantic bool, usedVars m
 	if isClaudeUsageSemantic {
 		// Anthropic input excludes cache reads. When cr has no separate
 		// price, merge those tokens into the input category instead.
-		if !usedVars["cr"] {
+		if !usedVars["cr"] && !usage.InputPolicyAdjusted {
 			p += cr
 		}
 	} else {

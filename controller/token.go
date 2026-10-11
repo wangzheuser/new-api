@@ -313,6 +313,16 @@ func validateUserTokenGroup(userId int, group string) error {
 	if err != nil {
 		return err
 	}
+	if group == "auto" {
+		autoGroups, autoErr := service.GetUserEffectiveAutoGroups(userId, userGroup)
+		if autoErr != nil {
+			return autoErr
+		}
+		if len(autoGroups) == 0 {
+			return fmt.Errorf("无权访问 %s 分组", group)
+		}
+		return nil
+	}
 	allowed, err := service.GroupInUserEffectiveGroups(userId, userGroup, group)
 	if err != nil {
 		return err

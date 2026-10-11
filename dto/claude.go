@@ -7,8 +7,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/types"
-
-	"github.com/gin-gonic/gin"
 )
 
 type ClaudeMetadata struct {
@@ -361,7 +359,7 @@ func (c *ClaudeRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	return &tokenCountMeta
 }
 
-func (c *ClaudeRequest) IsStream(ctx *gin.Context) bool {
+func (c *ClaudeRequest) IsStream(_ any) bool {
 	if c.Stream == nil {
 		return false
 	}

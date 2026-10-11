@@ -2,12 +2,11 @@ package dto
 
 import (
 	"github.com/QuantumNous/new-api/types"
-	"github.com/gin-gonic/gin"
 )
 
 type Request interface {
 	GetTokenCountMeta() *types.TokenCountMeta
-	IsStream(c *gin.Context) bool
+	IsStream(c any) bool
 	SetModelName(modelName string)
 }
 
@@ -19,7 +18,7 @@ func (b *BaseRequest) GetTokenCountMeta() *types.TokenCountMeta {
 		TokenType: types.TokenTypeTokenizer,
 	}
 }
-func (b *BaseRequest) IsStream(c *gin.Context) bool {
+func (b *BaseRequest) IsStream(c any) bool {
 	return false
 }
 func (b *BaseRequest) SetModelName(modelName string) {}

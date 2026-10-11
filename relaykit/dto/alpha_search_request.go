@@ -2,7 +2,6 @@ package dto
 
 import (
 	"encoding/json"
-	"net/http"
 
 	"github.com/QuantumNous/new-api/relaykit/types"
 )
@@ -27,7 +26,7 @@ func (r *AlphaSearchRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	}
 }
 
-func (r *AlphaSearchRequest) IsStream(_ *http.Request) bool {
+func (r *AlphaSearchRequest) IsStream(c any) bool {
 	return false
 }
 

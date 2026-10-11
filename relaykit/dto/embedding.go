@@ -1,7 +1,6 @@
 package dto
 
 import (
-	"net/http"
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -44,7 +43,7 @@ func (r *EmbeddingRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	}
 }
 
-func (r *EmbeddingRequest) IsStream(c *http.Request) bool {
+func (r *EmbeddingRequest) IsStream(c any) bool {
 	return false
 }
 

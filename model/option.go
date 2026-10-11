@@ -258,6 +258,19 @@ func UpdateOption(key string, value string) error {
 	if key == "channel_auto_disable_setting.min_requests" {
 		key = "channel_auto_disable_setting.minimum_sample_size"
 	}
+	if IsRequestPolicyOption(key) {
+		return UpdateRequestPolicyOptions(map[string]string{key: value})
+	}
+	if IsPasskeyDomainOption(key) {
+		_, err := UpdatePasskeyDomainOptions(map[string]string{key: value}, false, "")
+		return err
+	}
+	if IsModelPricingOption(key) {
+		return UpdateModelPricingOptions(map[string]string{key: value})
+	}
+	if err := validateOptionValue(key, value); err != nil {
+		return err
+	}
 	if err := model_setting.ValidateInputPolicyOption(key, value); err != nil {
 		return err
 	}
@@ -362,6 +375,9 @@ func updateOptionMap(key string, value string) (err error) {
 	}
 	common.OptionMapRWMutex.Lock()
 	defer common.OptionMapRWMutex.Unlock()
+	if common.OptionMap == nil {
+		common.OptionMap = make(map[string]string)
+	}
 	common.OptionMap[key] = value
 
 	switch key {

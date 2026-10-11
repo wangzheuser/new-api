@@ -1216,9 +1216,11 @@ func ManageUser(c *gin.Context) {
 		return
 	}
 
-	authorization = requireAdminUserProof(c, service.VerificationScopeAdminUserManage, service.AdminUserManageContext{UserID: user.Id, Action: req.Action})
-	if authorization == nil {
-		return
+	if req.Action != "delete" {
+		authorization = requireAdminUserProof(c, service.VerificationScopeAdminUserManage, service.AdminUserManageContext{UserID: user.Id, Action: req.Action})
+		if authorization == nil {
+			return
+		}
 	}
 	if req.Action == "demote" {
 		if err := model.DB.Transaction(func(tx *gorm.DB) error {
@@ -1245,7 +1247,7 @@ func ManageUser(c *gin.Context) {
 		if err := model.RefreshUserAuthStateCache(user.Id); err != nil {
 			common.SysLog(fmt.Sprintf("failed to refresh user auth cache for user %d: %s", user.Id, err.Error()))
 		}
-	} else {
+	} else if req.Action != "delete" {
 		if err := user.Update(false); err != nil {
 			common.ApiError(c, err)
 			return

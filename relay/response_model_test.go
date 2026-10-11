@@ -63,19 +63,21 @@ func TestResponseModelComparisonAndLog(t *testing.T) {
 			}
 			other := service.GenerateTextOtherInfo(c, info, 1, 1, 1, 0, 0, 0, 1)
 			var stored struct {
-				ResponseModel *relaycommon.ResponseModel `json:"response_model"`
+				AdminInfo struct {
+					ResponseModel *relaycommon.ResponseModel `json:"response_model"`
+				} `json:"admin_info"`
 			}
 			require.NoError(t, common.UnmarshalJsonStr(other.JSONString(), &stored))
 			if tc.returned == "" {
-				assert.Nil(t, stored.ResponseModel)
+				assert.Nil(t, stored.AdminInfo.ResponseModel)
 				return
 			}
-			require.NotNil(t, stored.ResponseModel)
+			require.NotNil(t, stored.AdminInfo.ResponseModel)
 			assert.Equal(t, &relaycommon.ResponseModel{
 				RequestedModel: "requested", UpstreamModel: "mapped", ReturnedModel: tc.returned,
-			}, stored.ResponseModel)
+			}, stored.AdminInfo.ResponseModel)
 			assert.NotContains(t, other.JSONString(), "mismatch")
-			assert.Equal(t, tc.mismatch, stored.ResponseModel.Mismatch())
+			assert.Equal(t, tc.mismatch, stored.AdminInfo.ResponseModel.Mismatch())
 			assert.Equal(t, "mapped", info.UpstreamModelName)
 		})
 	}
@@ -108,9 +110,16 @@ func TestResponseModelLogOmitsUnchangedModel(t *testing.T) {
 			require.NotNil(t, info.ResponseModel)
 			assert.Equal(t, float64(1), other.Snapshot()["model_ratio"])
 			if tc.record {
-				assert.Equal(t, *info.ResponseModel, other.Snapshot()["response_model"])
+				adminInfo, ok := other.Snapshot()["admin_info"].(map[string]any)
+				require.True(t, ok)
+				stored, ok := adminInfo["response_model"].(*relaycommon.ResponseModel)
+				require.True(t, ok)
+				assert.Equal(t, *info.ResponseModel, *stored)
 			} else {
-				assert.NotContains(t, other.Snapshot(), "response_model")
+				adminInfo, ok := other.Snapshot()["admin_info"].(map[string]any)
+				if ok {
+					assert.NotContains(t, adminInfo, "response_model")
+				}
 			}
 		})
 	}
@@ -179,7 +188,7 @@ func TestResponseModelHandlersCaptureBeforeConversion(t *testing.T) {
 	chat := `{"id":"chat_1","model":"returned","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`
 	chatStream := "data: " + `{"id":"chat_1","model":"returned","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"}}]}` + "\n\ndata: " + `{"id":"chat_1","choices":[],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}` + "\n\ndata: [DONE]\n\n"
 	responses := `{"id":"resp_1","model":"returned","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}],"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}`
-	responsesStream := "data: " + `{"type":"response.created","response":{"id":"resp_1","model":"returned"}}` + "\n\ndata: " + `{"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[],"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}}` + "\n\n"
+	responsesStream := "data: " + `{"type":"response.created","response":{"id":"resp_1","model":"returned"}}` + "\n\ndata: " + `{"type":"response.completed","response":{"id":"resp_1","model":"returned","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}],"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}}` + "\n\n"
 	claudeBody := `{"id":"msg_1","type":"message","model":"returned","role":"assistant","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":3}}`
 	claudeStream := "data: " + `{"type":"message_start","message":{"id":"msg_1","type":"message","model":"returned","role":"assistant","content":[],"usage":{"input_tokens":2,"output_tokens":0}}}` + "\n\ndata: " + `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}` + "\n\ndata: " + `{"type":"message_stop"}` + "\n\n"
 	geminiBody := `{"modelVersion":"returned","candidates":[{"content":{"role":"model","parts":[{"text":"hello"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":3,"totalTokenCount":5}}`
@@ -232,7 +241,11 @@ func TestResponseModelHandlersCaptureBeforeConversion(t *testing.T) {
 			assert.Equal(t, &relaycommon.ResponseModel{RequestedModel: "requested", UpstreamModel: "mapped", ReturnedModel: "returned"}, info.ResponseModel)
 			assert.True(t, info.ResponseModel.Mismatch())
 			other := service.GenerateTextOtherInfo(c, info, 1, 1, 1, 0, 0, 0, 1)
-			assert.Equal(t, *info.ResponseModel, other.Snapshot()["response_model"])
+			adminInfo, ok := other.Snapshot()["admin_info"].(map[string]any)
+			require.True(t, ok)
+			stored, ok := adminInfo["response_model"].(*relaycommon.ResponseModel)
+			require.True(t, ok)
+			assert.Equal(t, *info.ResponseModel, *stored)
 		})
 	}
 }
@@ -258,7 +271,7 @@ func TestResponseModelDoesNotRecordSynthesizedModel(t *testing.T) {
 		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "mapped"},
 	}
 	_, apiErr := openai.OaiResponsesToChatBufferedStreamHandler(c, info, &http.Response{
-		StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+		StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"output\":[]}}\n\n")),
 	})
 	require.Nil(t, apiErr)
 	assert.Nil(t, info.ResponseModel)

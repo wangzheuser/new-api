@@ -13,6 +13,7 @@ import (
 )
 
 const (
+	AdvancedCustomModelListPath = "/v1/models"
 	// MaxChannelSettingBytes 保持 channels.setting 与 MySQL TEXT 上限兼容。
 	MaxChannelSettingBytes      = 64*1024 - 1
 	MaxModelSystemPromptEntries = 256
@@ -904,4 +905,9 @@ func validateAdvancedCustomRouteAuth(index int, auth *AdvancedCustomRouteAuth) e
 	default:
 		return fmt.Errorf("advanced_custom.advanced_routes[%d].auth.type is invalid: %s", index, auth.Type)
 	}
+}
+
+// ValidateInputPolicies checks channel-only policy scope and raw JSON shape.
+func (s ChannelOtherSettings) ValidateInputPolicies(raw string) error {
+	return validateChannelInputPolicies(s, raw)
 }

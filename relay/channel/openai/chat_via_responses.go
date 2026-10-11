@@ -299,6 +299,9 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			sr.Stop(streamErr)
 			return
 		}
+		if streamResp.Response != nil {
+			info.ObserveResponseModel(streamResp.Response.Model)
+		}
 
 		if streamResp.Type == "error" || streamResp.Type == "response.error" || streamResp.Type == "response.failed" || streamResp.Type == "response.cancelled" {
 			if oaiErr := streamResp.GetOpenAIError(); oaiErr != nil {

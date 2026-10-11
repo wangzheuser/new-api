@@ -7,7 +7,8 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
+	rootdto "github.com/QuantumNous/new-api/dto"
+	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -18,7 +19,7 @@ import (
 const maxInputModalityInspectionDepth = 32
 
 // DetectInputModalities returns the stable set of modalities present in one parsed LLM request.
-func DetectInputModalities(request dto.Request) []types.InputModality {
+func DetectInputModalities(request any) []types.InputModality {
 	modalities := []types.InputModality{types.InputModalityText}
 	if requestContainsImage(request) {
 		modalities = append(modalities, types.InputModalityImage)
@@ -27,8 +28,8 @@ func DetectInputModalities(request dto.Request) []types.InputModality {
 }
 
 // ValidateRequestInputModalities applies the selected channel and global capability declaration.
-func ValidateRequestInputModalities(c *gin.Context, requestedModel string, request dto.Request) *types.NewAPIError {
-	channelSettings, _ := common.GetContextKeyType[dto.ChannelSettings](c, constant.ContextKeyChannelSetting)
+func ValidateRequestInputModalities(c *gin.Context, requestedModel string, request any) *types.NewAPIError {
+	channelSettings, _ := common.GetContextKeyType[rootdto.ChannelSettings](c, constant.ContextKeyChannelSetting)
 	allowed, configured, _ := model_setting.ResolveModelInputModalities(requestedModel, channelSettings)
 	if !configured || !containsInputModality(DetectInputModalities(request), types.InputModalityImage) {
 		return nil
@@ -46,19 +47,19 @@ func ValidateRequestInputModalities(c *gin.Context, requestedModel string, reque
 	)
 }
 
-func requestContainsImage(request dto.Request) bool {
+func requestContainsImage(request any) bool {
 	switch value := request.(type) {
-	case *dto.GeneralOpenAIRequest:
+	case *rootdto.GeneralOpenAIRequest:
 		for _, message := range value.Messages {
-			if contentBlocksContainType(message.Content, dto.ContentTypeImageURL) {
+			if contentBlocksContainType(message.Content, rootdto.ContentTypeImageURL) {
 				return true
 			}
 		}
-	case *dto.OpenAIResponsesRequest:
+	case *rootdto.OpenAIResponsesRequest:
 		return rawJSONContainsType(value.Input, "input_image")
-	case *dto.OpenAIResponsesCompactionRequest:
+	case *rootdto.OpenAIResponsesCompactionRequest:
 		return rawJSONContainsType(value.Input, "input_image")
-	case *dto.ClaudeRequest:
+	case *rootdto.ClaudeRequest:
 		if anyContainsType(value.System, "image", 0) {
 			return true
 		}
@@ -67,8 +68,40 @@ func requestContainsImage(request dto.Request) bool {
 				return true
 			}
 		}
-	case *dto.GeminiChatRequest:
+	case *rootdto.GeminiChatRequest:
 		return geminiRequestContainsImage(value)
+	case *kitdto.GeneralOpenAIRequest:
+		for _, message := range value.Messages {
+			if contentBlocksContainType(message.Content, kitdto.ContentTypeImageURL) {
+				return true
+			}
+		}
+	case *kitdto.OpenAIResponsesRequest:
+		return rawJSONContainsType(value.Input, "input_image")
+	case *kitdto.OpenAIResponsesCompactionRequest:
+		return rawJSONContainsType(value.Input, "input_image")
+	case *kitdto.ClaudeRequest:
+		if anyContainsType(value.System, "image", 0) {
+			return true
+		}
+		for _, message := range value.Messages {
+			if anyContainsType(message.Content, "image", 0) {
+				return true
+			}
+		}
+	case *kitdto.GeminiChatRequest:
+		return geminiRequestContainsImageKit(value)
+	}
+	return false
+}
+
+func geminiRequestContainsImageKit(request *kitdto.GeminiChatRequest) bool {
+	for _, content := range request.Contents {
+		for _, part := range content.Parts {
+			if part.InlineData != nil || part.FileData != nil {
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -146,7 +179,7 @@ func gjsonValueContainsType(value gjson.Result, target string, depth int) bool {
 	return found
 }
 
-func geminiRequestContainsImage(request *dto.GeminiChatRequest) bool {
+func geminiRequestContainsImage(request *rootdto.GeminiChatRequest) bool {
 	if request == nil {
 		return false
 	}
@@ -166,7 +199,7 @@ func geminiRequestContainsImage(request *dto.GeminiChatRequest) bool {
 	return false
 }
 
-func geminiContentContainsImage(content dto.GeminiChatContent) bool {
+func geminiContentContainsImage(content rootdto.GeminiChatContent) bool {
 	for _, part := range content.Parts {
 		if part.InlineData != nil && strings.HasPrefix(strings.ToLower(part.InlineData.MimeType), "image/") {
 			return true

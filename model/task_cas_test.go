@@ -40,6 +40,7 @@ func TestMain(m *testing.M) {
 		&Task{},
 		&Midjourney{},
 		&User{},
+		&UserAccessToken{},
 		&UserSession{},
 		&AuthFlow{},
 		&ExternalIdentityClaim{},
@@ -78,6 +79,7 @@ func truncateTables(t *testing.T) {
 		DB.Exec("DELETE FROM tasks")
 		DB.Exec("DELETE FROM midjourneys")
 		DB.Exec("DELETE FROM users")
+		DB.Exec("DELETE FROM external_identity_claims")
 		DB.Exec("DELETE FROM tokens")
 		DB.Exec("DELETE FROM user_access_tokens")
 		DB.Exec("DELETE FROM user_oauth_bindings")

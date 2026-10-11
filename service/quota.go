@@ -293,6 +293,9 @@ func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData)
 }
 
 func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, rawExtraContent any) {
+	if usage == nil {
+		usage = &dto.Usage{}
+	}
 	var extraContent string
 	var extraMessages []*common.Message
 	switch value := rawExtraContent.(type) {
@@ -386,7 +389,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		} else {
 			extraContent += ", 计费结算失败，保留预扣待对账"
 		}
-	} else if totalTokens > 0 {
+	} else if totalTokens > 0 || fixedPriceBilling {
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
 	}

@@ -422,6 +422,10 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	info.MergeResponseSemantics(types.RelayFormatGemini, responseBody)
+	info.ObserveResponseModel(geminiResponse.ModelVersion)
+	var grounding geminiGroundingCounter
+	grounding.observe(&geminiResponse)
+	grounding.commit(info)
 	if len(geminiResponse.Candidates) == 0 {
 		usage := buildUsageFromGeminiResponse(c, info, &geminiResponse)
 

@@ -141,16 +141,20 @@ func ObserveResponsesOutcome(info *relaycommon.RelayInfo, event *dto.ResponsesSt
 			}
 		}
 		info.StreamStatus.MarkFailed(code, errorType, 0)
+		info.StreamStatus.SetTerminal(event.Type, "failed")
 	case event.Type == "response.incomplete" || responseStatus == "incomplete":
 		reason := ""
 		if event.Response != nil && event.Response.IncompleteDetails != nil {
 			reason = event.Response.IncompleteDetails.Reason
 		}
 		info.StreamStatus.MarkIncomplete(reason)
+		info.StreamStatus.SetTerminal(event.Type, "incomplete")
 	case event.Type == "response.cancelled" || event.Type == "response.canceled" || responseStatus == "cancelled":
 		info.StreamStatus.MarkCancelled()
+		info.StreamStatus.SetTerminal(event.Type, "cancelled")
 	case event.Type == "response.completed" || event.Type == "response.done" || responseStatus == "completed":
 		info.StreamStatus.MarkCompleted()
+		info.StreamStatus.SetTerminal(event.Type, "completed")
 	}
 }
 

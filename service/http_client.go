@@ -152,6 +152,9 @@ func InitHttpClient() {
 // user-controlled URLs must use GetSSRFProtectedHTTPClient or
 // ValidateSSRFProtectedFetchURL instead.
 func GetHttpClient() *http.Client {
+	if httpClient == nil {
+		InitHttpClient()
+	}
 	return httpClient
 }
 
@@ -160,6 +163,9 @@ func GetHttpClient() *http.Client {
 func GetSSRFProtectedHTTPClient() *http.Client {
 	if fetchSetting := system_setting.GetFetchSetting(); fetchSetting != nil && !fetchSetting.EnableSSRFProtection {
 		return GetHttpClient()
+	}
+	if ssrfProtectedHTTPClient == nil {
+		InitHttpClient()
 	}
 	return ssrfProtectedHTTPClient
 }

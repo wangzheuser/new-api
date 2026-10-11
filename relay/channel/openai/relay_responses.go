@@ -96,6 +96,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			sr.Stop(err)
 			return
 		}
+		if info.StreamStatus != nil {
+			info.StreamStatus.MarkClientPayloadCommitted()
+		}
 		accumulator.Observe(&streamResponse, common.StringToByteSlice(data))
 		switch streamResponse.Type {
 		case "error", "response.error", "response.failed", "response.cancelled":
@@ -123,6 +126,13 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 	})
 
+	usage := accumulator.Finish()
+	// The controller owns failed-stream settlement. Preserve the accumulator's
+	// usage snapshot so an SSE error can still settle the committed partial work.
+	if info.StreamStatus != nil && usage != nil {
+		hasUpstreamUsage := usage.PromptTokens > 0 || usage.CompletionTokens > 0 || usage.TotalTokens > 0
+		info.StreamStatus.ObservePartialUsage(usage, hasUpstreamUsage, !hasUpstreamUsage)
+	}
 	if streamErr != nil {
 		return nil, streamErr
 	}
@@ -130,7 +140,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		return nil, statusErr
 	}
 
-	return accumulator.Finish(), nil
+	return usage, nil
 }
 
 func rewriteSGLangResponsesCreatedAt(info *relaycommon.RelayInfo, payload []byte, path string, createdAt dto.IntValue) []byte {

@@ -72,6 +72,7 @@ func setupUserImpersonationTestFixture(t *testing.T) *userImpersonationTestFixtu
 	require.NoError(t, db.AutoMigrate(
 		&model.User{},
 		&model.Log{},
+		&model.AuditLog{},
 		&model.UserSubscription{},
 		&model.UserGroupGrant{},
 	))
@@ -332,28 +333,23 @@ func TestRedeemUserImpersonationTicketCreatesSessionWithoutLoginSideEffects(t *t
 		Count(&loginLogCount).Error)
 	assert.Zero(t, loginLogCount)
 
-	var manageLogs []model.Log
+	var manageLogs []model.AuditLog
 	require.NoError(t, fixture.db.Where(
-		"user_id = ? AND type = ? AND (other LIKE ? OR other LIKE ?)",
-		fixture.admin.Id,
-		model.LogTypeManage,
-		`%"action":"user.impersonation_link_create"%`,
-		`%"action":"user.impersonation_redeem"%`,
+		"category = ? AND action IN ?",
+		model.AuditCategoryOperation,
+		[]string{"user.impersonation_link_create", "user.impersonation_redeem"},
 	).
 		Order("id asc").Find(&manageLogs).Error)
 	require.Len(t, manageLogs, 2)
 	actions := make([]string, 0, 2)
 	for _, log := range manageLogs {
 		assert.NotContains(t, log.Content, issued.Data.Ticket)
-		assert.NotContains(t, log.Other, issued.Data.Ticket)
-		assert.NotContains(t, log.Other, ticketHash)
-		var other struct {
-			Op struct {
-				Action string `json:"action"`
-			} `json:"op"`
-		}
-		require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
-		actions = append(actions, other.Op.Action)
+		encodedOther, marshalErr := common.Marshal(log.Other)
+		require.NoError(t, marshalErr)
+		assert.NotContains(t, string(encodedOther), issued.Data.Ticket)
+		assert.NotContains(t, string(encodedOther), ticketHash)
+		require.NotNil(t, log.Other.Op)
+		actions = append(actions, log.Other.Op.Action)
 	}
 	assert.Equal(t, []string{"user.impersonation_link_create", "user.impersonation_redeem"}, actions)
 }

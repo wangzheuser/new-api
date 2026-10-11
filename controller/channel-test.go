@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -370,7 +371,11 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, op
 	if requestEndpointType == "" {
 		requestEndpointType = string(effectiveEndpointType)
 	}
-	request := buildTestRequest(testModel, requestEndpointType, channel, options)
+	requestValue := buildTestRequest(testModel, requestEndpointType, channel, options)
+	request, ok := requestValue.(dto.Request)
+	if !ok {
+		return testResult{context: c, localErr: errors.New("invalid channel test request"), newAPIError: types.NewError(errors.New("invalid channel test request"), types.ErrorCodeInvalidRequest)}
+	}
 	if directNativeProbe {
 		var probeRequest rootdto.Request
 		probeRequest, err = buildProtocolProbeRequest(testModel, constant.EndpointType(endpointType), options)
@@ -803,7 +808,8 @@ func attachTestBillingRequestInput(info *relaycommon.RelayInfo, request dto.Requ
 	return nil
 }
 
-func settleTestQuota(info *relaycommon.RelayInfo, priceData types.PriceData, usage *dto.Usage) (int, *billingexpr.TieredResult) {
+func settleTestQuota(info *relaycommon.RelayInfo, priceData types.PriceData, rawUsage any) (int, *billingexpr.TieredResult) {
+	usage := relayUsageForChannelTest(rawUsage)
 	if usage != nil && info != nil && info.TieredBillingSnapshot != nil {
 		isClaudeUsageSemantic := usage.UsageSemantic == "anthropic" || info.GetFinalRequestRelayFormat() == types.RelayFormatClaude
 		usedVars := billingexpr.UsedVars(info.TieredBillingSnapshot.ExprString)
@@ -825,13 +831,29 @@ func settleTestQuota(info *relaycommon.RelayInfo, priceData types.PriceData, usa
 	return int(priceData.ModelPrice * common.QuotaPerUnit), nil
 }
 
-func buildTestLogOther(c *gin.Context, info *relaycommon.RelayInfo, priceData types.PriceData, usage *dto.Usage, tieredResult *billingexpr.TieredResult) *model.LogOther {
+func buildTestLogOther(c *gin.Context, info *relaycommon.RelayInfo, priceData types.PriceData, rawUsage any, tieredResult *billingexpr.TieredResult) *model.LogOther {
+	usage := relayUsageForChannelTest(rawUsage)
 	other := service.GenerateTextOtherInfo(c, info, priceData.ModelRatio, priceData.GroupRatioInfo.GroupRatio, priceData.CompletionRatio,
 		usage.PromptTokensDetails.CachedTokens, priceData.CacheRatio, priceData.ModelPrice, priceData.GroupRatioInfo.GroupSpecialRatio)
 	if tieredResult != nil {
 		service.InjectTieredBillingInfo(other, info, tieredResult)
 	}
 	return other
+}
+
+func relayUsageForChannelTest(raw any) *dto.Usage {
+	if usage, ok := raw.(*dto.Usage); ok {
+		return usage
+	}
+	body, err := common.Marshal(raw)
+	if err != nil {
+		return &dto.Usage{}
+	}
+	usage := &dto.Usage{}
+	if err := common.Unmarshal(body, usage); err != nil {
+		return &dto.Usage{}
+	}
+	return usage
 }
 
 // relayRequestFromRoot crosses the legacy probe DTO boundary through JSON.
@@ -1069,7 +1091,14 @@ func detectErrorMessageFromJSONBytes(jsonBytes []byte) string {
 	return message
 }
 
-func buildTestRequest(model string, endpointType string, channel *model.Channel, options channelTestOptions) dto.Request {
+func buildTestRequest(model string, endpointType string, channel *model.Channel, rawOptions any) dto.Request {
+	options, _ := rawOptions.(channelTestOptions)
+	if stream, ok := rawOptions.(bool); ok {
+		options.isStream = stream
+	}
+	if channel == nil {
+		return buildRootTestRequest(model, endpointType, options)
+	}
 	userPrompt := options.userPrompt
 	if userPrompt == "" {
 		userPrompt = "hi"
@@ -1225,6 +1254,35 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 	}
 
 	return testRequest
+}
+
+func buildRootTestRequest(modelName string, endpointType string, options channelTestOptions) dto.Request {
+	request := buildTestRequest(modelName, endpointType, &model.Channel{}, options)
+	body, err := common.Marshal(request)
+	if err != nil {
+		return nil
+	}
+	var converted dto.Request
+	switch request.(type) {
+	case *dto.GeneralOpenAIRequest:
+		converted = &rootdto.GeneralOpenAIRequest{}
+	case *dto.OpenAIResponsesRequest:
+		converted = &rootdto.OpenAIResponsesRequest{}
+	case *dto.OpenAIResponsesCompactionRequest:
+		converted = &rootdto.OpenAIResponsesCompactionRequest{}
+	case *dto.EmbeddingRequest:
+		converted = &rootdto.EmbeddingRequest{}
+	case *dto.ImageRequest:
+		converted = &rootdto.ImageRequest{}
+	case *dto.RerankRequest:
+		converted = &rootdto.RerankRequest{}
+	default:
+		return nil
+	}
+	if err := common.Unmarshal(body, converted); err != nil {
+		return nil
+	}
+	return converted
 }
 
 func TestChannel(c *gin.Context) {
@@ -2256,6 +2314,71 @@ func buildChannelTestTargets(channels []*model.Channel, mode string) []channelTe
 	return targets
 }
 
+func selectChannelsForAutomaticTest(channels []*model.Channel, mode string) []*model.Channel {
+	selected := make([]*model.Channel, 0, len(channels))
+	for _, channel := range channels {
+		if channel == nil || channel.Status == common.ChannelStatusManuallyDisabled {
+			continue
+		}
+		if mode == operation_setting.ChannelTestModeAutoBanOnly && channel.AutoBan != nil && channel.GetAutoBan() {
+			selected = append(selected, channel)
+		}
+	}
+	return selected
+}
+
+func runChannelTestWorkers(ctx context.Context, channels []*model.Channel, concurrency int, test func(context.Context, *model.Channel) channelTestSummary, report func(int, int)) channelTestSummary {
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	jobs := make(chan *model.Channel)
+	results := make(chan channelTestSummary)
+	var workers sync.WaitGroup
+	for range min(concurrency, len(channels)) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for channel := range jobs {
+				results <- test(ctx, channel)
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for _, channel := range channels {
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- channel:
+			}
+		}
+	}()
+	go func() {
+		workers.Wait()
+		close(results)
+	}()
+	summary := channelTestSummary{}
+	processed := 0
+	if report != nil {
+		report(0, len(channels))
+	}
+	for result := range results {
+		summary.Tested += result.Tested
+		summary.Succeeded += result.Succeeded
+		summary.Failed += result.Failed
+		summary.Disabled += result.Disabled
+		summary.Enabled += result.Enabled
+		processed++
+		if report != nil && ctx.Err() == nil {
+			report(processed, len(channels))
+		}
+	}
+	return summary
+}
+
 // TestAllChannels enqueues a channel_test system task instead of running the
 // test loop inline. If any channel_test task is already active, the manual run is
 // rejected so the caller does not mistake a scheduled run for this manual one.
@@ -2271,7 +2394,7 @@ func TestAllChannels(c *gin.Context) {
 	if !created {
 		c.JSON(http.StatusConflict, gin.H{
 			"success": false,
-			"message": "已有通道测试任务正在运行或等待中，不能启动本次手动任务",
+			"message": "A channel test task is already running or queued",
 			"data": gin.H{
 				"task_id": task.TaskID,
 				"status":  task.Status,

@@ -579,6 +579,9 @@ func (s *StreamStatus) ResponseOutcome() string {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.response == ResponseOutcomeUnknown && s.EndReason == StreamEndReasonNone {
+		return ""
+	}
 	return string(s.response)
 }
 

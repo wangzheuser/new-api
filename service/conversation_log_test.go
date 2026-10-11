@@ -10,10 +10,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -66,7 +66,7 @@ func TestRecordConversationLogIncludesResponseOverrideMetadata(t *testing.T) {
 		ChannelMeta: &relaycommon.ChannelMeta{
 			ChannelId:         17,
 			UpstreamModelName: "UPSTREAM_MODEL",
-			ChannelOtherSettings: dto.ChannelOtherSettings{
+			ChannelOtherSettings: kitdto.ChannelOtherSettings{
 				ConversationLogEnabled: true,
 			},
 		},

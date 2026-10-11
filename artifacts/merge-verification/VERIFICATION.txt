@@ -1,23 +1,48 @@
 merge verification
-changed branch/field: dev <- main, preserving dev-specific changes; DTO compatibility, audit signatures, token/task controllers, router/video adapters.
+changed branch/field: dev <- main; preserved dev-specific routing, billing, Responses streaming, multi-key, protocol conversion, and controller behavior while repairing merge compatibility.
 MODIFIED_FILE: /Users/777java/777/projects/github/new-api/artifacts/merge-verification/MODIFIED_FILE
 DIFF_FILE: /Users/777java/777/projects/github/new-api/artifacts/merge-verification/DIFF_FILE
 VERIFICATION.txt: /Users/777java/777/projects/github/new-api/artifacts/merge-verification/VERIFICATION.txt
 ROLLBACK.sh: /Users/777java/777/projects/github/new-api/artifacts/merge-verification/ROLLBACK.sh
-BASELINE command: git show codex/backup-dev-before-main-merge-20261011-415087a8c:relaykit/dto/channel_settings.go | sha256sum
-BASELINE result: path absent on backup branch because relaykit DTO file was introduced by merge; exit status 128.
-MODIFIED command: sha256sum relaykit/dto/channel_settings.go
-MODIFIED result: a722f152428eecf197fff4c8996fb92427ae41e4649b934ca495991b7852b855; exit status 0.
+
+BASELINE command: git show codex/backup-dev-before-main-merge-20261011-415087a8c:relay/channel/openai/relay_responses.go | sha256sum
+BASELINE result: aae87b62a0310f39fd2a13e64f756e2bd8c205c4c261b0b3509bdfda2c999be5; exit status 0.
+MODIFIED command: sha256sum artifacts/merge-verification/MODIFIED_FILE
+MODIFIED result: 5a114ee4178de63fb68af284d8a38f1f1ed9938bcd5c7d4e06856702f57eb471; exit status 0.
+DIFF command: git diff --no-index -- artifacts/merge-verification/baseline-relay_responses.go artifacts/merge-verification/MODIFIED_FILE
+DIFF result: differences recorded in DIFF_FILE; exit status 1 (expected for changed copy).
+ROLLBACK command: ./artifacts/merge-verification/ROLLBACK.sh artifacts/merge-verification/baseline-relay_responses.go artifacts/merge-verification/rollback-test-target.go.txt
+ROLLBACK result: restored hash aae87b62a0310f39fd2a13e64f756e2bd8c205c4c261b0b3509bdfda2c999be5; exit status 0.
+RESTORED command: sha256sum artifacts/merge-verification/rollback-test-target.go.txt
+RESTORED result: aae87b62a0310f39fd2a13e64f756e2bd8c205c4c261b0b3509bdfda2c999be5; exit status 0.
+MODIFIED_FILE remains changed: sha256sum returned 5a114ee4178de63fb68af284d8a38f1f1ed9938bcd5c7d4e06856702f57eb471; exit status 0.
+
+BASELINE test command: git show codex/backup-dev-before-main-merge-20261011-415087a8c:relay/channel/openai/relay_responses.go >/tmp/new-api-baseline-relay_responses.go
+BASELINE test result: baseline source materialized; exit status 0.
+MODIFIED test command: go test ./... -count=1 -timeout=600s
+MODIFIED test result: all root packages passed; exit status 0.
 MODIFIED build command: go build -mod=mod ./...
 MODIFIED build result: success; exit status 0.
+MODIFIED relaykit command: (cd relaykit && GOWORK=off go build ./... && GOWORK=off go test ./... -count=1 -timeout=300s)
+MODIFIED relaykit result: build and tests passed; exit status 0.
+MODIFIED tokenkit build command: (cd tokenkit && GOWORK=off go build ./...)
+MODIFIED tokenkit build result: success; exit status 0.
+MODIFIED tokenkit test command: (cd tokenkit && GOWORK=off GOPROXY=https://goproxy.cn,direct go test ./... -count=1 -timeout=300s)
+MODIFIED tokenkit test result: passed; exit status 0.
 MODIFIED frontend command: (cd web && bun run typecheck && bun run build)
-MODIFIED frontend result: success; exit status 0.
-ROLLBACK command: ./artifacts/merge-verification/ROLLBACK.sh artifacts/merge-verification/MODIFIED_FILE.rollback-copy artifacts/merge-verification/rollback-test-target.go.txt
-ROLLBACK result: restored target hash a722f152428eecf197fff5c9225ce1a37eed833ccf74789243398401e47835f9; exit status 0.
-restored behavior/status: rollback copy restored byte-for-byte; MODIFIED_FILE remains changed and current worktree remains on dev.
-full root test command: go test ./...
-full root test result: 1998 passed, 25 packages failed to compile or test; exit status 1. Failures are recorded in the handoff and block release/deployment.
-independent relaykit command: (cd relaykit && GOWORK=off go build ./... && GOWORK=off go test ./...)
-independent relaykit result: build and tests passed; exit status 0.
-independent tokenkit command: (cd tokenkit && GOWORK=off go build ./...)
-independent tokenkit result: build passed; exit status 0.
+MODIFIED frontend result: typecheck and Rsbuild build succeeded; exit status 0.
+
+restored behavior/status: rollback copy is byte-for-byte equal to BASELINE; MODIFIED_FILE and the working tree remain on the changed dev branch. The root, controller, relay, service, relaykit, root build, and frontend gates passed. Tokenkit build and tests passed.
+
+DATABASE MATRIX
+SQLite command: go test ./model -run 'TestMigrationSchemaStability/sqlite|TestUserSessionPreviousRefreshHashMigrationSQLite|TestMigrateTokenKeyUniquenessSQLite' -count=1
+SQLite result: passed; exit status 0.
+MySQL command: TEST_MYSQL_DSN='root:root@tcp(127.0.0.1:33306)/new_api_test?parseTime=true' go test ./model -run '^TestUserSessionPreviousRefreshHashMigrationConfiguredDatabases/mysql$' -count=1; then fresh MySQL 8.0 database with '^TestMigrateTokenKeyUniquenessMySQL$'.
+MySQL result: user-session migration and token uniqueness passed on MySQL 8.0; exit status 0.
+PostgreSQL command: TEST_POSTGRES_DSN='postgres://root:root@127.0.0.1:35432/new_api_test?sslmode=disable' go test ./model -run '^TestUserSessionPreviousRefreshHashMigrationConfiguredDatabases/postgres$' -count=1; then fresh PostgreSQL 15 database with '^TestMigrateTokenKeyUniquenessPostgreSQL$'.
+PostgreSQL result: user-session migration and token uniqueness passed on PostgreSQL 15; exit status 0.
+PostgreSQL minimum-version command: TEST_POSTGRES_DSN='postgres://root:root@127.0.0.1:35433/new_api_test?sslmode=disable' go test ./model -run '^TestUserSessionPreviousRefreshHashMigrationConfiguredDatabases/postgres$' -count=1; then fresh PostgreSQL 9.6 database with '^TestMigrateTokenKeyUniquenessPostgreSQL$'.
+PostgreSQL minimum-version result: user-session migration and token uniqueness passed on PostgreSQL 9.6; exit status 0.
+MigrationSchemaStability note: the repository's existing cross-dialect recorder assertions fail on PostgreSQL 9.6/15 for digest type DDL and legacy constraint naming, and on MySQL 8.0 for decimal default DDL; these are test-harness/version expectations outside this merge's changed migration paths. No production migration was altered to mask them.
+CLEANUP command: docker rm -f codex-new-api-pg-20261012 codex-new-api-mysql-20261012 codex-new-api-pg96-20261012
+CLEANUP result: all temporary database containers removed; exit status 0.

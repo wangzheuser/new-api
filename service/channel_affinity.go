@@ -830,7 +830,14 @@ type ChannelAffinityUsageCacheCounters struct {
 var channelAffinityUsageCacheStatsLocks [64]sync.Mutex
 
 // ObserveChannelAffinityUsageCacheByRelayFormat records usage cache stats with a stable rate mode derived from relay format.
-func ObserveChannelAffinityUsageCacheByRelayFormat(c *gin.Context, usage *dto.Usage, relayFormat types.RelayFormat) {
+func ObserveChannelAffinityUsageCacheByRelayFormat(c *gin.Context, rawUsage any, relayFormat types.RelayFormat) {
+	usage, _ := rawUsage.(*dto.Usage)
+	if usage == nil && rawUsage != nil {
+		if data, err := common.Marshal(rawUsage); err == nil {
+			usage = &dto.Usage{}
+			_ = common.Unmarshal(data, usage)
+		}
+	}
 	ObserveChannelAffinityUsageCacheFromContext(c, usage, cachedTokenRateModeByRelayFormat(relayFormat))
 }
 

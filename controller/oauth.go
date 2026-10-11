@@ -14,7 +14,6 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -31,11 +30,12 @@ type oauthStateRequest struct {
 }
 
 type oauthFlowPayload struct {
-	AffiliateCode   string                         `json:"affiliate_code,omitempty"`
-	Verification    *service.OAuthVerificationFlow `json:"verification,omitempty"`
-	Telegram        *oauth.TelegramOAuthFlow       `json:"telegram,omitempty"`
-	SessionIdentity *service.AuthIdentity          `json:"session_identity,omitempty"`
-	Authorization   *model.AuthFlowAuthorization   `json:"authorization,omitempty"`
+	AffiliateCode    string                         `json:"affiliate_code,omitempty"`
+	RegistrationCode string                         `json:"registration_code,omitempty"`
+	Verification     *service.OAuthVerificationFlow `json:"verification,omitempty"`
+	Telegram         *oauth.TelegramOAuthFlow       `json:"telegram,omitempty"`
+	SessionIdentity  *service.AuthIdentity          `json:"session_identity,omitempty"`
+	Authorization    *model.AuthFlowAuthorization   `json:"authorization,omitempty"`
 }
 
 // providerParams returns the params of messages that name the OAuth provider.
@@ -48,16 +48,6 @@ func GenerateOAuthCode(c *gin.Context) {
 	var request oauthStateRequest
 	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
 		common.ApiErrorT(c, "Invalid parameters")
-		return
-	}
-	session := sessions.Default(c)
-	if request.RegistrationCode != "" {
-		session.Set("registration_code", request.RegistrationCode)
-	} else {
-		session.Delete("registration_code")
-	}
-	if err := session.Save(); err != nil {
-		common.ApiError(c, err)
 		return
 	}
 	request.Provider = strings.TrimSpace(request.Provider)
@@ -73,7 +63,7 @@ func GenerateOAuthCode(c *gin.Context) {
 	}
 	userID := 0
 	sessionID := ""
-	flowPayload := oauthFlowPayload{AffiliateCode: request.Aff}
+	flowPayload := oauthFlowPayload{AffiliateCode: request.Aff, RegistrationCode: strings.TrimSpace(request.RegistrationCode)}
 	bindingStarted := false
 	if request.Provider == "telegram" {
 		telegramFlow, err := oauth.NewTelegramOAuthFlow()
@@ -317,14 +307,13 @@ func handleOAuthVerification(c *gin.Context, provider string, oauthUser *oauth.O
 }
 
 func handleOAuthLogin(c *gin.Context, provider oauth.Provider, oauthUser *oauth.OAuthUser, token *oauth.OAuthToken, flow *model.AuthFlow) {
-	session := sessions.Default(c)
 	// 7. Find or create user
 	var payload oauthFlowPayload
 	if err := common.UnmarshalJsonStr(flow.Payload, &payload); err != nil {
 		writeSecurityOperationError(c, err)
 		return
 	}
-	user, migration, err := findOrCreateOAuthUser(c, provider, oauthUser, token, payload.AffiliateCode)
+	user, migration, err := findOrCreateOAuthUser(c, provider, oauthUser, token, payload.AffiliateCode, payload.RegistrationCode)
 	if err != nil {
 		if isRegistrationCodeError(err) {
 			respondRegistrationCodeError(c, err)
@@ -356,7 +345,6 @@ func handleOAuthLogin(c *gin.Context, provider oauth.Provider, oauthUser *oauth.
 	}
 
 	// 9. Setup login
-	session.Delete("registration_code")
 	setupLogin(user, migration, c)
 }
 
@@ -413,8 +401,7 @@ func handleOAuthBind(c *gin.Context, providerName string, provider oauth.Provide
 // findOrCreateOAuthUser finds the existing user or creates a new one. For a
 // legacy GitHub binding that still waits for the login verification, it also
 // returns the rewrite to carry into the challenge.
-func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *oauth.OAuthUser, token *oauth.OAuthToken, affiliateCode string) (*model.User, *service.LegacyGitHubMigration, error) {
-	session := sessions.Default(c)
+func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *oauth.OAuthUser, token *oauth.OAuthToken, affiliateCode, registrationCode string) (*model.User, *service.LegacyGitHubMigration, error) {
 	user := &model.User{}
 	if provider.ProviderUserIDColumn() == "telegram_id" {
 		err := provider.FillUserByProviderID(user, oauthUser.ProviderUserID)
@@ -534,7 +521,6 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	if affiliateCode != "" {
 		inviterId, _ = model.GetUserIdByAffCode(affiliateCode)
 	}
-	registrationCode, _ := session.Get("registration_code").(string)
 	registrationSource := "oauth:" + provider.GetName()
 
 	// Use transaction to ensure user creation and OAuth binding are atomic

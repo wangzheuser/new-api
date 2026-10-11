@@ -2,12 +2,11 @@ package dto
 
 import (
 	"github.com/QuantumNous/new-api/relaykit/types"
-	"net/http"
 )
 
 type Request interface {
 	GetTokenCountMeta() *types.TokenCountMeta
-	IsStream(c *http.Request) bool
+	IsStream(c any) bool
 	SetModelName(modelName string)
 }
 
@@ -19,7 +18,7 @@ func (b *BaseRequest) GetTokenCountMeta() *types.TokenCountMeta {
 		TokenType: types.TokenTypeTokenizer,
 	}
 }
-func (b *BaseRequest) IsStream(c *http.Request) bool {
+func (b *BaseRequest) IsStream(c any) bool {
 	return false
 }
 func (b *BaseRequest) SetModelName(modelName string) {}

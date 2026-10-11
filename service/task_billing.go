@@ -65,6 +65,8 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, task *model
 		other.SetPublic("is_model_mapped", true)
 		other.SetPublic("upstream_model_name", info.UpstreamModelName)
 	}
+	appendTieredBillingSnapshot(other, info.TieredBillingSnapshot)
+	appendTaskLogInfo(task, other)
 	appendBillingSettlementInfo(other, info)
 	attachQuotaSaturation(c, info, other)
 	model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
@@ -139,12 +141,7 @@ func taskBillingOther(task *model.Task) *model.LogOther {
 			}
 		}
 		if snap := bc.TieredSnapshot; snap != nil {
-			other.SetPublic("billing_mode", "tiered_expr")
-			other.SetPublic("expr_b64", base64.StdEncoding.EncodeToString([]byte(snap.ExprString)))
-			other.SetPublic("matched_tier", snap.EstimatedTier)
-			if len(snap.UsageFacts) > 0 {
-				other.SetPublic("usage_facts", snap.UsageFacts)
-			}
+			appendTieredBillingSnapshot(other, snap)
 			setTaskImageCount(other, snap.UsageFacts["image_count"])
 		} else if priceData := taskBillingContextPriceData(bc); priceData != nil {
 			setTaskImageCount(other, priceData.OtherRatios()["image_count"])
@@ -157,6 +154,20 @@ func taskBillingOther(task *model.Task) *model.LogOther {
 	}
 	appendTaskLogInfo(task, other)
 	return other
+}
+
+// appendTieredBillingSnapshot writes the immutable expression and usage facts
+// into the public task log so both synchronous and asynchronous paths agree.
+func appendTieredBillingSnapshot(other *model.LogOther, snap *billingexpr.BillingSnapshot) {
+	if other == nil || snap == nil {
+		return
+	}
+	other.SetPublic("billing_mode", "tiered_expr")
+	other.SetPublic("expr_b64", base64.StdEncoding.EncodeToString([]byte(snap.ExprString)))
+	other.SetPublic("matched_tier", snap.EstimatedTier)
+	if len(snap.UsageFacts) > 0 {
+		other.SetPublic("usage_facts", snap.UsageFacts)
+	}
 }
 
 // setTaskImageCount publishes the billed image quantity of an image task as
@@ -247,6 +258,9 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 		logger.LogWarn(ctx, fmt.Sprintf("退还资金来源失败 task %s: %s", task.TaskID, err.Error()))
 		return false
 	}
+	// 预扣阶段已计入累计用量，退款只回减用量，不改变请求次数。
+	model.UpdateUserUsedQuota(task.UserId, -quota)
+	model.UpdateChannelUsedQuota(task.ChannelId, -quota)
 
 	// 2. 记录日志
 	other := taskBillingOther(task)

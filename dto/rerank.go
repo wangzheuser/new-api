@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/types"
-	"github.com/gin-gonic/gin"
 )
 
 type RerankRequest struct {
@@ -18,7 +17,7 @@ type RerankRequest struct {
 	OverLapTokens   *int   `json:"overlap_tokens,omitempty"`
 }
 
-func (r *RerankRequest) IsStream(c *gin.Context) bool {
+func (r *RerankRequest) IsStream(c any) bool {
 	return false
 }
 

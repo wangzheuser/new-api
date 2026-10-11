@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	appconstant "github.com/QuantumNous/new-api/constant"
 	appdto "github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/middleware"
 	appmodel "github.com/QuantumNous/new-api/model"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
@@ -229,6 +230,7 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 	started := time.Now()
 	var info *relaycommon.RelayInfo
 	billingPrepared := false
+	quotaConsumed := false
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			apiErr = types.NewError(fmt.Errorf("responses websocket call panic: %v", recovered), types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
@@ -237,7 +239,12 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 		if info == nil && modelName != "" {
 			info = &relaycommon.RelayInfo{OriginModelName: modelName, UsingGroup: common.GetContextKeyString(c, appconstant.ContextKeyUsingGroup), StartTime: started}
 		}
-		perfmetrics.RecordRelayResult(c.Request.Context(), info, apiErr)
+		// PostTextConsumeQuota records terminal streams from their protocol
+		// outcome. Requests that fail before reaching settlement still need the
+		// request-boundary sample here.
+		if !quotaConsumed {
+			perfmetrics.RecordRelayResult(c.Request.Context(), info, apiErr)
+		}
 		// Settlement already marks the request policy successful, and nothing
 		// reads a termination decision after this point on the WebSocket path,
 		// so neither policy record belongs here.
@@ -377,7 +384,9 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 			idle.Reset(timeout)
 			if incoming.err != nil {
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, incoming.err)
+				common.SetContextKey(c, appconstant.ContextKeyRelayUpstreamSucceeded, false)
 				state.closeAfter = true
+				quotaConsumed = true
 				ConsumeResponsesQuota(c, info, accumulator.Finish())
 				return nil
 			}
@@ -427,8 +436,10 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 						}
 						accumulator.Observe(&event.ResponsesStreamResponse, incoming.body)
 						info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
+						common.SetContextKey(c, appconstant.ContextKeyRelayUpstreamSucceeded, false)
 						s.lastResponseID = responseID
 						state.terminal, state.closeAfter = &incoming, ambiguous
+						quotaConsumed = true
 						ConsumeResponsesQuota(c, info, accumulator.Finish())
 						return nil
 					}
@@ -461,7 +472,19 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 					s.lastResponseID = event.Response.ID
 				}
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
+				switch event.Type {
+				case "response.failed":
+					common.SetContextKey(c, appconstant.ContextKeyRelayUpstreamSucceeded, false)
+				case "response.incomplete":
+					if event.Response == nil || event.Response.IncompleteDetails == nil ||
+						(event.Response.IncompleteDetails.Reason != "max_output_tokens" && event.Response.IncompleteDetails.Reason != "max_tokens") {
+						common.SetContextKey(c, appconstant.ContextKeyRelayUpstreamSucceeded, false)
+					}
+				case "response.cancelled", "response.canceled":
+					common.SetContextKey(c, appconstant.ContextKeyRelayUpstreamSucceeded, false)
+				}
 				state.terminal = &incoming
+				quotaConsumed = true
 				ConsumeResponsesQuota(c, info, accumulator.Finish())
 				return nil
 			}
@@ -490,11 +513,15 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 			sentControl = control.body
 		case <-idle.C:
 			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, context.DeadlineExceeded)
+			common.SetContextKey(c, appconstant.ContextKeyRelayUpstreamSucceeded, false)
 			state.closeAfter = true
+			quotaConsumed = true
 			ConsumeResponsesQuota(c, info, accumulator.Finish())
 			return nil
 		case <-s.ctx.Done():
 			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, s.ctx.Err())
+			common.SetContextKey(c, appconstant.ContextKeyRelayUpstreamSucceeded, false)
+			quotaConsumed = true
 			ConsumeResponsesQuota(c, info, accumulator.Finish())
 			return nil
 		}
@@ -563,7 +590,7 @@ func (s *responsesWSSession) restoreConnectionContext(c *gin.Context, model stri
 	route, _ := channel.GetOtherSettings().AdvancedCustom.MatchPathForModel(c.Request.URL.Path, model)
 	if strings.TrimSpace(route.UpstreamPath) != strings.TrimSpace(s.lockedRoute.UpstreamPath) ||
 		route.IsNative() != s.lockedRoute.IsNative() ||
-		!reflect.DeepEqual(route.Auth, s.lockedRoute.Auth) {
+		!sameAdvancedRouteAuth(route.Auth, s.lockedRoute.Auth) {
 		return types.NewErrorWithStatusCode(errors.New("upstream route changed; reconnect required"), types.ErrorCodeAccessDenied, http.StatusForbidden, types.ErrOptionWithSkipRetry())
 	}
 	if pin, found, _ := service.GetChannelConstraints(c).ResolvedPin(); found {
@@ -595,6 +622,14 @@ func (s *responsesWSSession) restoreConnectionContext(c *gin.Context, model stri
 	policy.BeginAttempt(channel, s.lockedGroup)
 	policy.AddEvent(service.PolicyEvent{ChannelID: channel.Id, Decision: service.PolicyDecision{Action: "select", Reason: "pinned_channel", Source: "channel_constraint"}})
 	return nil
+}
+
+// sameAdvancedRouteAuth compares the independent root and relaykit DTOs.
+func sameAdvancedRouteAuth(current *appdto.AdvancedCustomRouteAuth, locked *dto.AdvancedCustomRouteAuth) bool {
+	if current == nil || locked == nil {
+		return current == nil && locked == nil
+	}
+	return current.Type == locked.Type && current.Name == locked.Name && current.Value == locked.Value
 }
 
 func buildResponsesWSCreatePayload(c *gin.Context, info *relaycommon.RelayInfo, req dto.OpenAIResponsesRequest, generate common.RawMessage, streamID string) ([]byte, *types.NewAPIError) {
@@ -921,12 +956,17 @@ func selectResponsesWSChannel(c *gin.Context, modelName string, retryParam *serv
 	}) {
 		constraints.AddFilter(appdto.ChannelFilter{Kind: appdto.FilterResponsesWebSocket})
 	}
-	channel, _, _, err := service.CacheGetRandomSatisfiedChannelWithRoute(retryParam)
-	if err != nil {
-		return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
-	}
-	if channel == nil {
-		return nil, types.NewErrorWithStatusCode(errors.New("no channel available"), types.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+	channel, _, selectErr := service.SelectChannelForRequest(c, modelName, retryParam)
+	if selectErr != nil {
+		message := selectErr.Message
+		if selectErr.MessageID != "" {
+			message = i18n.T(c, selectErr.MessageID, selectErr.Params)
+		}
+		code := selectErr.Code
+		if code == "" {
+			code = types.ErrorCodeGetChannelFailed
+		}
+		return nil, types.NewErrorWithStatusCode(errors.New(message), code, selectErr.StatusCode, types.ErrOptionWithSkipRetry())
 	}
 	if err := middleware.SetupContextForSelectedChannel(c, channel, modelName); err != nil {
 		return nil, err

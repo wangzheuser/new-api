@@ -6,12 +6,11 @@ import (
 
 	rootcommon "github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	hostreasoning "github.com/QuantumNous/new-api/setting/reasoning"
 	"github.com/gin-gonic/gin"
 )
 
-func ModelMappedHelper(c *gin.Context, info *relaycommon.RelayInfo, request dto.Request) error {
+func ModelMappedHelper(c *gin.Context, info *relaycommon.RelayInfo, request any) error {
 	if info.ChannelMeta == nil {
 		info.ChannelMeta = &relaycommon.ChannelMeta{}
 	}
@@ -63,7 +62,9 @@ func ModelMappedHelper(c *gin.Context, info *relaycommon.RelayInfo, request dto.
 	}
 
 	if request != nil {
-		request.SetModelName(info.UpstreamModelName)
+		if setter, ok := request.(interface{ SetModelName(string) }); ok {
+			setter.SetModelName(info.UpstreamModelName)
+		}
 	}
 	return nil
 }

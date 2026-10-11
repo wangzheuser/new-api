@@ -850,7 +850,7 @@ func handlerMultiKeyUpdate(channel *Channel, usingKey string, status int, reason
 			common.SysLog(fmt.Sprintf("failed to update multi-key status: channel_id=%d, using key not found", channel.Id))
 			return false
 		}
-		if channel.Status == status {
+		if channel.Status == status && reason == "" {
 			return false
 		}
 		channel.Status = status
@@ -954,7 +954,19 @@ func EnableChannelByTag(tag string) error {
 		if err := lockForUpdate(tx).Where("tag = ?", tag).Find(&channels).Error; err != nil {
 			return err
 		}
-		return tx.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusEnabled).Error
+		for i := range channels {
+			info := channels[i].GetOtherInfo()
+			delete(info, "status_reason")
+			delete(info, "status_time")
+			channels[i].SetOtherInfo(info)
+			if err := tx.Model(&Channel{}).Where("id = ?", channels[i].Id).Updates(map[string]any{
+				"status":     common.ChannelStatusEnabled,
+				"other_info": channels[i].OtherInfo,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return err
@@ -971,7 +983,19 @@ func DisableChannelByTag(tag string) error {
 		if err := lockForUpdate(tx).Where("tag = ?", tag).Find(&channels).Error; err != nil {
 			return err
 		}
-		return tx.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusManuallyDisabled).Error
+		for i := range channels {
+			info := channels[i].GetOtherInfo()
+			info["status_reason"] = "tag disabled"
+			info["status_time"] = common.GetTimestamp()
+			channels[i].SetOtherInfo(info)
+			if err := tx.Model(&Channel{}).Where("id = ?", channels[i].Id).Updates(map[string]any{
+				"status":     common.ChannelStatusManuallyDisabled,
+				"other_info": channels[i].OtherInfo,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return err
@@ -1277,7 +1301,7 @@ func (channel *Channel) GetSetting() dto.ChannelSettings {
 	return setting
 }
 
-func (channel *Channel) SetSetting(setting dto.ChannelSettings) {
+func (channel *Channel) SetSetting(setting any) {
 	settingBytes, err := common.Marshal(setting)
 	if err != nil {
 		common.SysLog(common.LogText("failed to marshal setting: channel_id=%d, error=%v", channel.Id, err))
@@ -1317,7 +1341,7 @@ func (channel *Channel) GetOtherSettings() dto.ChannelOtherSettings {
 	return setting
 }
 
-func (channel *Channel) SetOtherSettings(setting dto.ChannelOtherSettings) {
+func (channel *Channel) SetOtherSettings(setting any) {
 	settingBytes, err := common.Marshal(setting)
 	if err != nil {
 		common.SysLog(common.LogText("failed to marshal setting: channel_id=%d, error=%v", channel.Id, err))

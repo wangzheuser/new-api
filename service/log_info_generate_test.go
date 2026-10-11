@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -65,10 +66,11 @@ func TestGenerateTextOtherInfoIncludesResponseOverrideAudit(t *testing.T) {
 
 	other := GenerateTextOtherInfo(ctx, info, 1, 1, 1, 0, 0, 0, 1)
 
-	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	snapshot := other.Snapshot()
+	adminInfo, ok := snapshot["admin_info"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Same(t, decision, adminInfo["response_override"])
-	assert.NotContains(t, other, "response_override")
+	assert.NotContains(t, snapshot, "response_override")
 
 	encoded, err := common.Marshal(adminInfo["response_override"])
 	require.NoError(t, err)
@@ -112,11 +114,11 @@ func TestAppendStreamStatusIncludesProtocolTerminalAndTransportEnd(t *testing.T)
 		ReceivedResponseCount: 7,
 		StreamStatus:          streamStatus,
 	}
-	other := map[string]interface{}{}
+	other := model.NewLogOther()
 
 	AppendStreamStatus(info, other)
 
-	streamInfo, ok := other["stream_status"].(map[string]interface{})
+	streamInfo, ok := other.Snapshot()["stream_status"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, "error", streamInfo["status"])
 	assert.Equal(t, "streaming", streamInfo["phase"])
@@ -179,7 +181,7 @@ func TestAppendChannelRoutePlanOmitsReasoningHistoryWithoutEvents(t *testing.T) 
 }
 
 func TestAppendRelayProtocolInfoIncludesRouteNormalizationAndFinalFormat(t *testing.T) {
-	other := map[string]interface{}{}
+	other := model.NewLogOther()
 	adminInfo := map[string]interface{}{}
 	info := &relaycommon.RelayInfo{
 		RelayFormat:             types.RelayFormatClaude,
@@ -213,19 +215,20 @@ func TestAppendRelayProtocolInfoIncludesRouteNormalizationAndFinalFormat(t *test
 	assert.Equal(t, types.RequestNormalizationOptions{ReasoningHistoryPolicy: types.ReasoningHistoryPolicyStrip}, protocolRoute["normalization_options"])
 	assert.Equal(t, "model_override", protocolRoute["capability_source"])
 	assert.Same(t, info.ProtocolNormalization, adminInfo["protocol_normalization"])
-	assert.Equal(t, []string{"Claude Messages"}, other["request_conversion"])
-	assert.Equal(t, types.RelayFormat(types.RelayFormatClaude), other["final_request_relay_format"])
-	assert.Equal(t, true, other["claude"])
+	snapshot := other.Snapshot()
+	assert.Equal(t, []string{"Claude Messages"}, snapshot["request_conversion"])
+	assert.Equal(t, types.RelayFormat(types.RelayFormatClaude), snapshot["final_request_relay_format"])
+	assert.Equal(t, true, snapshot["claude"])
 }
 
 func TestAppendStreamStatusMarksUnexpectedEOFWithoutTerminal(t *testing.T) {
 	streamStatus := relaycommon.NewStreamStatus()
 	streamStatus.SetEndReason(relaycommon.StreamEndReasonUnexpectedEOF, errors.New("stream ended before terminal event"))
-	other := map[string]interface{}{}
+	other := model.NewLogOther()
 
 	AppendStreamStatus(&relaycommon.RelayInfo{IsStream: true, StreamStatus: streamStatus}, other)
 
-	streamInfo, ok := other["stream_status"].(map[string]interface{})
+	streamInfo, ok := other.Snapshot()["stream_status"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, "error", streamInfo["status"])
 	assert.Equal(t, "streaming", streamInfo["phase"])
@@ -235,11 +238,11 @@ func TestAppendStreamStatusMarksUnexpectedEOFWithoutTerminal(t *testing.T) {
 }
 
 func TestAppendStreamStatusMarksPreStreamFailure(t *testing.T) {
-	other := map[string]interface{}{}
+	other := model.NewLogOther()
 
 	AppendStreamStatus(&relaycommon.RelayInfo{IsStream: true}, other)
 
-	streamInfo, ok := other["stream_status"].(map[string]interface{})
+	streamInfo, ok := other.Snapshot()["stream_status"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, "error", streamInfo["status"])
 	assert.Equal(t, "pre_stream", streamInfo["phase"])

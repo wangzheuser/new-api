@@ -2,7 +2,6 @@ package dto
 
 import (
 	"encoding/json"
-	"net/http"
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -39,7 +38,7 @@ func (r *OpenAIResponsesCompactionRequest) GetTokenCountMeta() *types.TokenCount
 	}
 }
 
-func (r *OpenAIResponsesCompactionRequest) IsStream(c *http.Request) bool {
+func (r *OpenAIResponsesCompactionRequest) IsStream(c any) bool {
 	return false
 }
 

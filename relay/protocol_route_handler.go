@@ -10,6 +10,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	legacydto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -17,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/service"
+	legacyconvert "github.com/QuantumNous/new-api/service/relayconvert"
 	"github.com/QuantumNous/new-api/service/relaynormalize"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -52,7 +54,7 @@ func executeConvertedTextRoute(c *gin.Context, info *relaycommon.RelayInfo, adap
 	}
 	info.ProtocolEndpointMismatch = false
 
-	converted, err := relayconvert.ConvertRequestByID(c, info, plan.RequestConverter, request)
+	converted, err := convertProtocolRequest(c, info, plan, request)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
@@ -93,6 +95,74 @@ func executeConvertedTextRoute(c *gin.Context, info *relaycommon.RelayInfo, adap
 		return handleConvertedTextStream(c, info, httpResp)
 	}
 	return handleConvertedTextResponse(c, info, httpResp)
+}
+
+// convertProtocolRequest keeps legacy root DTO callers on the mature host
+// converter while feeding the independent relaykit converter for native DTOs.
+func convertProtocolRequest(c *gin.Context, info *relaycommon.RelayInfo, plan *types.ChannelRoutePlan, request any) (*relayconvert.RequestResult, error) {
+	if isLegacyProtocolRequest(request) {
+		legacyResult, err := legacyconvert.ConvertRequestByID(c, info, plan.RequestConverter, request)
+		if err != nil {
+			return nil, err
+		}
+		if c != nil {
+			c.Set("legacy_protocol_dto", true)
+		}
+		adapted, err := adaptProtocolRequest(legacyResult.Value, plan.UpstreamRelayFormat)
+		if err != nil {
+			return nil, err
+		}
+		return &relayconvert.RequestResult{
+			Value:     adapted,
+			From:      plan.ClientRelayFormat,
+			To:        plan.UpstreamRelayFormat,
+			Converter: legacyResult.Converter,
+			Quality:   relayconvert.RequestConverterQuality(legacyResult.Quality),
+		}, nil
+	}
+	adapted, err := adaptProtocolRequest(request, plan.ClientRelayFormat)
+	if err != nil {
+		return nil, err
+	}
+	return relayconvert.ConvertRequestByID(c, info, plan.RequestConverter, adapted)
+}
+
+func isLegacyProtocolRequest(request any) bool {
+	switch request.(type) {
+	case *legacydto.GeneralOpenAIRequest, legacydto.GeneralOpenAIRequest,
+		*legacydto.OpenAIResponsesRequest, legacydto.OpenAIResponsesRequest,
+		*legacydto.ClaudeRequest, legacydto.ClaudeRequest,
+		*legacydto.GeminiChatRequest, legacydto.GeminiChatRequest:
+		return true
+	default:
+		return false
+	}
+}
+
+// adaptProtocolRequest normalizes legacy root DTO values to the relaykit DTOs
+// consumed by the protocol conversion registry.
+func adaptProtocolRequest(request any, format types.RelayFormat) (any, error) {
+	var adapted any
+	switch format {
+	case types.RelayFormatOpenAI:
+		adapted = &dto.GeneralOpenAIRequest{}
+	case types.RelayFormatOpenAIResponses:
+		adapted = &dto.OpenAIResponsesRequest{}
+	case types.RelayFormatClaude:
+		adapted = &dto.ClaudeRequest{}
+	case types.RelayFormatGemini:
+		adapted = &dto.GeminiChatRequest{}
+	default:
+		return request, nil
+	}
+	data, err := common.Marshal(request)
+	if err != nil {
+		return nil, err
+	}
+	if err := common.Unmarshal(data, adapted); err != nil {
+		return nil, err
+	}
+	return adapted, nil
 }
 
 // executeNativeTextRoute sends Messages or GenerateContent through a standard compatible channel without format conversion.
@@ -246,16 +316,72 @@ func handleConvertedTextResponse(c *gin.Context, info *relaycommon.RelayInfo, re
 		return nil, apiError
 	}
 	info.MergeResponseSemantics(info.ChannelRoutePlan.UpstreamRelayFormat, body)
-	result, err := relayconvert.ConvertResponseByID(c, info, info.ChannelRoutePlan.ResponseConverter, upstreamResponse)
-	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+	var resultValue any
+	var usage *dto.Usage
+	if c.GetBool("legacy_protocol_dto") {
+		legacyResponse, convertErr := adaptLegacyResponse(upstreamResponse, info.ChannelRoutePlan.UpstreamRelayFormat)
+		if convertErr != nil {
+			return nil, types.NewOpenAIError(convertErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		}
+		legacyResult, convertErr := legacyconvert.ConvertResponseByID(c, info, info.ChannelRoutePlan.ResponseConverter, legacyResponse)
+		if convertErr != nil {
+			return nil, types.NewOpenAIError(convertErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		}
+		resultValue = legacyResult.Value
+		usage = adaptLegacyUsage(legacyResult.Usage)
+	} else {
+		result, convertErr := relayconvert.ConvertResponseByID(c, info, info.ChannelRoutePlan.ResponseConverter, upstreamResponse)
+		if convertErr != nil {
+			return nil, types.NewOpenAIError(convertErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		}
+		resultValue = result.Value
+		usage = result.Usage
 	}
-	responseBody, err := common.Marshal(result.Value)
+	responseBody, err := common.Marshal(resultValue)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
 	}
 	service.IOCopyBytesGracefully(c, resp, responseBody)
-	return ensureConvertedUsage(c, info, result.Usage, protocolResponseUsageText(result.Value)), nil
+	return ensureConvertedUsage(c, info, usage, protocolResponseUsageText(resultValue)), nil
+}
+
+func adaptLegacyResponse(response any, format types.RelayFormat) (any, error) {
+	var target any
+	switch format {
+	case types.RelayFormatOpenAI:
+		target = &legacydto.OpenAITextResponse{}
+	case types.RelayFormatOpenAIResponses:
+		target = &legacydto.OpenAIResponsesResponse{}
+	case types.RelayFormatClaude:
+		target = &legacydto.ClaudeResponse{}
+	case types.RelayFormatGemini:
+		target = &legacydto.GeminiChatResponse{}
+	default:
+		return response, nil
+	}
+	data, err := common.Marshal(response)
+	if err != nil {
+		return nil, err
+	}
+	if err := common.Unmarshal(data, target); err != nil {
+		return nil, err
+	}
+	return target, nil
+}
+
+func adaptLegacyUsage(usage *legacydto.Usage) *dto.Usage {
+	if usage == nil {
+		return nil
+	}
+	data, err := common.Marshal(usage)
+	if err != nil {
+		return nil
+	}
+	var adapted dto.Usage
+	if err := common.Unmarshal(data, &adapted); err != nil {
+		return nil
+	}
+	return &adapted
 }
 
 func handleConvertedTextStream(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
@@ -503,28 +629,48 @@ func validateNativeTextStreamChunk(format types.RelayFormat, chunk any) error {
 	switch format {
 	case types.RelayFormatOpenAI:
 		value, ok := chunk.(*dto.ChatCompletionsStreamResponse)
-		if !ok || value == nil || (value.Id == "" && value.Object == "" && len(value.Choices) == 0 && value.Usage == nil) {
+		if (!ok || value == nil || (value.Id == "" && value.Object == "" && len(value.Choices) == 0 && value.Usage == nil)) && !validLegacyChatStreamChunk(chunk) {
 			return fmt.Errorf("invalid chat stream shape")
 		}
 	case types.RelayFormatOpenAIResponses:
 		value, ok := chunk.(*dto.ResponsesStreamResponse)
-		if !ok || value == nil || value.Type == "" {
+		if (!ok || value == nil || value.Type == "") && !validLegacyResponsesStreamChunk(chunk) {
 			return fmt.Errorf("invalid responses stream shape")
 		}
 	case types.RelayFormatClaude:
 		value, ok := chunk.(*dto.ClaudeResponse)
-		if !ok || value == nil || value.Type == "" {
+		if (!ok || value == nil || value.Type == "") && !validLegacyClaudeStreamChunk(chunk) {
 			return fmt.Errorf("invalid messages stream shape")
 		}
 	case types.RelayFormatGemini:
 		value, ok := chunk.(*dto.GeminiChatResponse)
-		if !ok || value == nil || (len(value.Candidates) == 0 && value.PromptFeedback == nil && !value.HasUsageMetadata) {
+		if (!ok || value == nil || (len(value.Candidates) == 0 && value.PromptFeedback == nil && !value.HasUsageMetadata)) && !validLegacyGeminiStreamChunk(chunk) {
 			return fmt.Errorf("invalid generate content stream shape")
 		}
 	default:
 		return fmt.Errorf("unsupported native stream format: %s", format)
 	}
 	return nil
+}
+
+func validLegacyChatStreamChunk(chunk any) bool {
+	value, ok := chunk.(*legacydto.ChatCompletionsStreamResponse)
+	return ok && value != nil && (value.Id != "" || value.Object != "" || len(value.Choices) > 0 || value.Usage != nil)
+}
+
+func validLegacyResponsesStreamChunk(chunk any) bool {
+	value, ok := chunk.(*legacydto.ResponsesStreamResponse)
+	return ok && value != nil && value.Type != ""
+}
+
+func validLegacyClaudeStreamChunk(chunk any) bool {
+	value, ok := chunk.(*legacydto.ClaudeResponse)
+	return ok && value != nil && value.Type != ""
+}
+
+func validLegacyGeminiStreamChunk(chunk any) bool {
+	value, ok := chunk.(*legacydto.GeminiChatResponse)
+	return ok && value != nil && (len(value.Candidates) > 0 || value.PromptFeedback != nil || value.HasUsageMetadata)
 }
 
 func decodeProtocolResponse(format types.RelayFormat, data []byte, statusCode int) (any, *types.NewAPIError) {
@@ -801,6 +947,45 @@ func protocolResponseUsageText(response any) string {
 				}
 			}
 		}
+	case *legacydto.OpenAITextResponse:
+		for i := range value.Choices {
+			message := &value.Choices[i].Message
+			text.WriteString(message.StringContent())
+			text.WriteString(message.GetReasoningContent())
+			for _, toolCall := range message.ParseToolCalls() {
+				text.WriteString(toolCall.Function.Arguments)
+			}
+		}
+	case *legacydto.OpenAIResponsesResponse:
+		for i := range value.Output {
+			output := &value.Output[i]
+			for _, content := range output.Content {
+				text.WriteString(content.Text)
+			}
+			text.WriteString(common.JsonRawMessageToString(output.Arguments))
+		}
+	case *legacydto.ClaudeResponse:
+		text.WriteString(value.Completion)
+		for i := range value.Content {
+			content := &value.Content[i]
+			text.WriteString(content.GetText())
+			if content.Thinking != nil {
+				text.WriteString(*content.Thinking)
+			}
+			if content.Input != nil {
+				appendProtocolUsageJSON(&text, content.Input)
+			}
+		}
+	case *legacydto.GeminiChatResponse:
+		for _, candidate := range value.Candidates {
+			for _, part := range candidate.Content.Parts {
+				text.WriteString(part.Text)
+				if part.FunctionCall != nil {
+					text.WriteString(part.FunctionCall.FunctionName)
+					appendProtocolUsageJSON(&text, part.FunctionCall.Arguments)
+				}
+			}
+		}
 	}
 	return text.String()
 }
@@ -833,6 +1018,40 @@ func protocolStreamChunkUsageText(chunk any) string {
 			}
 		}
 	case *dto.GeminiChatResponse:
+		for _, candidate := range value.Candidates {
+			for _, part := range candidate.Content.Parts {
+				text.WriteString(part.Text)
+				if part.FunctionCall != nil {
+					text.WriteString(part.FunctionCall.FunctionName)
+					appendProtocolUsageJSON(&text, part.FunctionCall.Arguments)
+				}
+			}
+		}
+	case *legacydto.ChatCompletionsStreamResponse:
+		for _, choice := range value.Choices {
+			text.WriteString(choice.Delta.GetContentString())
+			text.WriteString(choice.Delta.GetReasoningContent())
+			for _, toolCall := range choice.Delta.ToolCalls {
+				text.WriteString(toolCall.Function.Arguments)
+			}
+		}
+	case *legacydto.ResponsesStreamResponse:
+		text.WriteString(value.Delta)
+	case *legacydto.ClaudeResponse:
+		for _, content := range []*legacydto.ClaudeMediaMessage{value.ContentBlock, value.Delta} {
+			if content == nil {
+				continue
+			}
+			text.WriteString(content.GetText())
+			text.WriteString(content.Delta)
+			if content.Thinking != nil {
+				text.WriteString(*content.Thinking)
+			}
+			if content.PartialJson != nil {
+				text.WriteString(*content.PartialJson)
+			}
+		}
+	case *legacydto.GeminiChatResponse:
 		for _, candidate := range value.Candidates {
 			for _, part := range candidate.Content.Parts {
 				text.WriteString(part.Text)

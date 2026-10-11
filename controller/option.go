@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -409,6 +410,53 @@ func UpdateOption(c *gin.Context) {
 		if err != nil {
 			common.ApiError(c, err)
 			return
+		}
+	case "billing_setting.billing_expr":
+		expressions := make(map[string]string)
+		if err = common.UnmarshalJsonStr(option.Value.(string), &expressions); err != nil {
+			common.ApiErrorT(c, "Billing expressions must be a JSON object mapping models to expressions: {{error}}", map[string]any{"error": err.Error()})
+			return
+		}
+		models := make([]string, 0, len(expressions))
+		for modelName := range expressions {
+			models = append(models, modelName)
+		}
+		sort.Strings(models)
+		storedVariants := billing_setting.GetPluginBillingExprCopy()
+		for _, modelName := range models {
+			variants := make(map[string]any)
+			for key, expression := range storedVariants {
+				if plugin, name, ok := billing_setting.SplitPluginBillingExprKey(key); ok && name == modelName {
+					variants[plugin] = expression
+				}
+			}
+			err = model.ValidateModelPricing(modelName, model.PricingValues{
+				"billing_setting.billing_expr":          expressions[modelName],
+				billing_setting.PluginBillingExprOption: variants,
+			})
+			if err != nil {
+				common.ApiErrorT(c, "Invalid billing expression for model {{model}}: {{error}}", map[string]any{"model": modelName, "error": err.Error()})
+				return
+			}
+		}
+	case billing_setting.PluginBillingExprOption:
+		var expressions map[string]string
+		if err = common.UnmarshalJsonStr(option.Value.(string), &expressions); err != nil || expressions == nil {
+			common.ApiErrorMsg(c, "plugin billing expressions must be a JSON object")
+			return
+		}
+		for key, expression := range expressions {
+			plugin, name, valid := billing_setting.SplitPluginBillingExprKey(key)
+			if !valid {
+				common.ApiErrorMsg(c, "invalid plugin billing expression key: "+key)
+				return
+			}
+			if err = model.ValidateModelPricing(name, model.PricingValues{
+				billing_setting.PluginBillingExprOption: map[string]any{plugin: expression},
+			}); err != nil {
+				common.ApiError(c, err)
+				return
+			}
 		}
 	case "general_setting.default_final_error_override":
 		override := make(map[string]interface{})

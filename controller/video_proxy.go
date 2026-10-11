@@ -31,6 +31,14 @@ var errTaskMediaRequestRejected = errors.New("task media request rejected")
 var taskMediaResponseHeaderTimeout = 60 * time.Second
 var taskMediaDataURLMaxEncodedBytes = 64 << 20
 
+func copyVideoResponseHeaders(dst, src http.Header) {
+	for _, key := range []string{"Content-Type", "Content-Disposition", "Accept-Ranges", "Content-Range", "ETag", "Last-Modified", "Cache-Control", "Expires"} {
+		for _, value := range src.Values(key) {
+			dst.Add(key, value)
+		}
+	}
+}
+
 type taskMediaProxyError struct {
 	status  int
 	code    string

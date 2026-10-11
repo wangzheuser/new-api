@@ -114,23 +114,27 @@ func SyncChannelCache(frequency int) {
 }
 
 // GetRandomSatisfiedChannel 按优先级和权重选择渠道，重试时优先选择未使用渠道。
-func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string, usedChannelIds map[int]struct{}, excludedChannelIds map[int]struct{}) (*Channel, error) {
+func GetRandomSatisfiedChannel(group string, model string, retry int, args ...any) (*Channel, error) {
+	requestPath, usedChannelIds, excludedChannelIds, filters := parseChannelSelectionArgs(args)
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannel(group, model, retry, requestPath, usedChannelIds, excludedChannelIds)
+		return GetChannel(group, model, retry, requestPath, usedChannelIds, excludedChannelIds, filters)
 	}
 
 	channelSyncLock.RLock()
 	defer channelSyncLock.RUnlock()
 
 	// First, try to find channels with the exact model name.
-	filters := []dto.ChannelFilter{{Kind: dto.FilterRequestPath, RequestPath: requestPath}}
-	channels, _ := filterCandidateIDs(group2model2channels[group][model], model, filters)
+	selectionFilters := append([]dto.ChannelFilter(nil), filters...)
+	if requestPath != "" {
+		selectionFilters = append(selectionFilters, dto.ChannelFilter{Kind: dto.FilterRequestPath, RequestPath: requestPath})
+	}
+	channels, _ := filterCandidateIDs(group2model2channels[group][model], model, selectionFilters)
 
 	// If no channels found, try to find channels with the normalized model name.
 	if len(channels) == 0 {
 		normalizedModel := ratio_setting.RoutingMatchModelName(model)
-		channels, _ = filterCandidateIDs(group2model2channels[group][normalizedModel], model, filters)
+		channels, _ = filterCandidateIDs(group2model2channels[group][normalizedModel], model, selectionFilters)
 	}
 	channels = filterExcludedChannelIds(channels, excludedChannelIds)
 

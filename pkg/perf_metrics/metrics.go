@@ -69,12 +69,30 @@ func RecordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens i
 // RecordRelayResult samples one finished relay exactly once, at the request
 // boundary, regardless of how many channel attempts it took.
 func RecordRelayResult(ctx context.Context, info *relaycommon.RelayInfo, apiErr *types.NewAPIError) {
-	if info == nil {
+	sample, ok := relayResultSample(ctx, info, apiErr)
+	if !ok {
 		return
+	}
+	Record(sample)
+}
+
+// RecordRelayResultSync is used at short-lived request boundaries where the
+// caller must observe the Redis sample before its test or fixture is closed.
+func RecordRelayResultSync(ctx context.Context, info *relaycommon.RelayInfo, apiErr *types.NewAPIError) {
+	sample, ok := relayResultSample(ctx, info, apiErr)
+	if !ok {
+		return
+	}
+	RecordSync(sample)
+}
+
+func relayResultSample(ctx context.Context, info *relaycommon.RelayInfo, apiErr *types.NewAPIError) (Sample, bool) {
+	if info == nil {
+		return Sample{}, false
 	}
 	outcome := ClassifyRelayOutcome(ctx, info, apiErr)
 	if outcome == OutcomeIgnored {
-		return
+		return Sample{}, false
 	}
 	now := time.Now()
 	hasTtft := info.IsStream && info.HasSendResponse()
@@ -90,7 +108,7 @@ func RecordRelayResult(ctx context.Context, info *relaycommon.RelayInfo, apiErr 
 	if generationMs <= 0 {
 		generationMs = latencyMs
 	}
-	Record(Sample{
+	return Sample{
 		Model:        info.OriginModelName,
 		Group:        info.UsingGroup,
 		LatencyMs:    latencyMs,
@@ -99,7 +117,7 @@ func RecordRelayResult(ctx context.Context, info *relaycommon.RelayInfo, apiErr 
 		Success:      outcome == OutcomeSuccess,
 		OutputTokens: info.PerformanceOutputTokens,
 		GenerationMs: generationMs,
-	})
+	}, true
 }
 
 // RecordTaskResult samples one async task exactly once, at its terminal
@@ -159,6 +177,23 @@ func Record(sample Sample) {
 	gopool.Go(func() {
 		recordRedis(key, sample)
 	})
+}
+
+func RecordSync(sample Sample) {
+	setting := perf_metrics_setting.GetSetting()
+	if !setting.Enabled || sample.Model == "" {
+		return
+	}
+	if sample.Group == "" {
+		sample.Group = "default"
+	}
+	if sample.LatencyMs < 0 {
+		sample.LatencyMs = 0
+	}
+	key := bucketKey{model: sample.Model, group: sample.Group, bucketTs: bucketStart(time.Now().Unix())}
+	actual, _ := hotBuckets.LoadOrStore(key, &atomicBucket{})
+	actual.(*atomicBucket).add(sample)
+	recordRedis(key, sample)
 }
 
 // queryWindow covers the current partial hour plus the preceding complete

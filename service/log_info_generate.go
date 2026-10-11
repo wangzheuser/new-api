@@ -115,6 +115,12 @@ func AppendResponseModelLogInfo(relayInfo *relaycommon.RelayInfo, other *model.L
 	if relayInfo == nil || other == nil || relayInfo.ResponseModel == nil || relayInfo.ResponseModel.ReturnedModel == "" {
 		return
 	}
+	if !relayInfo.ResponseModel.Mismatch() &&
+		(relayInfo.ChannelMeta == nil || !relayInfo.ChannelMeta.IsModelMapped) &&
+		relayInfo.ResponseModel.ReturnedModel == relayInfo.ResponseModel.RequestedModel &&
+		(relayInfo.ResponseModel.UpstreamModel == "" || relayInfo.ResponseModel.ReturnedModel == relayInfo.ResponseModel.UpstreamModel) {
+		return
+	}
 	other.SetAdmin("response_model", relayInfo.ResponseModel)
 }
 
@@ -156,6 +162,12 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	}
 	AppendContextFallbackAdminInfo(relayInfo, adminInfo)
 	AppendResponseOverrideAdminInfo(relayInfo, adminInfo)
+	if diagnostics := relayInfo.ConversionDiagnostics(); len(diagnostics) > 0 {
+		adminInfo["conversion_diagnostics"] = diagnostics
+		if relayInfo.ConversionDiagnosticsTruncated() {
+			adminInfo["conversion_diagnostics_truncated"] = true
+		}
+	}
 	isMultiKey := common.GetContextKeyBool(ctx, constant.ContextKeyChannelIsMultiKey)
 	if isMultiKey {
 		adminInfo["is_multi_key"] = true
@@ -168,7 +180,11 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	}
 
 	AppendChannelAffinityAdminInfo(ctx, other)
+	if events := RequestPolicy(ctx).Events(); len(events) > 0 {
+		adminInfo["request_policy"] = events
+	}
 	AppendRelayProtocolInfo(relayInfo, other, adminInfo)
+	AppendResponseModelLogInfo(relayInfo, other)
 
 	other.MergeAdmin(adminInfo)
 	appendRequestPath(ctx, relayInfo, other)
@@ -337,10 +353,15 @@ func AppendStreamStatus(relayInfo *relaycommon.RelayInfo, other *model.LogOther)
 	}
 	if terminalStatus != "" {
 		streamInfo["terminal_status"] = terminalStatus
+		streamInfo["response_status"] = terminalStatus
 	}
 	if errorCount > 0 {
 		streamInfo["error_count"] = errorCount
-		streamInfo["errors"] = errorMessages
+		if relayInfo.RelayFormat == types.RelayFormatOpenAIResponses || relayInfo.RelayFormat == types.RelayFormatOpenAIResponsesCompaction {
+			streamInfo["errors"] = []string{"upstream response stream failed"}
+		} else {
+			streamInfo["errors"] = errorMessages
+		}
 	}
 	other.SetPublic("stream_status", streamInfo)
 }

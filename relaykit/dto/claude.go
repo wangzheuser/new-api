@@ -3,7 +3,6 @@ package dto
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
 
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
@@ -399,7 +398,7 @@ func (c *ClaudeRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	return &tokenCountMeta
 }
 
-func (c *ClaudeRequest) IsStream(ctx *http.Request) bool {
+func (c *ClaudeRequest) IsStream(_ any) bool {
 	if c.Stream == nil {
 		return false
 	}

@@ -2,11 +2,13 @@ package model
 
 import (
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 
 	"github.com/samber/lo"
 	"gorm.io/gorm"
@@ -117,22 +119,15 @@ func getChannelQuery(group string, model string, retry int, excludedChannelIDs [
 }
 
 // GetChannel 从数据库候选中选择渠道，重试时优先排除本次请求已使用的渠道。
-func GetChannel(group string, model string, retry int, requestPath string, usedChannelIds map[int]struct{}, excludedChannelIds map[int]struct{}) (*Channel, error) {
+func GetChannel(group string, model string, retry int, args ...any) (*Channel, error) {
+	requestPath, usedChannelIds, excludedChannelIds, filters := parseChannelSelectionArgs(args)
 	var abilities []Ability
-	excludedIDs := make([]int, 0, len(excludedChannelIds))
-	for channelID := range excludedChannelIds {
-		excludedIDs = append(excludedIDs, channelID)
-	}
-
-	var err error = nil
-	channelQuery, err := getChannelQuery(group, model, retry, excludedIDs)
+	err := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true).
+		Order("priority DESC, weight DESC").Find(&abilities).Error
 	if err != nil {
 		return nil, err
 	}
-	err = channelQuery.Order("weight DESC").Find(&abilities).Error
-	if err != nil {
-		return nil, err
-	}
+	abilities = filterAbilitiesByConstraints(abilities, model, filters)
 	if len(excludedChannelIds) > 0 {
 		filtered := abilities[:0]
 		for _, ability := range abilities {
@@ -141,6 +136,28 @@ func GetChannel(group string, model string, retry int, requestPath string, usedC
 			}
 		}
 		abilities = filtered
+	}
+	if len(abilities) > 0 {
+		priorities := make([]int64, 0)
+		seen := make(map[int64]bool)
+		for _, ability := range abilities {
+			priority := int64(0)
+			if ability.Priority != nil {
+				priority = *ability.Priority
+			}
+			if !seen[priority] {
+				seen[priority] = true
+				priorities = append(priorities, priority)
+			}
+		}
+		sort.Slice(priorities, func(i, j int) bool { return priorities[i] > priorities[j] })
+		if retry >= len(priorities) {
+			retry = len(priorities) - 1
+		}
+		targetPriority := priorities[retry]
+		abilities = lo.Filter(abilities, func(ability Ability, _ int) bool {
+			return (ability.Priority == nil && targetPriority == 0) || (ability.Priority != nil && *ability.Priority == targetPriority)
+		})
 	}
 	abilities = filterAbilitiesByRequestPathAndModel(abilities, requestPath, model)
 	candidateIds := make([]int, 0, len(abilities))
@@ -178,6 +195,33 @@ func GetChannel(group string, model string, retry int, requestPath string, usedC
 	}
 	err = DB.First(&channel, "id = ?", channel.Id).Error
 	return &channel, err
+}
+
+func parseChannelSelectionArgs(args []any) (string, map[int]struct{}, map[int]struct{}, []dto.ChannelFilter) {
+	var requestPath string
+	var usedChannelIds, excludedChannelIds map[int]struct{}
+	var filters []dto.ChannelFilter
+	if len(args) >= 3 {
+		requestPath, _ = args[0].(string)
+		usedChannelIds, _ = args[1].(map[int]struct{})
+		excludedChannelIds, _ = args[2].(map[int]struct{})
+		args = args[3:]
+	}
+	for _, arg := range args {
+		switch value := arg.(type) {
+		case string:
+			requestPath = value
+		case map[int]struct{}:
+			if usedChannelIds == nil && excludedChannelIds == nil {
+				usedChannelIds = value
+			} else {
+				excludedChannelIds = value
+			}
+		case []dto.ChannelFilter:
+			filters = value
+		}
+	}
+	return requestPath, usedChannelIds, excludedChannelIds, filters
 }
 
 // filterExcludedChannelIds 永久排除本次路由不允许命中的渠道。
@@ -253,6 +297,32 @@ func filterAbilitiesByRequestPathAndModel(abilities []Ability, requestPath strin
 			continue
 		}
 		if config := channel.GetOtherSettings().AdvancedCustom; config != nil && config.SupportsPathForModel(requestPath, model) {
+			filtered = append(filtered, ability)
+		}
+	}
+	return filtered
+}
+
+// filterAbilitiesByConstraints applies the same channel constraints as the cache path.
+func filterAbilitiesByConstraints(abilities []Ability, modelName string, filters []dto.ChannelFilter) []Ability {
+	if len(abilities) == 0 || len(filters) == 0 {
+		return abilities
+	}
+	channelIDs := make([]int, 0, len(abilities))
+	for _, ability := range abilities {
+		channelIDs = append(channelIDs, ability.ChannelId)
+	}
+	var channels []Channel
+	if err := DB.Where("id IN ?", channelIDs).Find(&channels).Error; err != nil {
+		return nil
+	}
+	byID := make(map[int]*Channel, len(channels))
+	for i := range channels {
+		byID[channels[i].Id] = &channels[i]
+	}
+	filtered := make([]Ability, 0, len(abilities))
+	for _, ability := range abilities {
+		if ok, _ := ChannelSatisfiesFilters(byID[ability.ChannelId], modelName, filters); ok {
 			filtered = append(filtered, ability)
 		}
 	}

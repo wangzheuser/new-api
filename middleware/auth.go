@@ -19,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
+	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -36,6 +37,7 @@ const (
 	dashboardCredentialUnmatched dashboardCredentialKind = iota
 	dashboardCredentialInternal
 	dashboardCredentialPAT
+	dashboardCredentialLegacySession
 )
 
 func validUserInfo(username string, role int) bool {
@@ -59,7 +61,12 @@ func authHelper(c *gin.Context, minRole int) {
 		return
 	}
 	if user.Status != common.UserStatusEnabled {
-		abortWithWebMessage(c, http.StatusUnauthorized, "AUTH_USER_DISABLED", common.NewMessage("User has been banned"))
+		status := http.StatusUnauthorized
+		if credential, ok := c.Get("dashboard_credential_kind"); ok && credential == dashboardCredentialLegacySession {
+			// Keep the legacy dashboard response contract while the database remains authoritative.
+			status = http.StatusOK
+		}
+		abortWithWebMessage(c, status, "AUTH_USER_DISABLED", common.NewMessage("User has been banned"))
 		return
 	}
 	if user.Role < minRole {
@@ -205,6 +212,13 @@ func authenticateDashboardRequest(c *gin.Context) (*model.UserBase, service.Auth
 func classifyDashboardCredential(c *gin.Context) (*model.UserBase, service.AuthIdentity, dashboardCredentialKind, error) {
 	raw, ok := authorizationToken(c.GetHeader("Authorization"))
 	if !ok {
+		if user, found, err := classifyLegacyDashboardSession(c); found {
+			if err != nil {
+				return nil, service.AuthIdentity{}, dashboardCredentialLegacySession, err
+			}
+			c.Set("dashboard_credential_kind", dashboardCredentialLegacySession)
+			return user, service.AuthIdentity{}, dashboardCredentialLegacySession, nil
+		}
 		return nil, service.AuthIdentity{}, dashboardCredentialUnmatched, nil
 	}
 	identity, internal, err := service.ParseDashboardAccessToken(raw)
@@ -232,6 +246,24 @@ func classifyDashboardCredential(c *gin.Context) (*model.UserBase, service.AuthI
 		return nil, service.AuthIdentity{}, dashboardCredentialUnmatched, nil
 	}
 	return lookup.user, service.AuthIdentity{UserID: lookup.user.Id, UserAuthVersion: lookup.user.AuthVersion}, dashboardCredentialPAT, nil
+}
+
+// classifyLegacyDashboardSession keeps old signed dashboard cookies readable during the token migration.
+func classifyLegacyDashboardSession(c *gin.Context) (*model.UserBase, bool, error) {
+	value, ok := c.Get(sessions.DefaultKey)
+	if !ok {
+		return nil, false, nil
+	}
+	session, ok := value.(sessions.Session)
+	if !ok {
+		return nil, true, service.ErrAuthTokenInvalid
+	}
+	userID, ok := session.Get("id").(int)
+	if !ok || userID <= 0 {
+		return nil, false, nil
+	}
+	user, err := model.GetUserCache(userID)
+	return user, true, err
 }
 
 // accessTokenLookup is the per-request result of resolving an opaque dashboard
@@ -610,13 +642,13 @@ func TokenAuth() func(c *gin.Context) {
 		if tokenGroup != "" {
 			// check common.UserUsableGroups[userGroup]
 			if _, ok := service.GetUserUsableGroups(userGroup)[tokenGroup]; !ok {
-				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgAuthTokenGroupForbidden, map[string]any{"Group": tokenGroup}))
+				abortWithAuthPolicyRejection(c, "auth_group_not_allowed", fmt.Sprintf("无权访问 %s 分组", tokenGroup))
 				return
 			}
 			// check group in common.GroupRatio
 			if !ratio_setting.ContainsGroupRatio(tokenGroup) {
 				if tokenGroup != "auto" {
-					abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgAuthTokenGroupDeprecated, map[string]any{"Group": tokenGroup}))
+					abortWithAuthPolicyRejection(c, "auth_group_retired", fmt.Sprintf("分组 %s 已被弃用", tokenGroup))
 					return
 				}
 			}

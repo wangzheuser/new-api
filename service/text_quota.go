@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"net/http"
@@ -432,7 +433,10 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	var tieredResult *billingexpr.TieredResult
 	var tieredTokens billingexpr.TokenParams
 	tieredBillingApplied := false
-	if originUsage != nil || (relayInfo.ContextTruncation != nil && relayInfo.ContextTruncation.Applied) {
+	if originUsage != nil || relayInfo.TieredBillingSnapshot != nil || (relayInfo.ContextTruncation != nil && relayInfo.ContextTruncation.Applied) {
+		if billingUsage == nil && relayInfo.GetEstimatePromptTokens() > 0 {
+			billingUsage = &dto.Usage{PromptTokens: relayInfo.GetEstimatePromptTokens(), TotalTokens: relayInfo.GetEstimatePromptTokens()}
+		}
 		var tieredUsedVars map[string]bool
 		if snap := relayInfo.TieredBillingSnapshot; snap != nil {
 			tieredUsedVars = billingexpr.UsedVarsByHash(snap.ExprString, snap.ExprHash)
@@ -467,8 +471,8 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		extraContent = append(extraContent, common.NewMessage("Audio input cost {{quota}}", map[string]any{"quota": logger.FormatQuota(common.QuotaFromDecimal(q))}))
 	}
 
-	if summary.TotalTokens == 0 {
-		extraContent = append(extraContent, common.NewMessage("上游没有返回计费信息，无法扣费（可能是上游超时）"))
+	if summary.TotalTokens == 0 && !summary.FixedPriceBilling {
+		extraContent = append(extraContent, common.NewMessage("Upstream returned no usage, so nothing was charged (possibly an upstream timeout)"))
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
 	}
 
@@ -479,7 +483,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		if relayInfo.StreamStatus != nil {
 			relayInfo.StreamStatus.MarkBillingFailed()
 		}
-	} else if summary.TotalTokens > 0 {
+	} else if summary.hasBillableUsage() {
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, summary.Quota)
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, summary.Quota)
 	}
@@ -578,8 +582,11 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		Group:               relayInfo.UsingGroup,
 		Other:               other,
 	})
+	// Health is classified from the final stream outcome so failed and
+	// interrupted responses cannot be counted as successful just because
+	// their usage was settled.
 	gopool.Go(func() {
-		perfmetrics.RecordRelaySample(relayInfo, true, int64(summary.CompletionTokens))
+		perfmetrics.RecordRelayResult(context.Background(), relayInfo, nil)
 	})
 	return settleErr
 }
@@ -602,9 +609,21 @@ func textBillingFinalization(
 func FinalizeTextBilling(
 	ctx *gin.Context,
 	relayInfo *relaycommon.RelayInfo,
-	finalUsage *dto.Usage,
+	finalUsage any,
 	relayErr *types.NewAPIError,
 ) (relaycommon.BillingFinalization, error) {
+	if finalUsage != nil {
+		data, err := common.Marshal(finalUsage)
+		if err != nil {
+			return relaycommon.BillingFailed, err
+		}
+		converted := &dto.Usage{}
+		if err := common.Unmarshal(data, converted); err != nil {
+			return relaycommon.BillingFailed, err
+		}
+		finalUsage = converted
+	}
+	usageValue, _ := finalUsage.(*dto.Usage)
 	if relayInfo == nil {
 		return "", nil
 	}
@@ -627,7 +646,7 @@ func FinalizeTextBilling(
 		logger.LogInfo(ctx, fmt.Sprintf("text billing finalized: result=%s partial_usage_estimated=%t", finalization, partialUsageEstimated))
 	}()
 	if finalization == relaycommon.BillingSettled {
-		if err := PostTextConsumeQuota(ctx, relayInfo, finalUsage, nil); err != nil {
+		if err := PostTextConsumeQuota(ctx, relayInfo, usageValue, nil); err != nil {
 			finalization = relaycommon.BillingFailed
 			return finalization, err
 		}
@@ -635,7 +654,7 @@ func FinalizeTextBilling(
 	}
 
 	if finalization == relaycommon.BillingSettledPartial {
-		usage := finalUsage
+		usage := usageValue
 		if partial, ok, _ := status.PartialUsageSnapshot(); ok {
 			usage = relayUsage(&partial)
 		}

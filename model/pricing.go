@@ -142,7 +142,14 @@ var pricingTextProtocolFormats = map[constant.EndpointType]types.RelayFormat{
 }
 
 // effectiveProtocolEndpointTypes returns native and allowed converted endpoints for model metadata.
-func effectiveProtocolEndpointTypes(policy dto.ChannelProtocolPolicy, passThrough bool, modelName string) []constant.EndpointType {
+func effectiveProtocolEndpointTypes(rawPolicy any, passThrough bool, modelName string) []constant.EndpointType {
+	policy, ok := rawPolicy.(dto.ChannelProtocolPolicy)
+	if !ok {
+		data, err := common.Marshal(rawPolicy)
+		if err != nil || common.Unmarshal(data, &policy) != nil {
+			return nil
+		}
+	}
 	native, _ := policy.NativeForModel(modelName)
 	orderedEndpoints := []constant.EndpointType{
 		constant.EndpointTypeOpenAI,

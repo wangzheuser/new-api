@@ -174,7 +174,7 @@ func (user *User) GetSetting() dto.UserSetting {
 	return setting
 }
 
-func (user *User) SetSetting(setting dto.UserSetting) {
+func (user *User) SetSetting(setting any) {
 	settingBytes, err := common.Marshal(setting)
 	if err != nil {
 		common.SysLog(common.LogText("failed to marshal setting: %s", err.Error()))
@@ -913,12 +913,19 @@ func (user *User) Update(updatePassword bool) error {
 	if err := DB.Model(&User{}).Where("id = ?", user.Id).Select("auth_version").Find(&previousAuthVersion).Error; err != nil {
 		return err
 	}
-	authErr := RefreshUserAuthStateCache(user.Id)
-	cacheErr := updateUserCache(*user)
-	if authErr != nil {
-		return authErr
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		return user.UpdateWithTx(tx, updatePassword)
+	}); err != nil {
+		return err
 	}
-	return cacheErr
+	if err := updateUserCache(*user); err != nil {
+		return err
+	}
+	if user.AuthVersion > previousAuthVersion {
+		_, err := RevokeAllUserSessions(user.Id, "user_security_changed")
+		return err
+	}
+	return nil
 }
 
 func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
@@ -1358,7 +1365,7 @@ func ValidateAccessToken(token string) (*User, error) {
 
 // GetUserQuota gets quota from Redis first, falls back to DB if needed
 func GetUserQuota(id int, fromDB bool) (quota int, err error) {
-	if !fromDB && common.RedisEnabled {
+	if !fromDB && common.RedisEnabled && common.RDB != nil {
 		return getUserQuotaCache(id)
 	}
 	err = DB.Model(&User{}).Where("id = ?", id).Select("quota").Find(&quota).Error

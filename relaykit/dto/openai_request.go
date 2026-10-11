@@ -3,7 +3,6 @@ package dto
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
@@ -289,7 +288,7 @@ func (r *GeneralOpenAIRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	return &tokenCountMeta
 }
 
-func (r *GeneralOpenAIRequest) IsStream(c *http.Request) bool {
+func (r *GeneralOpenAIRequest) IsStream(c any) bool {
 	return lo.FromPtrOr(r.Stream, false)
 }
 
@@ -1172,7 +1171,7 @@ func (r *OpenAIResponsesRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	}
 }
 
-func (r *OpenAIResponsesRequest) IsStream(c *http.Request) bool {
+func (r *OpenAIResponsesRequest) IsStream(c any) bool {
 	return lo.FromPtrOr(r.Stream, false)
 }
 

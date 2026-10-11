@@ -44,7 +44,7 @@ func resolveSystemPrompt(info *relaycommon.RelayInfo) (string, bool) {
 }
 
 // PreviewSystemPromptTokens 在不修改原请求、计费会话和审计上下文的情况下预演当前渠道提示词。
-func PreviewSystemPromptTokens(c *gin.Context, info *relaycommon.RelayInfo, request dto.Request, settings dto.ChannelSettings, attemptModel string, fallbackActive bool) (SystemPromptPreview, *types.NewAPIError) {
+func PreviewSystemPromptTokens(c *gin.Context, info *relaycommon.RelayInfo, request any, settings dto.ChannelSettings, attemptModel string, fallbackActive bool) (SystemPromptPreview, *types.NewAPIError) {
 	if info == nil || request == nil {
 		return SystemPromptPreview{}, nil
 	}
@@ -98,7 +98,7 @@ func PreviewSystemPromptTokens(c *gin.Context, info *relaycommon.RelayInfo, requ
 }
 
 // copySystemPromptRequest 仅复制已支持系统提示词和上下文兜底的文本请求。
-func copySystemPromptRequest(request dto.Request) (dto.Request, error) {
+func copySystemPromptRequest(request any) (dto.Request, error) {
 	switch typedRequest := request.(type) {
 	case *dto.GeneralOpenAIRequest:
 		return common.DeepCopy(typedRequest)
@@ -110,9 +110,31 @@ func copySystemPromptRequest(request dto.Request) (dto.Request, error) {
 		return common.DeepCopy(typedRequest)
 	case *dto.GeminiChatRequest:
 		return common.DeepCopy(typedRequest)
+	case *kitdto.GeneralOpenAIRequest:
+		return copyKitRequest(typedRequest, func() *dto.GeneralOpenAIRequest { return &dto.GeneralOpenAIRequest{} })
+	case *kitdto.OpenAIResponsesRequest:
+		return copyKitRequest(typedRequest, func() *dto.OpenAIResponsesRequest { return &dto.OpenAIResponsesRequest{} })
+	case *kitdto.OpenAIResponsesCompactionRequest:
+		return copyKitRequest(typedRequest, func() *dto.OpenAIResponsesCompactionRequest { return &dto.OpenAIResponsesCompactionRequest{} })
+	case *kitdto.ClaudeRequest:
+		return copyKitRequest(typedRequest, func() *dto.ClaudeRequest { return &dto.ClaudeRequest{} })
+	case *kitdto.GeminiChatRequest:
+		return copyKitRequest(typedRequest, func() *dto.GeminiChatRequest { return &dto.GeminiChatRequest{} })
 	default:
 		return nil, fmt.Errorf("context fallback does not handle request type %T", request)
 	}
+}
+
+func copyKitRequest[T any, R dto.Request](request *T, newRoot func() R) (dto.Request, error) {
+	data, err := common.Marshal(request)
+	if err != nil {
+		return nil, err
+	}
+	converted := newRoot()
+	if err := common.Unmarshal(data, converted); err != nil {
+		return nil, err
+	}
+	return converted, nil
 }
 
 // applySystemPromptToRequest 使用同一份协议逻辑处理预演与实际请求。

@@ -96,7 +96,29 @@ func usageFromOpenAIBillingUsage(billingUsage *dto.BillingUsage) *dto.Usage {
 	usage := *billingUsage.OpenAIUsage
 	// Responses stores input breakdown under input_tokens_details, not prompt_tokens_details.
 	if billingUsage.Source == dto.BillingUsageSourceOAIResponses && usage.InputTokensDetails != nil {
-		usage.PromptTokensDetails = *usage.InputTokensDetails
+		// Keep protocol-native prompt details when present; responses details only fill gaps.
+		details := usage.InputTokensDetails
+		if usage.PromptTokensDetails.CachedTokens == 0 {
+			usage.PromptTokensDetails.CachedTokens = details.CachedTokens
+		}
+		if usage.PromptTokensDetails.CachedCreationTokens == 0 {
+			usage.PromptTokensDetails.CachedCreationTokens = details.CachedCreationTokens
+		}
+		if usage.PromptTokensDetails.CacheWriteTokens == 0 {
+			usage.PromptTokensDetails.CacheWriteTokens = details.CacheWriteTokens
+		}
+		if usage.PromptTokensDetails.TextTokens == 0 {
+			usage.PromptTokensDetails.TextTokens = details.TextTokens
+		}
+		if usage.PromptTokensDetails.ImageTokens == 0 {
+			usage.PromptTokensDetails.ImageTokens = details.ImageTokens
+		}
+		if usage.PromptTokensDetails.AudioTokens == 0 {
+			usage.PromptTokensDetails.AudioTokens = details.AudioTokens
+		}
+	}
+	if usage.PromptTokensDetails.CachedTokens == 0 && usage.PromptCacheHitTokens > 0 {
+		usage.PromptTokensDetails.CachedTokens = usage.PromptCacheHitTokens
 	}
 	if usage.PromptTokens == 0 && usage.InputTokens > 0 {
 		usage.PromptTokens = usage.InputTokens

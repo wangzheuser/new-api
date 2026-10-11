@@ -50,6 +50,9 @@ type SubscriptionApplyResult struct {
 	PlanTitle      string            `json:"plan_title"`
 	Quantity       int               `json:"quantity"`
 	Before         *UserSubscription `json:"-"`
+	// PrevUserGroup and Params preserve the legacy admin response shape.
+	PrevUserGroup string         `json:"-"`
+	Params        map[string]any `json:"-"`
 }
 
 // NormalizeSubscriptionQuantity applies the legacy single-allocation default and validates explicit quantities.
@@ -295,12 +298,15 @@ func mergeRepeatedUserSubscriptionTx(tx *gorm.DB, plan *SubscriptionPlan, incomi
 	if err := tx.Save(&target).Error; err != nil {
 		return nil, err
 	}
-	return &SubscriptionApplyResult{
+	result := &SubscriptionApplyResult{
 		Subscription: &target,
 		Action:       SubscriptionApplyActionMerged,
 		AppliedMode:  mode,
 		PlanTitle:    plan.Title,
 		Quantity:     int(quantity),
 		Before:       &before,
-	}, nil
+	}
+	result.PrevUserGroup = target.PrevUserGroup
+	result.Params = map[string]any{"group": target.UpgradeGroup}
+	return result, nil
 }

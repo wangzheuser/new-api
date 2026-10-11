@@ -412,6 +412,24 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	requestId := c.GetString(common.RequestIdKey)
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
 	createdAt := common.GetTimestamp()
+	content := ""
+	logOther, _ := params.Other.(*LogOther)
+	switch value := params.Content.(type) {
+	case string:
+		content = value
+	case []*common.Message:
+		if logOther != nil {
+			content = logOther.setContent(value)
+		} else {
+			content = NewLogOther().setContent(value)
+		}
+	case *common.Message:
+		if logOther != nil {
+			content = logOther.setContent([]*common.Message{value})
+		} else {
+			content = NewLogOther().setContent([]*common.Message{value})
+		}
+	}
 	otherStr := ""
 	switch other := params.Other.(type) {
 	case *LogOther:
@@ -420,15 +438,6 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		otherStr = common.MapToJsonStr(other)
 	case string:
 		otherStr = other
-	}
-	content := ""
-	switch value := params.Content.(type) {
-	case string:
-		content = value
-	case []*common.Message:
-		content = NewLogOther().setContent(value)
-	case *common.Message:
-		content = NewLogOther().setContent([]*common.Message{value})
 	}
 	inputTokens := params.PromptTokens
 	if params.InputTokens != nil {
@@ -564,7 +573,11 @@ func countLogsUpToLimit(tx *gorm.DB) (int64, error) {
 	return total, err
 }
 
-func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string, latestPerRequest bool) (logs []*Log, total int64, err error) {
+func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string, optional ...any) (logs []*Log, total int64, err error) {
+	latestPerRequest := false
+	if len(optional) > 0 {
+		latestPerRequest, _ = optional[0].(bool)
+	}
 	tx := LOG_DB.Model(&Log{})
 	if startTimestamp != 0 {
 		tx = tx.Where("logs.created_at >= ?", startTimestamp)
@@ -659,7 +672,8 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 	return logs, total, err
 }
 
-func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, latestPerRequest bool) (logs []*Log, total int64, err error) {
+func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, latestPerRequest any) (logs []*Log, total int64, err error) {
+	latest, _ := latestPerRequest.(bool)
 	tx := LOG_DB.Model(&Log{}).Where("logs.user_id = ?", userId)
 	if startTimestamp != 0 {
 		tx = tx.Where("logs.created_at >= ?", startTimestamp)
@@ -670,7 +684,7 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 	if requestId != "" {
 		tx = tx.Where("logs.request_id = ?", requestId)
 	}
-	if latestPerRequest {
+	if latest {
 		tx = keepLatestRequestLogs(tx)
 	}
 	if logType != LogTypeUnknown {
@@ -701,7 +715,18 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 		return nil, 0, common.NewMessage("Failed to query logs")
 	}
 
+	errorChannelIDs := make([]int, len(logs))
+	if logType == LogTypeError {
+		for i := range logs {
+			errorChannelIDs[i] = logs[i].ChannelId
+		}
+	}
 	formatUserLogs(logs, startIdx)
+	if logType == LogTypeError {
+		for i := range logs {
+			logs[i].ChannelId = errorChannelIDs[i]
+		}
+	}
 	return logs, total, err
 }
 

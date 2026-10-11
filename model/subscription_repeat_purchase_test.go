@@ -310,7 +310,7 @@ func TestAdminSubscriptionGrantBypassesLimitAndCanOverrideMode(t *testing.T) {
 		})
 		return err
 	})
-	require.ErrorContains(t, err, "购买上限")
+	require.ErrorContains(t, err, "Purchase limit for this plan has been reached")
 
 	adminMerged, err := AdminBindSubscription(3501, plan.Id, SubscriptionApplyModePlanDefault)
 	require.NoError(t, err)

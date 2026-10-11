@@ -456,6 +456,11 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	} else {
 		client = service.GetHttpClient()
 	}
+	// Provider redirects are returned as upstream responses, without applying
+	// the generic fetch redirect validator.
+	clientCopy := *client
+	clientCopy.CheckRedirect = keepUpstreamRedirectResponse
+	client = &clientCopy
 
 	if info.IsStream {
 		upstreamCtx, upstreamCancel := context.WithCancel(req.Context())

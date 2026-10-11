@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,12 +11,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -115,7 +111,7 @@ func setupTokenControllerTestDB(t *testing.T) *gorm.DB {
 
 	db := openTokenControllerTestDB(t)
 	migrateTokenControllerTestDB(t, db)
-	if err := db.AutoMigrate(&model.User{}, &model.UserSubscription{}, &model.UserGroupGrant{}, &model.Log{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.UserSubscription{}, &model.UserGroupGrant{}, &model.Log{}, &model.AuditLog{}); err != nil {
 		t.Fatalf("failed to migrate token authorization tables: %v", err)
 	}
 	return db
@@ -762,11 +758,14 @@ func TestManagedTokenLifecycleReusesTargetOwnership(t *testing.T) {
 	require.True(t, deleteResponse.Success, deleteResponse.Message)
 	assert.Error(t, db.First(&model.Token{}, created.Id).Error)
 
-	var auditLogs []model.Log
-	require.NoError(t, db.Where("user_id = ? AND type = ?", 99, model.LogTypeManage).Find(&auditLogs).Error)
-	require.Len(t, auditLogs, 4)
+	var auditLogs []model.AuditLog
+	require.NoError(t, db.Where("category = ?", model.AuditCategoryOperation).Find(&auditLogs).Error)
+	require.Len(t, auditLogs, 5)
 	for _, log := range auditLogs {
-		assert.NotContains(t, log.Other, targetToken.Key)
-		assert.Contains(t, log.Other, `"target_user_id":2`)
+		assert.NotContains(t, log.Content, targetToken.Key)
+		assert.Equal(t, 99, log.Other.AdminInfo.AdminID)
+		rawTargetID, ok := log.Other.Op.Params["target_user_id"].(json.RawMessage)
+		require.True(t, ok)
+		assert.Equal(t, "2", string(rawTargetID))
 	}
 }

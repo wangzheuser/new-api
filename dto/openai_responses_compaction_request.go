@@ -5,8 +5,6 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/types"
-
-	"github.com/gin-gonic/gin"
 )
 
 type OpenAIResponsesCompactionRequest struct {
@@ -40,7 +38,7 @@ func (r *OpenAIResponsesCompactionRequest) GetTokenCountMeta() *types.TokenCount
 	}
 }
 
-func (r *OpenAIResponsesCompactionRequest) IsStream(c *gin.Context) bool {
+func (r *OpenAIResponsesCompactionRequest) IsStream(c any) bool {
 	return false
 }
 

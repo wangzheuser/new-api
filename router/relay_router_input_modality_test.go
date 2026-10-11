@@ -62,6 +62,7 @@ func setupRelayInputModalityRouter(t *testing.T) relayInputModalityTestFixture {
 		&model.UserSubscription{},
 		&model.UserGroupGrant{},
 		&model.Channel{},
+		&model.Ability{},
 	))
 	model.DB = db
 
@@ -108,19 +109,21 @@ func setupRelayInputModalityRouter(t *testing.T) relayInputModalityTestFixture {
 		Key:    "fixture-upstream-key",
 		Status: common.ChannelStatusEnabled,
 		Name:   "relay modality fixture",
-		Models: "source",
+		Models: "source,source-openai-compact",
 		Group:  "default",
 	}
 	channel.SetSetting(dto.ChannelSettings{
 		ModelInputModalities: types.ModelInputModalities{
-			"source": {types.InputModalityText},
+			"source":                {types.InputModalityText},
+			"source-openai-compact": {types.InputModalityText},
 		},
 	})
-	require.NoError(t, db.Create(channel).Error)
+	require.NoError(t, channel.Insert())
 
 	engine := gin.New()
 	engine.Use(middleware.RequestId())
 	SetRelayRouter(engine)
+	SetTaskPluginProtocolRouter(engine)
 
 	return relayInputModalityTestFixture{
 		router:       engine,
@@ -136,6 +139,7 @@ func TestRelayRouterReturnsProtocolNativeInputModalityErrors(t *testing.T) {
 		name           string
 		path           string
 		body           string
+		expectedModel  string
 		setCredential  func(*http.Request, string)
 		assertEnvelope func(*testing.T, []byte) string
 	}{
@@ -211,7 +215,11 @@ func TestRelayRouterReturnsProtocolNativeInputModalityErrors(t *testing.T) {
 			requestID := recorder.Header().Get(common.RequestIdKey)
 			require.NotEmpty(t, requestID)
 			message := test.assertEnvelope(t, recorder.Body.Bytes())
-			assert.Contains(t, message, "model "+fixture.requestModel+" has no declared image input capability")
+			modelName := test.expectedModel
+			if modelName == "" {
+				modelName = fixture.requestModel
+			}
+			assert.Contains(t, message, "model "+modelName+" has no declared image input capability")
 			assert.Contains(t, message, requestID)
 		})
 	}

@@ -2,6 +2,7 @@ package router
 
 import (
 	"embed"
+	"io/fs"
 	"net/http"
 	"strings"
 
@@ -18,12 +19,43 @@ type WebAssets struct {
 	IndexPage []byte
 }
 
-func SetWebRouter(router *gin.Engine, assets WebAssets, pluginDispatcher gin.HandlerFunc) {
+type ThemeAssets struct {
+	DefaultBuildFS   fs.FS
+	DefaultIndexPage []byte
+	ClassicBuildFS   fs.FS
+	ClassicIndexPage []byte
+}
+
+func SetWebRouter(router *gin.Engine, rawAssets any, pluginDispatcher ...gin.HandlerFunc) {
+	if assets, ok := rawAssets.(ThemeAssets); ok {
+		router.NoRoute(func(c *gin.Context) {
+			if isFrontendAssetPath(c.Request.URL.Path) {
+				if _, err := fs.Stat(assets.DefaultBuildFS, strings.TrimPrefix(c.Request.URL.Path, "/")); err != nil {
+					c.Header("Cache-Control", "no-store")
+					c.Status(http.StatusNotFound)
+					return
+				}
+			}
+			c.Header("Cache-Control", "no-cache")
+			c.Data(http.StatusOK, "text/html; charset=utf-8", assets.DefaultIndexPage)
+		})
+		return
+	}
+	assets, ok := rawAssets.(WebAssets)
+	if !ok {
+		return
+	}
+	var pluginDispatcherHandler gin.HandlerFunc
+	if len(pluginDispatcher) > 0 {
+		pluginDispatcherHandler = pluginDispatcher[0]
+	} else {
+		pluginDispatcherHandler = func(c *gin.Context) {}
+	}
 	frontendFS := common.EmbedFolder(assets.BuildFS, "web/dist")
 	compress := gzip.Gzip(gzip.DefaultCompression)
 
 	router.NoRoute(
-		pluginDispatcher,
+		pluginDispatcherHandler,
 		middleware.RouteTag("web"),
 		func(c *gin.Context) {
 			// ServeFrontendFiles sends build files already compressed.
@@ -44,4 +76,8 @@ func SetWebRouter(router *gin.Engine, assets WebAssets, pluginDispatcher gin.Han
 			c.Data(http.StatusOK, "text/html; charset=utf-8", assets.IndexPage)
 		},
 	)
+}
+
+func isFrontendAssetPath(path string) bool {
+	return strings.HasPrefix(path, "/static/") || strings.HasPrefix(path, "/assets/")
 }

@@ -113,7 +113,11 @@ func (r *GeminiChatRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	}
 }
 
-func (r *GeminiChatRequest) IsStream(c *gin.Context) bool {
+func (r *GeminiChatRequest) IsStream(value any) bool {
+	c, ok := value.(*gin.Context)
+	if !ok || c == nil {
+		return false
+	}
 	if c.Query("alt") == "sse" {
 		return true
 	}
@@ -462,6 +466,7 @@ type GeminiChatPromptFeedback struct {
 type GeminiChatResponse struct {
 	Candidates       []GeminiChatCandidate     `json:"candidates"`
 	PromptFeedback   *GeminiChatPromptFeedback `json:"promptFeedback,omitempty"`
+	ModelVersion     string                    `json:"modelVersion,omitempty"`
 	UsageMetadata    GeminiUsageMetadata       `json:"usageMetadata"`
 	HasUsageMetadata bool                      `json:"-"`
 }
@@ -488,6 +493,7 @@ func (r *GeminiChatResponse) UnmarshalJSON(data []byte) error {
 	var aux struct {
 		Candidates     []GeminiChatCandidate     `json:"candidates"`
 		PromptFeedback *GeminiChatPromptFeedback `json:"promptFeedback,omitempty"`
+		ModelVersion   string                    `json:"modelVersion,omitempty"`
 		UsageMetadata  *GeminiUsageMetadata      `json:"usageMetadata"`
 	}
 	if err := common.Unmarshal(data, &aux); err != nil {
@@ -495,6 +501,7 @@ func (r *GeminiChatResponse) UnmarshalJSON(data []byte) error {
 	}
 	r.Candidates = aux.Candidates
 	r.PromptFeedback = aux.PromptFeedback
+	r.ModelVersion = aux.ModelVersion
 	r.HasUsageMetadata = aux.UsageMetadata != nil
 	if aux.UsageMetadata != nil {
 		r.UsageMetadata = *aux.UsageMetadata
@@ -569,7 +576,7 @@ type GeminiEmbeddingRequest struct {
 	OutputDimensionality int               `json:"outputDimensionality,omitempty"`
 }
 
-func (r *GeminiEmbeddingRequest) IsStream(c *gin.Context) bool {
+func (r *GeminiEmbeddingRequest) IsStream(c any) bool {
 	// Gemini embedding requests are not streamed
 	return false
 }
@@ -597,7 +604,7 @@ type GeminiBatchEmbeddingRequest struct {
 	Requests []*GeminiEmbeddingRequest `json:"requests"`
 }
 
-func (r *GeminiBatchEmbeddingRequest) IsStream(c *gin.Context) bool {
+func (r *GeminiBatchEmbeddingRequest) IsStream(c any) bool {
 	// Gemini batch embedding requests are not streamed
 	return false
 }

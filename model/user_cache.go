@@ -115,7 +115,7 @@ func GetUserCache(userId int) (*UserBase, error) {
 }
 
 func cacheGetUserBase(userId int) (*UserBase, error) {
-	if !common.RedisEnabled {
+	if !common.RedisEnabled || common.RDB == nil {
 		return nil, fmt.Errorf("redis is not enabled")
 	}
 	var userCache UserBase

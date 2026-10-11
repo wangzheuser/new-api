@@ -361,7 +361,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		taskErr.SkipRetry = true
 		return nil, taskErr
 	}
-	if resp != nil && resp.StatusCode != http.StatusOK {
+	if resp != nil && (resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices) {
 		upstreamError := service.RelayErrorHandler(c.Request.Context(), resp, false)
 		return nil, service.TaskErrorWrapper(upstreamError, "fail_to_fetch_task", resp.StatusCode)
 	}
@@ -454,6 +454,7 @@ func RelayTaskFetch(c *gin.Context, relayMode int) (taskResp *dto.TaskError) {
 	respBuilder, ok := fetchRespBuilders[relayMode]
 	if !ok {
 		taskResp = service.TaskErrorWrapperLocal(errors.New("invalid_relay_mode"), "invalid_relay_mode", http.StatusBadRequest)
+		return taskResp
 	}
 
 	respBody, taskErr := respBuilder(c)

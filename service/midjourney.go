@@ -71,7 +71,7 @@ func SettleMidjourneyTaskBilling(relayInfo *relaycommon.RelayInfo, task *model.M
 		return false, errors.New("Midjourney task must be persisted before billing")
 	}
 
-	result, billingErr := postConsumeQuotaWithResult(relayInfo, task.Quota, 0, true)
+	result, billingErr := settleLegacyMidjourneyQuota(relayInfo, task.Quota)
 	if !result.FundingApplied {
 		task.Quota = 0
 		task.TokenId = 0
@@ -90,6 +90,24 @@ func SettleMidjourneyTaskBilling(relayInfo *relaycommon.RelayInfo, task *model.M
 		return true, errors.Join(billingErr, fmt.Errorf("update Midjourney billing state: %w", updateErr))
 	}
 	return true, billingErr
+}
+
+// settleLegacyMidjourneyQuota preserves the legacy marker semantics: funding
+// is durable before token accounting, so a token write failure remains
+// refundable instead of silently losing the user's charged wallet amount.
+func settleLegacyMidjourneyQuota(relayInfo *relaycommon.RelayInfo, quota int) (postConsumeQuotaResult, error) {
+	var result postConsumeQuotaResult
+	if err := model.ApplyBillingDelta(relayInfo.UserId, 0, "", 0, quota); err != nil {
+		return result, err
+	}
+	result.FundingApplied = true
+	if relayInfo.TokenId > 0 && !relayInfo.IsPlayground {
+		if err := model.DecreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, quota); err != nil {
+			return result, err
+		}
+		result.TokenApplied = true
+	}
+	return result, nil
 }
 
 // RefundMidjourneyQuota reverses every accounting element recorded for a billed legacy task.

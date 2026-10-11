@@ -3,6 +3,7 @@ package middleware
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/gin-gonic/gin"
@@ -35,6 +36,10 @@ func formatAccessLog(param gin.LogFormatterParams) string {
 	if tag == "" {
 		tag = "web"
 	}
+	path := param.Path
+	if queryIndex := strings.IndexByte(path, '?'); queryIndex >= 0 {
+		path = path[:queryIndex]
+	}
 	return fmt.Sprintf("[GIN] %s | %s | %s | %3d | %13v | %15s | %7s %s\n",
 		param.TimeStamp.Format("2006/01/02 - 15:04:05"),
 		tag,
@@ -43,6 +48,6 @@ func formatAccessLog(param gin.LogFormatterParams) string {
 		param.Latency,
 		param.ClientIP,
 		param.Method,
-		param.Path,
+		path,
 	)
 }

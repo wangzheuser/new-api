@@ -3,7 +3,6 @@ package dto
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"reflect"
 
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
@@ -176,7 +175,7 @@ func (i *ImageRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	}
 }
 
-func (i *ImageRequest) IsStream(c *http.Request) bool {
+func (i *ImageRequest) IsStream(c any) bool {
 	return i.Stream != nil && *i.Stream
 }
 

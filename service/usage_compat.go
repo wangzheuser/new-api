@@ -28,6 +28,7 @@ func relayUsage(value any) *relaydto.Usage {
 		if err := common.Unmarshal(encoded, &converted); err != nil {
 			return nil
 		}
+		converted.InputPolicyAdjusted = usage.InputPolicyAdjusted
 		return &converted
 	case rootdto.Usage:
 		return relayUsage(&usage)
@@ -58,6 +59,7 @@ func rootUsage(value any) *rootdto.Usage {
 		if err := common.Unmarshal(encoded, &converted); err != nil {
 			return nil
 		}
+		converted.InputPolicyAdjusted = usage.InputPolicyAdjusted
 		return &converted
 	case relaydto.Usage:
 		return rootUsage(&usage)

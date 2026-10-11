@@ -434,6 +434,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	if claudeError := claudeResponse.GetClaudeError(); claudeError != nil && claudeError.Type != "" {
 		return types.WithClaudeError(*claudeError, http.StatusInternalServerError)
 	}
+	info.ObserveResponseModel(claudeResponse.Model)
 	info.MergeResponseSemantics(types.RelayFormatClaude, data)
 	maybeMarkClaudeRefusal(c, info, claudeResponse.StopReason)
 	if claudeInfo.Usage == nil {

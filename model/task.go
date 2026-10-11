@@ -212,7 +212,8 @@ func (p *TaskPrivateData) Scan(val any) error {
 }
 
 func (p TaskPrivateData) Value() (driver.Value, error) {
-	if p.Key == "" && p.UpstreamTaskID == "" && p.ResultURL == "" &&
+	if p.BillingSettlementState == "" && p.BillingSettlementError == "" && p.BillingSettlementQuota == 0 &&
+		p.Key == "" && p.UpstreamTaskID == "" && p.ResultURL == "" &&
 		p.Execution == nil && p.BillingSource == "" && p.SubscriptionId == 0 &&
 		p.TokenId == 0 && p.NodeName == "" && p.BillingContext == nil &&
 		!p.ResponsesBackground && len(p.PluginState) == 0 && p.PollFailures == 0 &&

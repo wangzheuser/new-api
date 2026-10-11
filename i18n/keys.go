@@ -38,6 +38,11 @@ const (
 	MsgChannelUpstreamUpdateRemovedModels   = "channel.upstream_update_removed_models"
 	MsgChannelUpstreamUpdateFailedChannels  = "channel.upstream_update_failed_channels"
 	MsgChannelUpstreamUpdateMoreOmitted     = "channel.upstream_update_more_omitted"
+	MsgChannelNotifyEnabledContent          = "channel.notify_enabled_content"
+	MsgChannelNotifyEnabledSubject          = "channel.notify_enabled_subject"
+	MsgChannelResponseTimeExceeded          = "channel.response_time_exceeded"
+	MsgChannelTestCompletedContent          = "channel.test_completed_content"
+	MsgChannelTestCompletedSubject          = "channel.test_completed_subject"
 )
 
 // Auth middleware messages
@@ -79,6 +84,7 @@ const (
 	MsgRelayRetryGetChannelFailed        = "relay.retry_get_channel_failed"
 	MsgRelayRetryNoAvailableChannel      = "relay.retry_no_available_channel"
 	MsgRelayAccessTokenUnsupported       = "relay.access_token_unsupported"
+	MsgRelayTaskChannelDisabled          = "relay.task_channel_disabled"
 )
 
 // Token related messages
@@ -159,6 +165,7 @@ const (
 	MsgUserTopUpProcessing           = "user.topup_processing"
 	MsgUserRegisterFailed            = "user.register_failed"
 	MsgUserDefaultTokenFailed        = "user.default_token_failed"
+	MsgUserDefaultTokenName          = "user.default_token_name"
 	MsgUserAffCodeEmpty              = "user.aff_code_empty"
 	MsgUserEmailEmpty                = "user.email_empty"
 	MsgUserGitHubIdEmpty             = "user.github_id_empty"
@@ -191,13 +198,14 @@ const (
 
 // Quota related messages
 const (
-	MsgQuotaNegative               = "quota.negative"
-	MsgQuotaExceedMax              = "quota.exceed_max"
-	MsgQuotaInsufficient           = "quota.insufficient"
-	MsgQuotaUserInsufficient       = "quota.user_insufficient"
-	MsgQuotaPreConsumeInsufficient = "quota.pre_consume_insufficient"
-	MsgQuotaWarningInvalid         = "quota.warning_invalid"
-	MsgQuotaThresholdGtZero        = "quota.threshold_gt_zero"
+	MsgQuotaNegative                 = "quota.negative"
+	MsgQuotaExceedMax                = "quota.exceed_max"
+	MsgQuotaInsufficient             = "quota.insufficient"
+	MsgQuotaUserInsufficient         = "quota.user_insufficient"
+	MsgQuotaPreConsumeInsufficient   = "quota.pre_consume_insufficient"
+	MsgQuotaWarningInvalid           = "quota.warning_invalid"
+	MsgQuotaThresholdGtZero          = "quota.threshold_gt_zero"
+	MsgQuotaSubscriptionInsufficient = "quota.subscription_insufficient"
 )
 
 // Subscription related messages
@@ -380,19 +388,20 @@ const (
 
 // Distributor related messages
 const (
-	MsgDistributorInvalidRequest          = "distributor.invalid_request"
-	MsgDistributorInvalidChannelId        = "distributor.invalid_channel_id"
-	MsgDistributorChannelDisabled         = "distributor.channel_disabled"
-	MsgDistributorAffinityChannelDisabled = "distributor.affinity_channel_disabled"
-	MsgDistributorTokenNoModelAccess      = "distributor.token_no_model_access"
-	MsgDistributorTokenModelForbidden     = "distributor.token_model_forbidden"
-	MsgDistributorModelNameRequired       = "distributor.model_name_required"
-	MsgDistributorInvalidPlayground       = "distributor.invalid_playground_request"
-	MsgDistributorGroupAccessDenied       = "distributor.group_access_denied"
-	MsgDistributorGetChannelFailed        = "distributor.get_channel_failed"
-	MsgDistributorNoAvailableChannel      = "distributor.no_available_channel"
-	MsgDistributorInvalidMidjourney       = "distributor.invalid_midjourney_request"
-	MsgDistributorInvalidParseModel       = "distributor.invalid_request_parse_model"
+	MsgDistributorInvalidRequest               = "distributor.invalid_request"
+	MsgDistributorInvalidChannelId             = "distributor.invalid_channel_id"
+	MsgDistributorChannelDisabled              = "distributor.channel_disabled"
+	MsgDistributorAffinityChannelDisabled      = "distributor.affinity_channel_disabled"
+	MsgDistributorTokenNoModelAccess           = "distributor.token_no_model_access"
+	MsgDistributorTokenModelForbidden          = "distributor.token_model_forbidden"
+	MsgDistributorModelNameRequired            = "distributor.model_name_required"
+	MsgDistributorInvalidPlayground            = "distributor.invalid_playground_request"
+	MsgDistributorGroupAccessDenied            = "distributor.group_access_denied"
+	MsgDistributorGetChannelFailed             = "distributor.get_channel_failed"
+	MsgDistributorNoAvailableChannel           = "distributor.no_available_channel"
+	MsgDistributorNoAvailableChannelTaskPlugin = "distributor.no_available_channel_task_plugin"
+	MsgDistributorInvalidMidjourney            = "distributor.invalid_midjourney_request"
+	MsgDistributorInvalidParseModel            = "distributor.invalid_request_parse_model"
 )
 
 // Custom OAuth provider related messages

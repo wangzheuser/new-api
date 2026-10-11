@@ -30,6 +30,8 @@ var ErrInsufficientWalletQuota = errors.New("wallet quota insufficient")
 
 type WalletFunding struct {
 	userId int
+	// consumed keeps compatibility with callers that seed an existing reservation.
+	consumed int
 }
 
 func (w *WalletFunding) Source() string { return BillingSourceWallet }
@@ -38,7 +40,14 @@ func (w *WalletFunding) PreConsume(amount int) error {
 	if amount <= 0 {
 		return nil
 	}
-	return model.DecreaseUserQuota(w.userId, amount, false)
+	reserved, err := model.TryReserveUserQuota(w.userId, amount)
+	if err != nil {
+		return err
+	}
+	if !reserved {
+		return ErrInsufficientWalletQuota
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

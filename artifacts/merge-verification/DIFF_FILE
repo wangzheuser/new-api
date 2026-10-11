@@ -1,3 +1,209 @@
-git show backup:relaykit/dto/channel_settings.go | sha256sum
-BASELINE: git show codex/backup-dev-before-main-merge-20261011-415087a8c:relaykit/dto/channel_settings.go | sha256sum => path absent (new file on merged branch), exit=128
-MODIFIED: sha256sum relaykit/dto/channel_settings.go => 958c67a800f525ed35397501aa9cae8237cb721502ce64c5693d777946aa9c2a, exit=0
+diff --git a/Users/777java/777/projects/github/new-api/artifacts/merge-verification/baseline-relay_responses.go b/Users/777java/777/projects/github/new-api/artifacts/merge-verification/MODIFIED_FILE
+index 1708cf165..245213eef 100644
+--- a/Users/777java/777/projects/github/new-api/artifacts/merge-verification/baseline-relay_responses.go
++++ b/Users/777java/777/projects/github/new-api/artifacts/merge-verification/MODIFIED_FILE
+@@ -4,17 +4,19 @@ import (
+ 	"fmt"
+ 	"io"
+ 	"net/http"
+-	"strings"
+ 
+ 	"github.com/QuantumNous/new-api/common"
+-	"github.com/QuantumNous/new-api/dto"
++	"github.com/QuantumNous/new-api/constant"
+ 	"github.com/QuantumNous/new-api/logger"
+ 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+ 	"github.com/QuantumNous/new-api/relay/helper"
++	"github.com/QuantumNous/new-api/relaykit/dto"
++	"github.com/QuantumNous/new-api/relaykit/types"
+ 	"github.com/QuantumNous/new-api/service"
+-	"github.com/QuantumNous/new-api/types"
+ 
+ 	"github.com/gin-gonic/gin"
++	"github.com/tidwall/gjson"
++	"github.com/tidwall/sjson"
+ )
+ 
+ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+@@ -35,51 +37,46 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
+ 	}
+ 	info.MergeResponseSemantics(types.RelayFormatOpenAIResponses, responseBody)
+ 
+-	if responsesResponse.HasImageGenerationCall() {
+-		c.Set("image_generation_call", true)
+-		c.Set("image_generation_call_quality", responsesResponse.GetQuality())
+-		c.Set("image_generation_call_size", responsesResponse.GetSize())
+-	}
++	info.ObserveResponseModel(responsesResponse.Model)
++	responseBody = rewriteSGLangResponsesCreatedAt(info, responseBody, "created_at", responsesResponse.CreatedAt)
+ 
+ 	// 写入新的 response body
+ 	service.IOCopyBytesGracefully(c, resp, responseBody)
+ 
+ 	// compute usage
+-	usage := dto.Usage{}
+-	if responsesResponse.Usage != nil {
+-		usage.PromptTokens = responsesResponse.Usage.InputTokens
+-		usage.CompletionTokens = responsesResponse.Usage.OutputTokens
+-		usage.TotalTokens = responsesResponse.Usage.TotalTokens
+-		if responsesResponse.Usage.InputTokensDetails != nil {
+-			usage.PromptTokensDetails.CachedTokens = responsesResponse.Usage.InputTokensDetails.CachedTokens
+-			usage.PromptTokensDetails.CacheWriteTokens = responsesResponse.Usage.InputTokensDetails.CacheWriteTokens
++	usage := &dto.Usage{}
++	service.ApplyResponsesUsage(usage, responsesResponse.Usage)
++	// Count actual tool invocations from Output (not tool declarations).
++	for _, output := range responsesResponse.Output {
++		switch output.Type {
++		case dto.BuildInCallWebSearchCall:
++			info.CountBillableToolCall(dto.BuildInCallWebSearchCall, "")
++		case dto.BuildInCallFileSearchCall:
++			info.CountBillableToolCall(dto.BuildInCallFileSearchCall, "")
++		case dto.BuildInCallFunctionCall:
++			info.CountBillableToolCall(dto.BuildInCallFunctionCall, output.Name)
+ 		}
+ 	}
+-	if info == nil || info.ResponsesUsageInfo == nil || info.ResponsesUsageInfo.BuiltInTools == nil {
+-		return &usage, nil
+-	}
+-	// 解析 Tools 用量
+-	for _, tool := range responsesResponse.Tools {
+-		buildToolinfo, ok := info.ResponsesUsageInfo.BuiltInTools[common.Interface2String(tool["type"])]
+-		if !ok || buildToolinfo == nil {
+-			logger.LogError(c, fmt.Sprintf("BuiltInTools not found for tool type: %v", tool["type"]))
+-			continue
+-		}
+-		buildToolinfo.CallCount++
++	info.ApplyVendorToolUsage(responseBody)
++
++	imageCounter := &relaycommon.ImageGenerationCallCounter{}
++	for i := range responsesResponse.Output {
++		imageCounter.Observe(&responsesResponse.Output[i], &i)
+ 	}
+-	return &usage, nil
++	imageCounter.Commit(info)
++
++	return usage, nil
+ }
+ 
+ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+ 	if resp == nil || resp.Body == nil {
+-		logger.LogError(c, "invalid response or response body")
++		logger.LogError(c, common.LogText("invalid response or response body"))
+ 		return nil, types.NewError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse)
+ 	}
+ 
+ 	defer service.CloseResponseBodyGracefully(resp)
+ 
+-	var usage = &dto.Usage{}
+-	var responseTextBuilder strings.Builder
++	accumulator := service.NewResponsesUsageAccumulator(info)
+ 	var streamErr *types.NewAPIError
+ 
+ 	helper.StreamScannerHandlerWithOptions(c, resp, info, helper.StreamScannerOptions{RequireExplicitTerminal: true}, func(data string, sr *helper.StreamResult) {
+@@ -91,11 +88,18 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
+ 			sr.Stop(err)
+ 			return
+ 		}
++		if streamResponse.Response != nil {
++			data = string(rewriteSGLangResponsesCreatedAt(info, []byte(data), "response.created_at", streamResponse.Response.CreatedAt))
++		}
+ 		if err := sendResponsesStreamData(c, streamResponse, data); err != nil {
+ 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+ 			sr.Stop(err)
+ 			return
+ 		}
++		if info.StreamStatus != nil {
++			info.StreamStatus.MarkClientPayloadCommitted()
++		}
++		accumulator.Observe(&streamResponse, common.StringToByteSlice(data))
+ 		switch streamResponse.Type {
+ 		case "error", "response.error", "response.failed", "response.cancelled":
+ 			oaiError := streamResponse.GetOpenAIError()
+@@ -114,45 +118,21 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
+ 			)
+ 			sr.StopWithTerminal(streamResponse.Type, "failed", streamErr)
+ 		case "response.completed", "response.incomplete", "response.done":
+-			if streamResponse.Response != nil {
+-				if streamResponse.Response.Usage != nil {
+-					usage.PromptTokens = streamResponse.Response.Usage.InputTokens
+-					usage.CompletionTokens = streamResponse.Response.Usage.OutputTokens
+-					usage.TotalTokens = streamResponse.Response.Usage.TotalTokens
+-					if streamResponse.Response.Usage.InputTokensDetails != nil {
+-						usage.PromptTokensDetails.CachedTokens = streamResponse.Response.Usage.InputTokensDetails.CachedTokens
+-						usage.PromptTokensDetails.CacheWriteTokens = streamResponse.Response.Usage.InputTokensDetails.CacheWriteTokens
+-					}
+-				}
+-				if streamResponse.Response.HasImageGenerationCall() {
+-					c.Set("image_generation_call", true)
+-					c.Set("image_generation_call_quality", streamResponse.Response.GetQuality())
+-					c.Set("image_generation_call_size", streamResponse.Response.GetSize())
+-				}
+-			}
+ 			status := "completed"
+ 			if streamResponse.Type == "response.incomplete" {
+ 				status = "incomplete"
+ 			}
+ 			sr.DoneWithTerminal(streamResponse.Type, status)
+-		case "response.output_text.delta":
+-			// 处理输出文本
+-			responseTextBuilder.WriteString(streamResponse.Delta)
+-		case dto.ResponsesOutputTypeItemDone:
+-			// 函数调用处理
+-			if streamResponse.Item != nil {
+-				switch streamResponse.Item.Type {
+-				case dto.BuildInCallWebSearchCall:
+-					if info != nil && info.ResponsesUsageInfo != nil && info.ResponsesUsageInfo.BuiltInTools != nil {
+-						if webSearchTool, exists := info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolWebSearchPreview]; exists && webSearchTool != nil {
+-							webSearchTool.CallCount++
+-						}
+-					}
+-				}
+-			}
+ 		}
+ 	})
+ 
++	usage := accumulator.Finish()
++	// The controller owns failed-stream settlement. Preserve the accumulator's
++	// usage snapshot so an SSE error can still settle the committed partial work.
++	if info.StreamStatus != nil && usage != nil {
++		hasUpstreamUsage := usage.PromptTokens > 0 || usage.CompletionTokens > 0 || usage.TotalTokens > 0
++		info.StreamStatus.ObservePartialUsage(usage, hasUpstreamUsage, !hasUpstreamUsage)
++	}
+ 	if streamErr != nil {
+ 		return nil, streamErr
+ 	}
+@@ -160,21 +140,19 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
+ 		return nil, statusErr
+ 	}
+ 
+-	if usage.CompletionTokens == 0 {
+-		// 计算输出文本的 token 数量
+-		tempStr := responseTextBuilder.String()
+-		if len(tempStr) > 0 {
+-			// 非正常结束，使用输出文本的 token 数量
+-			completionTokens := service.CountTextToken(tempStr, info.UpstreamModelName)
+-			usage.CompletionTokens = completionTokens
+-		}
+-	}
++	return usage, nil
++}
+ 
+-	if usage.PromptTokens == 0 && usage.CompletionTokens != 0 {
+-		usage.PromptTokens = info.GetEstimatePromptTokens()
++func rewriteSGLangResponsesCreatedAt(info *relaycommon.RelayInfo, payload []byte, path string, createdAt dto.IntValue) []byte {
++	if info.GetChannelType() != constant.ChannelTypeSGLang {
++		return payload
+ 	}
+-
+-	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+-
+-	return usage, nil
++	if !gjson.GetBytes(payload, path).Exists() {
++		return payload
++	}
++	patched, err := sjson.SetBytes(payload, path, int(createdAt))
++	if err != nil {
++		return payload
++	}
++	return patched
+ }

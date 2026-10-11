@@ -105,13 +105,23 @@ func getScannerBufferSize() int {
 	return DefaultMaxScannerBufferSize
 }
 
-func NewStreamScanner(reader io.Reader) *bufio.Scanner {
-	return newStreamScannerWithLimit(reader, getScannerBufferSize())
+func NewStreamScanner(reader io.Reader, limits ...any) *bufio.Scanner {
+	maxBytes := getScannerBufferSize()
+	if len(limits) > 0 {
+		if limit, ok := limits[0].(int); ok && limit > 0 {
+			maxBytes = limit
+		}
+	}
+	return newStreamScannerWithLimit(reader, maxBytes)
 }
 
 func newStreamScannerWithLimit(reader io.Reader, maxBytes int) *bufio.Scanner {
 	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, InitialScannerBufferSize), maxBytes)
+	initialSize := InitialScannerBufferSize
+	if maxBytes > 0 && initialSize > maxBytes {
+		initialSize = maxBytes
+	}
+	scanner.Buffer(make([]byte, initialSize), maxBytes)
 	return scanner
 }
 

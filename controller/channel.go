@@ -136,6 +136,17 @@ func restoreMultiKeyChannelIfAvailable(channel *model.Channel) {
 	channel.SetOtherInfo(info)
 }
 
+// hasManualChannelOverride distinguishes an operator or tag disable from the
+// aggregate status created when every key is disabled.
+func hasManualChannelOverride(channel *model.Channel) bool {
+	if channel == nil || channel.Status != common.ChannelStatusManuallyDisabled {
+		return false
+	}
+	reason := channel.GetOtherInfo()["status_reason"]
+	text, _ := reason.(string)
+	return text != model.ChannelStatusReasonAllKeysDisabled && text != "All keys are manually disabled"
+}
+
 func applyChannelStatusFilter(query *gorm.DB, statusFilter int) *gorm.DB {
 	if statusFilter == common.ChannelStatusEnabled {
 		return query.Where("status = ?", common.ChannelStatusEnabled)
@@ -1239,11 +1250,11 @@ func UpdateChannel(c *gin.Context) {
 		normalizedOriginProxy, originProxyErr := service.NormalizeProxyURL(originProxy)
 		proxyChanged = originProxyErr != nil || normalizedOriginProxy != newProxy
 	}
-	// Changing which plugins a channel binds needs the bind permission on any
-	// channel type; resubmitting an unchanged New API binding list does not, so
-	// administrators without it can still edit the rest of a gateway channel.
+	// Task-plugin channels always require the bind permission; changing plugin
+	// bindings requires it on every channel type as well.
 	if settingProvided &&
-		!slices.Equal(channel.GetSetting().TaskPluginBindings(), originChannel.GetSetting().TaskPluginBindings()) &&
+		(originChannel.Type == constant.ChannelTypeTaskPlugin || channel.Type == constant.ChannelTypeTaskPlugin ||
+			!slices.Equal(channel.GetSetting().TaskPluginBindings(), originChannel.GetSetting().TaskPluginBindings())) &&
 		!authz.Can(c.GetInt("id"), c.GetInt("role"), authz.TaskPluginBind) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
@@ -2027,7 +2038,9 @@ func ManageMultiKeys(c *gin.Context) {
 		channel.ChannelInfo.MultiKeyStatusList[keyIndex] = common.ChannelStatusManuallyDisabled
 		channel.ChannelInfo.MultiKeyDisabledTime[keyIndex] = common.GetTimestamp()
 		channel.ChannelInfo.MultiKeyDisabledReason[keyIndex] = "manual operation"
-		channel.RecalculateMultiKeyStatus()
+		if !hasManualChannelOverride(channel) {
+			channel.RecalculateMultiKeyStatus()
+		}
 
 		err = channel.UpdateWithHealth()
 		if err != nil {
@@ -2064,7 +2077,9 @@ func ManageMultiKeys(c *gin.Context) {
 		if channel.ChannelInfo.MultiKeyDisabledReason != nil {
 			delete(channel.ChannelInfo.MultiKeyDisabledReason, keyIndex)
 		}
-		channel.RecalculateMultiKeyStatus()
+		if !hasManualChannelOverride(channel) {
+			channel.RecalculateMultiKeyStatus()
+		}
 
 		err = channel.UpdateWithHealth()
 		if err != nil {
@@ -2090,7 +2105,9 @@ func ManageMultiKeys(c *gin.Context) {
 		channel.ChannelInfo.MultiKeyStatusList = make(map[int]int)
 		channel.ChannelInfo.MultiKeyDisabledTime = make(map[int]int64)
 		channel.ChannelInfo.MultiKeyDisabledReason = make(map[int]string)
-		channel.RecalculateMultiKeyStatus()
+		if !hasManualChannelOverride(channel) {
+			channel.RecalculateMultiKeyStatus()
+		}
 
 		err = channel.UpdateWithHealth()
 		if err != nil {

@@ -135,7 +135,7 @@ func redisRateLimitHandler(duration int64, policy modelRequestRateLimitPolicy, r
 		}
 
 		c.Next()
-		if c.Writer.Status() < http.StatusBadRequest {
+		if c.Writer.Status() < http.StatusBadRequest && relaySucceeded(c) {
 			recordRedisRequest(ctx, rdb, successKey, policy.successMaxCount)
 		}
 	}
@@ -163,10 +163,21 @@ func memoryRateLimitHandler(duration int64, policy modelRequestRateLimitPolicy, 
 		}
 
 		c.Next()
-		if c.Writer.Status() < http.StatusBadRequest {
+		if c.Writer.Status() < http.StatusBadRequest && relaySucceeded(c) {
 			inMemoryRateLimiter.Request(successKey, policy.successMaxCount, duration)
 		}
 	}
+}
+
+// relaySucceeded lets streaming handlers report a failed upstream terminal
+// while keeping the transport status already committed as 200.
+func relaySucceeded(c *gin.Context) bool {
+	if value, exists := c.Get(string(constant.ContextKeyRelayUpstreamSucceeded)); exists {
+		if succeeded, ok := value.(bool); ok {
+			return succeeded
+		}
+	}
+	return true
 }
 
 // rejectModelRequestRateLimit preserves legacy responses unless a user-group rule selected the custom policy.

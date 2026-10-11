@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/tidwall/gjson"
 
 	"github.com/gin-gonic/gin"
 )
@@ -27,6 +28,7 @@ func GeminiTextGenerationHandler(c *gin.Context, info *relaycommon.RelayInfo, re
 	}
 
 	logger.LogDebug(c, "Gemini native response body: %s", responseBody)
+	info.ObserveResponseModel(gjson.GetBytes(responseBody, "modelVersion").Str)
 
 	// 解析为 Gemini 原生响应格式
 	var geminiResponse dto.GeminiChatResponse
@@ -35,6 +37,9 @@ func GeminiTextGenerationHandler(c *gin.Context, info *relaycommon.RelayInfo, re
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	info.MergeResponseSemantics(types.RelayFormatGemini, responseBody)
+	var grounding geminiGroundingCounter
+	grounding.observe(&geminiResponse)
+	grounding.commit(info)
 
 	if len(geminiResponse.Candidates) == 0 && geminiResponse.PromptFeedback != nil && geminiResponse.PromptFeedback.BlockReason != nil {
 		info.PerformanceBusinessRejection = true

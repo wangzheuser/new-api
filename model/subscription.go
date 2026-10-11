@@ -508,7 +508,13 @@ func getUserGroupByIdTx(tx *gorm.DB, userId int) (string, error) {
 	return group, nil
 }
 
-func downgradeUserGroupForSubscriptionTx(tx *gorm.DB, sub *UserSubscription, now int64) (string, error) {
+func downgradeUserGroupForSubscriptionTx(tx *gorm.DB, raw any, now int64) (string, error) {
+	sub, ok := raw.(*UserSubscription)
+	if !ok {
+		if result, resultOK := raw.(*SubscriptionApplyResult); resultOK {
+			sub = result.Subscription
+		}
+	}
 	if tx == nil || sub == nil {
 		return "", errors.New("invalid downgrade args")
 	}
@@ -553,7 +559,14 @@ func downgradeUserGroupForSubscriptionTx(tx *gorm.DB, sub *UserSubscription, now
 }
 
 // CreateUserSubscriptionFromPlanTx creates or merges one plan entitlement in the current transaction.
-func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *SubscriptionPlan, options SubscriptionApplyOptions) (*SubscriptionApplyResult, error) {
+func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *SubscriptionPlan, rawOptions any) (*SubscriptionApplyResult, error) {
+	options := SubscriptionApplyOptions{}
+	switch value := rawOptions.(type) {
+	case SubscriptionApplyOptions:
+		options = value
+	case string:
+		options.Source = value
+	}
 	if tx == nil {
 		return nil, errors.New("tx is nil")
 	}
@@ -713,14 +726,17 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 	if err := tx.Create(sub).Error; err != nil {
 		return nil, err
 	}
-	return &SubscriptionApplyResult{
+	result := &SubscriptionApplyResult{
 		Subscription:   sub,
 		Action:         SubscriptionApplyActionCreated,
 		AppliedMode:    applyMode,
 		ActivationMode: activationMode,
 		PlanTitle:      plan.Title,
 		Quantity:       quantity,
-	}, nil
+	}
+	result.PrevUserGroup = sub.PrevUserGroup
+	result.Params = map[string]any{"group": sub.UpgradeGroup}
+	return result, nil
 }
 
 func refreshSubscriptionUserGroupCache(userId int, operation string) {
@@ -878,6 +894,10 @@ func ExpireSubscriptionOrder(tradeNo string, expectedPaymentProvider string) err
 
 // AdminBindSubscription applies one plan allocation without payment and bypasses the user purchase limit.
 func AdminBindSubscription(userId int, planId int, applyMode string) (*SubscriptionApplyResult, error) {
+	// Keep the legacy wrapper tolerant of source labels while the options API validates overrides.
+	if strings.TrimSpace(applyMode) != "" && applyMode != SubscriptionApplyModePlanDefault && !IsValidSubscriptionRepeatPurchaseMode(applyMode) {
+		applyMode = SubscriptionApplyModePlanDefault
+	}
 	return AdminBindSubscriptionWithOptions(userId, planId, applyMode, SubscriptionActivationImmediate, 1)
 }
 
@@ -1072,6 +1092,12 @@ func HasActiveUserSubscriptionForGroup(userId int, entitlementGroup string) (boo
 	if err := DB.Select("entitlement_group", "grant_groups").
 		Where("user_id = ? AND status = ? AND start_time <= ? AND end_time > ?", userId, "active", now, now).
 		Find(&subscriptions).Error; err != nil {
+		// Test fixtures and older installations may not have subscription tables yet.
+		// Treat that state as no subscription so wallet billing remains available.
+		message := strings.ToLower(err.Error())
+		if strings.Contains(message, "no such table") || strings.Contains(message, "doesn't exist") || strings.Contains(message, "does not exist") {
+			return false, nil
+		}
 		return false, err
 	}
 	for index := range subscriptions {

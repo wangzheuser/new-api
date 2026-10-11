@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
@@ -60,9 +61,42 @@ func recordRelayErrorLog(c *gin.Context, relayInfo *relaycommon.RelayInfo, err *
 		"error_code":   err.GetErrorCode(),
 		"status_code":  err.StatusCode,
 		"intermediate": isIntermediate,
+		"admin_info":   map[string]any{"use_channel": c.GetStringSlice("use_channel")},
+	}
+	adminInfo := other["admin_info"].(map[string]any)
+	service.AppendResponseOverrideAdminInfo(relayInfo, adminInfo)
+	service.AppendRelayProtocolInfo(relayInfo, nil, adminInfo)
+	if relayInfo != nil {
+		if len(relayInfo.RequestConversionChain) > 0 {
+			conversion := make([]string, 0, len(relayInfo.RequestConversionChain))
+			for _, format := range relayInfo.RequestConversionChain {
+				switch format {
+				case types.RelayFormatOpenAI:
+					conversion = append(conversion, "OpenAI Compatible")
+				case types.RelayFormatClaude:
+					conversion = append(conversion, "Claude Messages")
+				case types.RelayFormatGemini:
+					conversion = append(conversion, "Google Gemini")
+				case types.RelayFormatOpenAIResponses:
+					conversion = append(conversion, "OpenAI Responses")
+				default:
+					conversion = append(conversion, string(format))
+				}
+			}
+			other["request_conversion"] = conversion
+		}
+		if finalFormat := relayInfo.GetFinalRequestRelayFormat(); finalFormat != "" {
+			other["final_request_relay_format"] = finalFormat
+		}
+	}
+	if relayInfo != nil && relayInfo.GetUpstreamModelName() != "" {
+		other["upstream_model_name"] = relayInfo.GetUpstreamModelName()
 	}
 	if rawError != nil {
 		other["public_error"] = true
+		if status, ok := rawError.GetUpstreamStatusCode(); ok {
+			other["admin_info"].(map[string]any)["upstream_status_code"] = status
+		}
 	}
 	start := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
 	if start.IsZero() {

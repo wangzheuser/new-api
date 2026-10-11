@@ -218,12 +218,12 @@ func TestInputPolicyRefundAndReserveFailure(t *testing.T) {
 func TestInputPolicyResponsesRetainsRealCache(t *testing.T) {
 	raw := &dto.Usage{InputTokens: 100, OutputTokens: 10, InputTokensDetails: &dto.InputTokenDetails{CachedTokens: 40}}
 	client := &dto.Usage{BillingUsage: dto.NewOpenAIResponsesBillingUsage(raw)}
-	recovered := effectiveBillingUsage(client)
+	recovered := effectiveBillingUsage(relayUsage(client))
 	require.NotNil(t, recovered)
 	assert.Equal(t, 40, recovered.PromptTokensDetails.CachedTokens)
 	info := inputPolicyBillingInfo()
 	info.CacheUsageSimulation.Presence = "present"
-	billed := applyContextTruncationBilling(newEntitlementBillingContext(), info, recovered)
+	billed := applyContextTruncationBilling(newEntitlementBillingContext(), info, rootUsage(recovered))
 	assert.Equal(t, 40, billed.PromptTokensDetails.CachedTokens)
 	assert.Equal(t, 100, raw.InputTokens)
 	assert.Zero(t, raw.PromptTokensDetails.CachedTokens)

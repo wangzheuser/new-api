@@ -11,6 +11,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	rootdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -48,8 +49,10 @@ type RerankerInfo struct {
 }
 
 type BuildInToolInfo struct {
-	ToolName  string
-	CallCount int
+	ToolName          string
+	CallCount         int
+	SearchContextSize string
+	Reported          bool `json:"-"`
 }
 
 type ResponsesUsageInfo struct {
@@ -511,11 +514,25 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	}
 
 	channelSetting, ok := common.GetContextKeyType[dto.ChannelSettings](c, constant.ContextKeyChannelSetting)
+	if !ok {
+		if rootSetting, rootOK := common.GetContextKeyType[rootdto.ChannelSettings](c, constant.ContextKeyChannelSetting); rootOK {
+			if encoded, marshalErr := common.Marshal(rootSetting); marshalErr == nil {
+				ok = common.Unmarshal(encoded, &channelSetting) == nil
+			}
+		}
+	}
 	if ok {
 		channelMeta.ChannelSetting = channelSetting
 	}
 
 	channelOtherSettings, ok := common.GetContextKeyType[dto.ChannelOtherSettings](c, constant.ContextKeyChannelOtherSetting)
+	if !ok {
+		if rootSettings, rootOK := common.GetContextKeyType[rootdto.ChannelOtherSettings](c, constant.ContextKeyChannelOtherSetting); rootOK {
+			if encoded, marshalErr := common.Marshal(rootSettings); marshalErr == nil {
+				ok = common.Unmarshal(encoded, &channelOtherSettings) == nil
+			}
+		}
+	}
 	if ok {
 		channelMeta.ChannelOtherSettings = channelOtherSettings
 	}
@@ -568,6 +585,8 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 
 // resetAttemptState clears response and billing facts produced by the previous relay attempt.
 func (info *RelayInfo) resetAttemptState(c *gin.Context) {
+	// Response model declarations belong to one channel attempt only.
+	info.ResponseModel = nil
 	if info.IsStream && info.RetryIndex > 0 && info.StreamStatus != nil {
 		// Clear attempt-local terminal state; the request-level pinger, status object, and writer lock remain stable.
 		info.StreamStatus.PrepareRetryAttempt()
@@ -583,7 +602,7 @@ func (info *RelayInfo) resetAttemptState(c *gin.Context) {
 		return
 	}
 	for _, tool := range info.ResponsesUsageInfo.BuiltInTools {
-		if tool != nil {
+		if tool != nil && !tool.Reported {
 			tool.CallCount = 0
 		}
 	}
@@ -957,6 +976,16 @@ func GenRelayInfo(c *gin.Context, relayFormat types.RelayFormat, request dto.Req
 			info = GenRelayInfoResponses(c, request)
 			break
 		}
+		// Root-module DTOs share the request contract but have a distinct Go
+		// type; normalize them through JSON at this module boundary.
+		encoded, marshalErr := common.Marshal(request)
+		if marshalErr == nil {
+			converted := &dto.OpenAIResponsesRequest{}
+			if unmarshalErr := common.Unmarshal(encoded, converted); unmarshalErr == nil {
+				info = GenRelayInfoResponses(c, converted)
+				break
+			}
+		}
 		err = errors.New("request is not a OpenAIResponsesRequest")
 	case types.RelayFormatOpenAIResponsesCompaction:
 		if request, ok := request.(*dto.OpenAIResponsesCompactionRequest); ok {
@@ -1063,7 +1092,18 @@ func (info *RelayInfo) ResolveStreamRetryCommitPolicy() StreamRetryCommitPolicy 
 	}
 }
 
-func GenRelayInfoResponsesCompaction(c *gin.Context, request *dto.OpenAIResponsesCompactionRequest) *RelayInfo {
+func GenRelayInfoResponsesCompaction(c *gin.Context, raw any) *RelayInfo {
+	request, ok := raw.(*dto.OpenAIResponsesCompactionRequest)
+	if !ok {
+		data, err := common.Marshal(raw)
+		if err != nil {
+			return nil
+		}
+		request = &dto.OpenAIResponsesCompactionRequest{}
+		if common.Unmarshal(data, request) != nil {
+			return nil
+		}
+	}
 	info := genBaseRelayInfo(c, request)
 	info.RequestedModelName = request.Model
 	if info.RelayMode == relayconstant.RelayModeUnknown {
@@ -1274,7 +1314,7 @@ func (info *RelayInfo) UpdateImageCount(count int64) {
 	if info.PriceData.UsePrice {
 		info.PriceData.AddOtherRatio("n", float64(count))
 	}
-	if info.BillingImageCount != nil {
+	if info.BillingImageCount != nil || info.TieredBillingSnapshot != nil {
 		n := int(count)
 		info.BillingImageCount = &n
 	}
@@ -1291,6 +1331,9 @@ func (info *RelayInfo) RequestedImageCount() int {
 		if n, err := request.ImageCount(false); err == nil && n > 0 {
 			return n
 		}
+	}
+	if info.TieredBillingSnapshot != nil && info.TieredBillingSnapshot.EstimatedImageCount != nil && *info.TieredBillingSnapshot.EstimatedImageCount > 0 {
+		return *info.TieredBillingSnapshot.EstimatedImageCount
 	}
 	return 1
 }

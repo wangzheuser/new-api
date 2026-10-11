@@ -7,8 +7,9 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
+	appdto "github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	projecttypes "github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -30,9 +31,9 @@ func TestApplySystemPromptAcrossRelayFormats(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 
-	openAIRequest := &dto.GeneralOpenAIRequest{
+	openAIRequest := &appdto.GeneralOpenAIRequest{
 		Model: "model-a",
-		Messages: []dto.Message{{
+		Messages: []appdto.Message{{
 			Role:    "system",
 			Content: "client prompt",
 		}},
@@ -42,7 +43,7 @@ func TestApplySystemPromptAcrossRelayFormats(t *testing.T) {
 
 	responsesInstructions, err := common.Marshal("client prompt")
 	require.NoError(t, err)
-	responsesRequest := &dto.OpenAIResponsesRequest{Instructions: responsesInstructions}
+	responsesRequest := &appdto.OpenAIResponsesRequest{Instructions: responsesInstructions}
 	applied, err := applyResponsesSystemPrompt(c, responsesRequest, "model prompt", true)
 	require.NoError(t, err)
 	require.True(t, applied)
@@ -50,13 +51,13 @@ func TestApplySystemPromptAcrossRelayFormats(t *testing.T) {
 	require.NoError(t, common.Unmarshal(responsesRequest.Instructions, &mergedInstructions))
 	assert.Equal(t, "model prompt\nclient prompt", mergedInstructions)
 
-	claudeRequest := &dto.ClaudeRequest{System: "client prompt"}
+	claudeRequest := &appdto.ClaudeRequest{System: "client prompt"}
 	applyClaudeSystemPrompt(c, claudeRequest, "model prompt", true)
 	assert.Equal(t, "model prompt\nclient prompt", claudeRequest.GetStringSystem())
 
-	geminiRequest := &dto.GeminiChatRequest{
-		SystemInstructions: &dto.GeminiChatContent{
-			Parts: []dto.GeminiPart{{Text: "client prompt"}},
+	geminiRequest := &appdto.GeminiChatRequest{
+		SystemInstructions: &appdto.GeminiChatContent{
+			Parts: []appdto.GeminiPart{{Text: "client prompt"}},
 		},
 	}
 	applyGeminiSystemPrompt(c, geminiRequest, "model prompt", true)
@@ -67,7 +68,7 @@ func TestResolveSystemPromptUsesImmutableRequestedModel(t *testing.T) {
 	info := &relaycommon.RelayInfo{
 		RequestedModelName: "public-model",
 		OriginModelName:    "mapped-model",
-		ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: dto.ChannelSettings{
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: kitdto.ChannelSettings{
 			ModelSystemPrompts: map[string]string{"public-model": "public prompt"},
 		}},
 	}
@@ -82,9 +83,9 @@ func TestApplySystemPromptForRequestUsesConfiguredModelPrompt(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ratio_setting.InitRatioSettings()
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	request := &dto.GeneralOpenAIRequest{
+	request := &appdto.GeneralOpenAIRequest{
 		Model:    "gpt-3.5-turbo",
-		Messages: []dto.Message{{Role: "user", Content: "你好"}},
+		Messages: []appdto.Message{{Role: "user", Content: "你好"}},
 	}
 	info := &relaycommon.RelayInfo{
 		RequestedModelName: "gpt-3.5-turbo",
@@ -92,7 +93,7 @@ func TestApplySystemPromptForRequestUsesConfiguredModelPrompt(t *testing.T) {
 		UsingGroup:         "default",
 		UserGroup:          "default",
 		RelayFormat:        projecttypes.RelayFormatOpenAI,
-		ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: dto.ChannelSettings{
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: kitdto.ChannelSettings{
 			ModelSystemPrompts: map[string]string{"gpt-3.5-turbo": "model prompt"},
 		}},
 	}
@@ -112,9 +113,9 @@ func TestInjectedSystemPromptUpdatesEstimateAndReserve(t *testing.T) {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	common.SetContextKey(c, constant.ContextKeyOriginalModel, "gpt-3.5-turbo")
 
-	request := &dto.GeneralOpenAIRequest{
+	request := &appdto.GeneralOpenAIRequest{
 		Model:    "gpt-3.5-turbo",
-		Messages: []dto.Message{{Role: "user", Content: "hello"}},
+		Messages: []appdto.Message{{Role: "user", Content: "hello"}},
 	}
 	before := request.GetTokenCountMeta()
 	applyOpenAISystemPrompt(c, request, strings.Repeat("model prompt ", 1000), true)
@@ -132,7 +133,7 @@ func TestInjectedSystemPromptUpdatesEstimateAndReserve(t *testing.T) {
 				GroupRatio: 1,
 			},
 		},
-		ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: dto.ChannelSettings{
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: kitdto.ChannelSettings{
 			ModelSystemPrompts: map[string]string{"gpt-3.5-turbo": "configured"},
 		}},
 	}
@@ -152,8 +153,8 @@ func TestInjectedSystemPromptUpdatesEstimateAndReserve(t *testing.T) {
 }
 
 func TestApplyChannelDefaultDoesNotReplaceClientPrompt(t *testing.T) {
-	request := &dto.GeneralOpenAIRequest{
-		Messages: []dto.Message{{Role: "system", Content: "client prompt"}},
+	request := &appdto.GeneralOpenAIRequest{
+		Messages: []appdto.Message{{Role: "system", Content: "client prompt"}},
 	}
 
 	applyOpenAISystemPrompt(nil, request, "channel default", false)

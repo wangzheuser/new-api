@@ -248,9 +248,23 @@ func Redeem(key string, userId int) (result *RedemptionResult, err error) {
 			}
 			result.Type = RedemptionTypeQuota
 			result.Quota = redemption.Quota
-			return tx.Model(&User{}).
-				Where("id = ?", userId).
-				Update("quota", gorm.Expr("quota + ?", redemption.Quota)).Error
+			quotaUpdate := tx.Model(&User{}).
+				Where("id = ? AND quota <= ?", userId, common.MaxWalletQuota-redemption.Quota).
+				Update("quota", gorm.Expr("quota + ?", redemption.Quota))
+			if quotaUpdate.Error != nil {
+				return quotaUpdate.Error
+			}
+			if quotaUpdate.RowsAffected == 1 {
+				return nil
+			}
+			var userCount int64
+			if err := tx.Model(&User{}).Where("id = ?", userId).Count(&userCount).Error; err != nil {
+				return err
+			}
+			if userCount == 0 {
+				return gorm.ErrRecordNotFound
+			}
+			return ErrWalletQuotaLimitExceeded
 		}
 
 		plan, err := getSubscriptionPlanByIdTx(tx, redemption.PlanId)
