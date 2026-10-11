@@ -152,9 +152,13 @@ printf '%s' "$VERSION" > "$CLASSIC_TREE/VERSION"
 extract_clean_dist "$PREVIOUS_DEFAULT" "$PREVIOUS_DEFAULT_DIR"
 extract_clean_dist "$PREVIOUS_CLASSIC" "$PREVIOUS_CLASSIC_DIR"
 
+# Install the workspace once and share its dependency tree with the isolated build copy.
+cd "$DEFAULT_TREE/web"
+bun install --frozen-lockfile
+ln -s "$DEFAULT_TREE/web/node_modules" "$CLASSIC_TREE/web/node_modules"
+
 build_default() {
   cd "$DEFAULT_TREE/web"
-  bun install --frozen-lockfile
   cd default
   bun run typecheck
   DISABLE_ESLINT_PLUGIN=true VITE_REACT_APP_VERSION="$VERSION" bun run build
@@ -162,7 +166,6 @@ build_default() {
 
 build_classic() {
   cd "$CLASSIC_TREE/web"
-  bun install --filter ./classic --frozen-lockfile
   cd classic
   bun run test
   VITE_REACT_APP_VERSION="$VERSION" bun run build
