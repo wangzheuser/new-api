@@ -7,7 +7,7 @@ ROLLBACK.sh: /Users/777java/777/projects/github/new-api/artifacts/merge-verifica
 BASELINE command: git show codex/backup-dev-before-main-merge-20261011-415087a8c:relaykit/dto/channel_settings.go | sha256sum
 BASELINE result: path absent on backup branch because relaykit DTO file was introduced by merge; exit status 128.
 MODIFIED command: sha256sum relaykit/dto/channel_settings.go
-MODIFIED result: 958c67a800f525ed35397501aa9cae8237cb721502ce64c5693d777946aa9c2a; exit status 0.
+MODIFIED result: a722f152428eecf197fff4c8996fb92427ae41e4649b934ca495991b7852b855; exit status 0.
 MODIFIED build command: go build -mod=mod ./...
 MODIFIED build result: success; exit status 0.
 MODIFIED frontend command: (cd web && bun run typecheck && bun run build)
