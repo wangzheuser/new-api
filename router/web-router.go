@@ -68,7 +68,7 @@ func SetWebRouter(router *gin.Engine, rawAssets any, pluginDispatcher ...gin.Han
 		middleware.Cache(),
 		middleware.ServeFrontendFiles(frontendFS),
 		func(c *gin.Context) {
-			if strings.HasPrefix(c.Request.RequestURI, "/v1") || strings.HasPrefix(c.Request.RequestURI, "/api") || strings.HasPrefix(c.Request.RequestURI, "/assets") {
+			if isFrontendAssetPath(c.Request.URL.Path) || strings.HasPrefix(c.Request.RequestURI, "/v1") || strings.HasPrefix(c.Request.RequestURI, "/api") {
 				controller.RelayNotFound(c)
 				return
 			}
