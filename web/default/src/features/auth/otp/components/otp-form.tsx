@@ -86,6 +86,8 @@ export function OtpForm({ className, ...props }: OtpFormProps) {
   const otp = form.watch('otp')
 
   async function onSubmit(data: z.infer<typeof otpFormSchema>) {
+    if (isLoading) return
+
     // Validate based on mode
     if (useBackupCode) {
       if (!isValidBackupCode(data.otp)) {
@@ -104,7 +106,11 @@ export function OtpForm({ className, ...props }: OtpFormProps) {
       // Remove all hyphens from backup code before sending to backend
       const code = useBackupCode ? cleanBackupCode(data.otp) : data.otp
       const pending = useAuthStore.getState().auth.pendingLoginVerification
-      if (!pending) {
+      if (
+        !pending ||
+        pending.challenge.expires_at * 1000 <= Date.now()
+      ) {
+        toast.error(t('Session expired?'))
         redirectToLogin()
         return
       }
@@ -126,10 +132,13 @@ export function OtpForm({ className, ...props }: OtpFormProps) {
       toast.success(t('Signed in'))
       await handleLoginSuccess(res.data, pending.redirectTo)
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('2FA verification error:', error)
+      const responseMessage = (
+        error as { response?: { data?: { message?: unknown } } }
+      )?.response?.data?.message
       const errorMessage =
-        error instanceof Error ? error.message : t('Verification failed')
+        typeof responseMessage === 'string'
+          ? responseMessage
+          : t('Verification failed')
       toast.error(errorMessage)
     } finally {
       setIsLoading(false)

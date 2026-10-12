@@ -35,6 +35,7 @@ test('accepts a completed bundle and only internal redirect paths', () => {
 
   expect(isAuthBundle(bundle)).toBe(true)
   expect(safeLoginRedirect('/dashboard')).toBe('/dashboard')
+  expect(safeLoginRedirect('/dashboard?redirect=\\\\evil.example')).toBeUndefined()
   expect(safeLoginRedirect('//attacker.example')).toBeUndefined()
   expect(safeLoginRedirect('https://attacker.example')).toBeUndefined()
 })

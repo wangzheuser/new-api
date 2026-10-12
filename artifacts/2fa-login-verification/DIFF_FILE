@@ -1,476 +1,131 @@
-web/default/src/features/auth/api.ts               |  9 ++-
- .../src/features/auth/hooks/use-auth-redirect.ts   | 55 ++++++++++++++--
- .../src/features/auth/otp/components/otp-form.tsx  | 44 ++++++++-----
- .../auth/sign-in/components/user-auth-form.tsx     | 10 +--
- web/default/src/features/auth/types.ts             | 10 ++-
- web/default/src/lib/api.ts                         | 77 +++++++++++++++++++---
- web/default/src/stores/auth-store.ts               | 76 ++++++++++++++++++++-
- 7 files changed, 231 insertions(+), 50 deletions(-)
-
-Changes:
-
-web/default/src/features/auth/api.ts
-  @@ -44,14 +44,19 @@ export async function login(payload: LoginPayload) {
-  -    }
-  +    },
-  +    { skipAuthRefresh: true }
-     )
-     return res.data
-   }
-   
-   // Two-factor authentication login
-   export async function login2fa(payload: TwoFAPayload) {
-  -  const res = await api.post<Login2FAResponse>('/api/user/login/2fa', payload)
-  +  const res = await api.post<Login2FAResponse>(
-  +    '/api/user/login/verify',
-  +    { flow_token: payload.flow_token, method: '2fa', code: payload.code },
-  +    { skipAuthRefresh: true }
-  +  )
-     return res.data
-   }
-   
-  +7 -2
-
-web/default/src/features/auth/hooks/use-auth-redirect.ts
-  @@ -20,9 +20,14 @@ import { useNavigate } from '@tanstack/react-router'
-  -import { getSelf } from '@/lib/api'
-  -import { useAuthStore } from '@/stores/auth-store'
-  -
-  +import { applyAuthBundle, getSelf } from '@/lib/api'
-  +import { useAuthStore, type AuthBundle } from '@/stores/auth-store'
-  +
-  +import {
-  +  isAuthBundle,
-  +  isLoginChallenge,
-  +  safeLoginRedirect,
-  +} from '../lib/login-flow'
-   import { saveUserId } from '../lib/storage'
-   
-   function getSavedLanguage(user: User): string | undefined {
-  @@ -56,9 +61,22 @@ export function useAuthRedirect() {
-  -    userData?: { id?: number } | null,
-  +    userData?: AuthBundle | { id?: number } | null,
-       redirectTo?: string
-     ) => {
-  +    if (isAuthBundle(userData)) {
-  +      applyAuthBundle(userData)
-  +      const savedLang = getSavedLanguage(userData.user as User)
-  +      if (savedLang && savedLang !== i18n.language) {
-  +        await i18n.changeLanguage(savedLang)
-  +      }
-  +      await navigate({
-  +        to: safeLoginRedirect(redirectTo) || '/dashboard',
-  +        replace: true,
-  +      })
-  +      return
-  +    }
-  +
-       // Save user ID if available
-       if (userData?.id) {
-         saveUserId(userData.id)
-  @@ -88,8 +106,31 @@ export function useAuthRedirect() {
-  -    const targetPath = redirectTo || '/dashboard'
-  -    navigate({ to: targetPath, replace: true })
-  +    const targetPath = safeLoginRedirect(redirectTo) || '/dashboard'
-  +    await navigate({ to: targetPath, replace: true })
-  +  }
-  +
-  +  /** Route the primary login response without treating a pending challenge as a session. */
-  +  const handleLoginResult = async (
-  +    result: unknown,
-  +    redirectTo?: string
-  +  ): Promise<boolean> => {
-  +    if (isAuthBundle(result)) {
-  +      await handleLoginSuccess(result, redirectTo)
-  +      return true
-  +    }
-  +    if (!isLoginChallenge(result)) {
-  +      throw new Error('Login failed')
-  +    }
-  +    if (result.expires_at * 1000 <= Date.now()) {
-  +      throw new Error('Login flow expired. Please sign in again.')
-  +    }
-  +    auth.setPendingLoginVerification({
-  +      challenge: result,
-  +      redirectTo: safeLoginRedirect(redirectTo),
-  +    })
-  +    await navigate({ to: '/otp', replace: true })
-  +    return false
+diff --git a/web/default/src/features/auth/api.ts b/web/default/src/features/auth/api.ts
+index 052cfb37f..42476a1a2 100644
+--- a/web/default/src/features/auth/api.ts
++++ b/web/default/src/features/auth/api.ts
+@@ -44,14 +44,19 @@ export async function login(payload: LoginPayload) {
+     {
+       username: payload.username,
+       password: payload.password,
+-    }
++    },
++    { skipAuthRefresh: true }
+   )
+   return res.data
+ }
+ 
+ // Two-factor authentication login
+ export async function login2fa(payload: TwoFAPayload) {
+-  const res = await api.post<Login2FAResponse>('/api/user/login/2fa', payload)
++  const res = await api.post<Login2FAResponse>(
++    '/api/user/login/verify',
++    { flow_token: payload.flow_token, method: '2fa', code: payload.code },
++    { skipAuthRefresh: true }
++  )
+   return res.data
+ }
+ 
+diff --git a/web/default/src/features/auth/hooks/use-auth-redirect.ts b/web/default/src/features/auth/hooks/use-auth-redirect.ts
+index 1da607161..a4b00de5a 100644
+--- a/web/default/src/features/auth/hooks/use-auth-redirect.ts
++++ b/web/default/src/features/auth/hooks/use-auth-redirect.ts
+@@ -20,9 +20,14 @@ import { useNavigate } from '@tanstack/react-router'
+ import i18n from 'i18next'
+ 
+ import type { User } from '@/features/users/types'
+-import { getSelf } from '@/lib/api'
+-import { useAuthStore } from '@/stores/auth-store'
+-
++import { applyAuthBundle, getSelf } from '@/lib/api'
++import { useAuthStore, type AuthBundle } from '@/stores/auth-store'
++
++import {
++  isAuthBundle,
++  isLoginChallenge,
++  safeLoginRedirect,
++} from '../lib/login-flow'
+ import { saveUserId } from '../lib/storage'
+ 
+ function getSavedLanguage(user: User): string | undefined {
+@@ -56,9 +61,20 @@ export function useAuthRedirect() {
+    * @param redirectTo - Redirect path after login
+    */
+   const handleLoginSuccess = async (
+-    userData?: { id?: number } | null,
++    userData?: AuthBundle | { id?: number } | null,
+     redirectTo?: string
+   ) => {
++    if (isAuthBundle(userData)) {
++      applyAuthBundle(userData)
++      const savedLang = getSavedLanguage(userData.user as User)
++      if (savedLang && savedLang !== i18n.language) {
++        await i18n.changeLanguage(savedLang)
++      }
++      const targetPath = safeLoginRedirect(redirectTo) || '/dashboard'
++      await navigate({ href: targetPath, replace: true })
++      return
++    }
++
+     // Save user ID if available
+     if (userData?.id) {
+       saveUserId(userData.id)
+@@ -88,8 +104,31 @@ export function useAuthRedirect() {
      }
-   
-     /**
-  @@ -103,6 +144,7 @@ export function useAuthRedirect() {
-  +    auth.setPendingLoginVerification(null)
-       navigate({ to: '/sign-in', replace: true })
-     }
-   
-  @@ -115,6 +157,7 @@ export function useAuthRedirect() {
-  +    handleLoginResult,
-       redirectTo2FA,
-       redirectToLogin,
-       redirectToRegister,
-  +49 -6
-
-web/default/src/features/auth/otp/components/otp-form.tsx
-  @@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
-  -import { useState } from 'react'
-  +import { useEffect, useRef, useState } from 'react'
-   import { useForm } from 'react-hook-form'
-   import { useTranslation } from 'react-i18next'
-   import { toast } from 'sonner'
-  @@ -48,14 +48,12 @@ import {
-  -import { saveUserId } from '@/features/auth/lib/storage'
-   import {
-     isValidOTP,
-     isValidBackupCode,
-     formatBackupCode,
-     cleanBackupCode,
-   } from '@/features/auth/lib/validation'
-  -import type { User } from '@/features/users/types'
-   import { cn } from '@/lib/utils'
-   import { useAuthStore } from '@/stores/auth-store'
-   
-  @@ -65,9 +63,20 @@ export function OtpForm({ className, ...props }: OtpFormProps) {
-  +  const completed = useRef(false)
-  +  const redirected = useRef(false)
-   
-  -  const { auth } = useAuthStore()
-  -  const { redirectToLogin } = useAuthRedirect()
-  +  const pendingLogin = useAuthStore(
-  +    (state) => state.auth.pendingLoginVerification
-  +  )
-  +  const { redirectToLogin, handleLoginSuccess } = useAuthRedirect()
-  +
-  +  useEffect(() => {
-  +    if (!pendingLogin && !completed.current && !redirected.current) {
-  +      redirected.current = true
-  +      redirectToLogin()
-  +    }
-  +  }, [pendingLogin, redirectToLogin])
-   
-     const form = useForm<z.infer<typeof otpFormSchema>>({
-       resolver: zodResolver(otpFormSchema),
-  @@ -94,29 +103,28 @@ export function OtpForm({ className, ...props }: OtpFormProps) {
-  -      const res = await login2fa({ code })
-  +      const pending = useAuthStore.getState().auth.pendingLoginVerification
-  +      if (!pending) {
-  +        redirectToLogin()
-  +        return
-  +      }
-  +      const res = await login2fa({
-  +        code,
-  +        flow_token: pending.challenge.flow_token,
-  +      })
-   
-         if (!res.success) {
-           toast.error(res.message || t('Invalid code'))
-           return
-         }
-   
-  -      // Handle user data from 2FA login response
-  -      const userData = res.data
-  -      if (!userData) {
-  +      if (!res.data) {
-           throw new Error('No user data received from login')
-         }
-   
-  -      // Update auth store
-  -      auth.setUser(userData as User)
-  -
-  -      // Store user ID in localStorage for compatibility
-  -      if (userData.id) {
-  -        saveUserId(userData.id)
-  -      }
-  -
-  +      completed.current = true
-         toast.success(t('Signed in'))
-  -      redirectToLogin() // This will redirect to dashboard via the redirect logic
-  +      await handleLoginSuccess(res.data, pending.redirectTo)
-       } catch (error) {
-         // eslint-disable-next-line no-console
-         console.error('2FA verification error:', error)
-  +26 -18
-
-web/default/src/features/auth/sign-in/components/user-auth-form.tsx
-  @@ -86,7 +86,7 @@ export function UserAuthForm({
-  -  const { handleLoginSuccess, redirectTo2FA } = useAuthRedirect()
-  +  const { handleLoginSuccess, handleLoginResult } = useAuthRedirect()
-   
-     const hasUserAgreement = Boolean(status?.user_agreement_enabled)
-     const hasPrivacyPolicy = Boolean(status?.privacy_policy_enabled)
-  @@ -160,13 +160,9 @@ export function UserAuthForm({
-  -        if (res.data?.require_2fa) {
-  -          redirectTo2FA()
-  -          return
-  +        if (await handleLoginResult(res.data, redirectTo)) {
-  +          toast.success(t('Welcome back!'))
-           }
-  -
-  -        await handleLoginSuccess(res.data as { id?: number } | null, redirectTo)
-  -        toast.success(t('Welcome back!'))
-         }
-       } catch {
-         // Errors are handled by global interceptor
-  +3 -7
-
-web/default/src/features/auth/types.ts
-  @@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
-  -import type { User } from '@/features/users/types'
-  +import type { AuthBundle, LoginChallenge } from '@/stores/auth-store'
-   
-   // ============================================================================
-   // API Payloads
-  @@ -30,6 +30,7 @@ export interface LoginPayload {
-  +  flow_token: string
+ 
+     // Navigate to target page
+-    const targetPath = redirectTo || '/dashboard'
+-    navigate({ to: targetPath, replace: true })
++    const targetPath = safeLoginRedirect(redirectTo) || '/dashboard'
++    await navigate({ href: targetPath, replace: true })
++  }
++
++  /** Route the primary login response without treating a pending challenge as a session. */
++  const handleLoginResult = async (
++    result: unknown,
++    redirectTo?: string
++  ): Promise<boolean> => {
++    if (isAuthBundle(result)) {
++      await handleLoginSuccess(result, redirectTo)
++      return true
++    }
++    if (!isLoginChallenge(result)) {
++      throw new Error('Login failed')
++    }
++    if (result.expires_at * 1000 <= Date.now()) {
++      throw new Error('Login flow expired. Please sign in again.')
++    }
++    auth.setPendingLoginVerification({
++      challenge: result,
++      redirectTo: safeLoginRedirect(redirectTo),
++    })
++    await navigate({ to: '/otp', replace: true })
++    return false
    }
-   
-   export interface RegisterPayload {
-  @@ -64,16 +65,13 @@ export interface BindEmailPayload {
-  -  data?: {
-  -    require_2fa?: boolean
-  -    id?: number
-  -  }
-  +  data?: AuthBundle | LoginChallenge
+ 
+   /**
+@@ -103,7 +142,8 @@ export function useAuthRedirect() {
+    * Redirect to login page
+    */
+   const redirectToLogin = () => {
+-    navigate({ to: '/sign-in', replace: true })
++    auth.setPendingLoginVerification(null)
++    void navigate({ to: '/sign-in', replace: true })
    }
-   
-   export interface Login2FAResponse {
-     success: boolean
-     message: string
-  -  data?: User
-  +  data?: AuthBundle
-   }
-   
-   export interface ApiResponse {
-  +4 -6
-
-web/default/src/lib/api.ts
-  @@ -16,17 +16,20 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
-  -import axios, { type AxiosRequestConfig } from 'axios'
-  +import axios, { type AxiosError, type AxiosRequestConfig } from 'axios'
-   import { t } from 'i18next'
-   import { toast } from 'sonner'
-   
-  -import { useAuthStore } from '@/stores/auth-store'
-  +import { isAuthBundle } from '@/features/auth/lib/login-flow'
-  +import { useAuthStore, type AuthBundle } from '@/stores/auth-store'
-   
-   declare module 'axios' {
-     export interface AxiosRequestConfig {
-       skipBusinessError?: boolean
-       skipErrorHandler?: boolean
-       disableDuplicate?: boolean
-  +    skipAuthRefresh?: boolean
-  +    authRetry?: boolean
-     }
-   }
-   
-  @@ -48,6 +51,38 @@ export const api = axios.create({
-  +export function applyAuthBundle(bundle: AuthBundle): void {
-  +  useAuthStore.getState().auth.setBundle(bundle)
-  +}
-  +
-  +let refreshPromise: Promise<boolean> | null = null
-  +
-  +async function refreshAuthentication(): Promise<boolean> {
-  +  if (!refreshPromise) {
-  +    refreshPromise = (async () => {
-  +      try {
-  +        const response = await api.post('/api/user/auth/refresh', undefined, {
-  +          skipAuthRefresh: true,
-  +          skipErrorHandler: true,
-  +        })
-  +        const bundle = response.data?.success ? response.data.data : undefined
-  +        if (!isAuthBundle(bundle)) {
-  +          useAuthStore.getState().auth.reset()
-  +          return false
-  +        }
-  +        applyAuthBundle(bundle)
-  +        return true
-  +      } catch {
-  +        useAuthStore.getState().auth.reset()
-  +        return false
-  +      } finally {
-  +        refreshPromise = null
-  +      }
-  +    })()
-  +  }
-  +  return refreshPromise
-  +}
-  +
-   // ============================================================================
-   // Request Deduplication
-   // ============================================================================
-  @@ -65,7 +100,8 @@ api.get = ((url: string, config: ApiRequestConfig = {}) => {
-  -  if (inFlightGet.has(key)) return inFlightGet.get(key)!
-  +  const existingRequest = inFlightGet.get(key)
-  +  if (existingRequest) return existingRequest
-   
-     // Create new request and clean up after completion
-     const req = originalGet(url, config).finally(() => inFlightGet.delete(key))
-  @@ -97,15 +133,26 @@ api.interceptors.response.use(
-  -  (error) => {
-  -    const skip = error?.config?.skipErrorHandler
-  +  async (error: AxiosError) => {
-  +    const config = error.config as ApiRequestConfig | undefined
-  +    const skip = config?.skipErrorHandler
-       const status = error?.response?.status
-   
-       if (status === 401) {
-  -      try {
-  +      if (config && !config.skipAuthRefresh && !config.authRetry) {
-  +        config.authRetry = true
-  +        if (await refreshAuthentication()) {
-  +          const accessToken = useAuthStore.getState().auth.accessToken
-  +          if (accessToken) {
-  +            config.headers = {
-  +              ...config.headers,
-  +              Authorization: `Bearer ${accessToken}`,
-  +            }
-  +          }
-  +          return api.request(config)
-  +        }
-  +      } else if (!config?.skipAuthRefresh) {
-           useAuthStore.getState().auth.reset()
-  -      } catch {
-  -        /* empty */
-         }
-   
-         if (!skip) {
-  @@ -113,8 +160,10 @@ api.interceptors.response.use(
-  -      const msg =
-  -        error?.response?.data?.message || error?.message || t('Request failed')
-  +      const responseData = error.response?.data as
-  +        | { message?: string }
-  +        | undefined
-  +      const msg = responseData?.message || error.message || t('Request failed')
-         toast.error(msg)
-       }
-       return Promise.reject(error)
-  @@ -151,6 +200,10 @@ export function getCommonHeaders(): Record<string, string> {
-  +  const accessToken = useAuthStore.getState().auth.accessToken
-  +  if (accessToken) {
-  +    headers.Authorization = `Bearer ${accessToken}`
-  +  }
-   
-     return headers
-   }
-  @@ -166,6 +219,10 @@ api.interceptors.request.use((config) => {
-  +  const accessToken = useAuthStore.getState().auth.accessToken
-  +  if (accessToken) {
-  +    config.headers.Authorization = `Bearer ${accessToken}`
-  +  }
-     return config
-   })
-   
-  +67 -10
-
-web/default/src/stores/auth-store.ts
-  @@ -52,10 +52,49 @@ export interface AuthUser {
-  +export interface LoginSession {
-  +  sid: string
-  +  current: boolean
-  +  login_method: string
-  +  ip: string
-  +  user_agent: string
-  +  created_at: number
-  +  last_active_at: number
-  +  expires_at: number
-  +}
-  +
-  +export interface AuthBundle {
-  +  access_token: string
-  +  token_type: string
-  +  access_expires_at: number
-  +  user: AuthUser
-  +  session: LoginSession
-  +}
-  +
-  +export interface LoginChallenge {
-  +  require_verification: true
-  +  flow_token: string
-  +  expires_at: number
-  +  methods: Array<{ method: string; available: boolean; reason?: string }>
-  +}
-  +
-  +export interface PendingLoginVerification {
-  +  challenge: LoginChallenge
-  +  redirectTo?: string
-  +}
-  +
-   interface AuthState {
-     auth: {
-       user: AuthUser | null
-  +    accessToken: string | null
-  +    accessExpiresAt: number | null
-  +    session: LoginSession | null
-  +    pendingLoginVerification: PendingLoginVerification | null
-       setUser: (user: AuthUser | null) => void
-  +    setBundle: (bundle: AuthBundle) => void
-  +    setPendingLoginVerification: (
-  +      pending: PendingLoginVerification | null
-  +    ) => void
-       reset: () => void
-     }
-   }
-  @@ -80,6 +119,10 @@ export const useAuthStore = create<AuthState>()((set) => {
-  +      accessToken: null,
-  +      accessExpiresAt: null,
-  +      session: null,
-  +      pendingLoginVerification: null,
-         setUser: (user) =>
-           set((state) => {
-             // Persist user to localStorage
-  @@ -92,14 +135,45 @@ export const useAuthStore = create<AuthState>()((set) => {
-  +      setBundle: (bundle) =>
-  +        set((state) => {
-  +          if (typeof window !== 'undefined') {
-  +            window.localStorage.setItem('user', JSON.stringify(bundle.user))
-  +            window.localStorage.setItem('uid', String(bundle.user.id))
-  +          }
-  +          return {
-  +            ...state,
-  +            auth: {
-  +              ...state.auth,
-  +              user: bundle.user,
-  +              accessToken: bundle.access_token,
-  +              accessExpiresAt: bundle.access_expires_at,
-  +              session: bundle.session,
-  +              pendingLoginVerification: null,
-  +            },
-  +          }
-  +        }),
-  +      setPendingLoginVerification: (pendingLoginVerification) =>
-  +        set((state) => ({
-  +          ...state,
-  +          auth: { ...state.auth, pendingLoginVerification },
-  +        })),
-         reset: () =>
-           set((state) => {
-             if (typeof window !== 'undefined') {
-               window.localStorage.removeItem('user')
-  +            window.localStorage.removeItem('uid')
-             }
-             return {
-               ...state,
-  -            auth: { ...state.auth, user: null },
-  +            auth: {
-  +              ...state.auth,
-  +              user: null,
-  +              accessToken: null,
-  +              accessExpiresAt: null,
-  +              session: null,
-  +              pendingLoginVerification: null,
-  +            },
-             }
-           }),
-       },
-  +75 -1
+ 
+   /**
+@@ -115,6 +155,7 @@ export function useAuthRedirect() {
+ 
+   return {
+     handleLoginSuccess,
++    handleLoginResult,
+     redirectTo2FA,
+     redirectToLogin,
+     redirectToRegister,
 diff --git a/web/default/src/features/auth/lib/login-flow.ts b/web/default/src/features/auth/lib/login-flow.ts
 new file mode 100644
-index 000000000..7c826d22b
+index 000000000..d4115c07c
 --- /dev/null
 +++ b/web/default/src/features/auth/lib/login-flow.ts
-@@ -0,0 +1,49 @@
+@@ -0,0 +1,71 @@
 +/*
 +Copyright (C) 2023-2026 QuantumNous
 +
@@ -494,13 +149,23 @@ index 000000000..7c826d22b
 +export function isAuthBundle(value: unknown): value is AuthBundle {
 +  if (!value || typeof value !== 'object') return false
 +  const bundle = value as Partial<AuthBundle>
++  const session = bundle.session
 +  return Boolean(
 +    typeof bundle.access_token === 'string' &&
-+    bundle.access_token.length > 0 &&
-+    bundle.user &&
-+    typeof bundle.user.id === 'number' &&
-+    bundle.session &&
-+    typeof bundle.session.sid === 'string'
++      bundle.access_token.length > 0 &&
++      typeof bundle.token_type === 'string' &&
++      bundle.token_type.length > 0 &&
++      typeof bundle.access_expires_at === 'number' &&
++      Number.isFinite(bundle.access_expires_at) &&
++      bundle.user &&
++      typeof bundle.user === 'object' &&
++      typeof bundle.user.id === 'number' &&
++      Number.isFinite(bundle.user.id) &&
++      session &&
++      typeof session.sid === 'string' &&
++      session.sid.length > 0 &&
++      typeof session.expires_at === 'number' &&
++      Number.isFinite(session.expires_at)
 +  )
 +}
 +
@@ -509,73 +174,467 @@ index 000000000..7c826d22b
 +  const challenge = value as Partial<LoginChallenge>
 +  return Boolean(
 +    challenge.require_verification === true &&
-+    typeof challenge.flow_token === 'string' &&
-+    challenge.flow_token.length > 0 &&
-+    typeof challenge.expires_at === 'number'
++      typeof challenge.flow_token === 'string' &&
++      challenge.flow_token.length > 0 &&
++      typeof challenge.expires_at === 'number' &&
++      Number.isFinite(challenge.expires_at) &&
++      Array.isArray(challenge.methods) &&
++      challenge.methods.length > 0 &&
++      challenge.methods.every(
++        (method) =>
++          method &&
++          (method.method === '2fa' || method.method === 'passkey') &&
++          typeof method.available === 'boolean'
++      )
 +  )
 +}
 +
 +export function safeLoginRedirect(path?: string): string | undefined {
-+  return path && path.startsWith('/') && !path.startsWith('//')
++  return path &&
++    path.startsWith('/') &&
++    !path.startsWith('//') &&
++    !path.includes('\\')
 +    ? path
 +    : undefined
 +}
-diff --git a/web/default/src/features/auth/lib/login-flow.test.ts b/web/default/src/features/auth/lib/login-flow.test.ts
-new file mode 100644
-index 000000000..2d0073e57
---- /dev/null
-+++ b/web/default/src/features/auth/lib/login-flow.test.ts
-@@ -0,0 +1,40 @@
-+import { expect, test } from 'bun:test'
+diff --git a/web/default/src/features/auth/otp/components/otp-form.tsx b/web/default/src/features/auth/otp/components/otp-form.tsx
+index cf5c1fcba..1b3e9ae0d 100644
+--- a/web/default/src/features/auth/otp/components/otp-form.tsx
++++ b/web/default/src/features/auth/otp/components/otp-form.tsx
+@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
+ */
+ import { zodResolver } from '@hookform/resolvers/zod'
+ import { Loader2 } from 'lucide-react'
+-import { useState } from 'react'
++import { useEffect, useRef, useState } from 'react'
+ import { useForm } from 'react-hook-form'
+ import { useTranslation } from 'react-i18next'
+ import { toast } from 'sonner'
+@@ -48,14 +48,12 @@ import {
+   BACKUP_CODE_LENGTH,
+ } from '@/features/auth/constants'
+ import { useAuthRedirect } from '@/features/auth/hooks/use-auth-redirect'
+-import { saveUserId } from '@/features/auth/lib/storage'
+ import {
+   isValidOTP,
+   isValidBackupCode,
+   formatBackupCode,
+   cleanBackupCode,
+ } from '@/features/auth/lib/validation'
+-import type { User } from '@/features/users/types'
+ import { cn } from '@/lib/utils'
+ import { useAuthStore } from '@/stores/auth-store'
+ 
+@@ -65,9 +63,20 @@ export function OtpForm({ className, ...props }: OtpFormProps) {
+   const { t } = useTranslation()
+   const [isLoading, setIsLoading] = useState(false)
+   const [useBackupCode, setUseBackupCode] = useState(false)
++  const completed = useRef(false)
++  const redirected = useRef(false)
+ 
+-  const { auth } = useAuthStore()
+-  const { redirectToLogin } = useAuthRedirect()
++  const pendingLogin = useAuthStore(
++    (state) => state.auth.pendingLoginVerification
++  )
++  const { redirectToLogin, handleLoginSuccess } = useAuthRedirect()
 +
-+import { isAuthBundle, isLoginChallenge, safeLoginRedirect } from './login-flow'
++  useEffect(() => {
++    if (!pendingLogin && !completed.current && !redirected.current) {
++      redirected.current = true
++      redirectToLogin()
++    }
++  }, [pendingLogin, redirectToLogin])
+ 
+   const form = useForm<z.infer<typeof otpFormSchema>>({
+     resolver: zodResolver(otpFormSchema),
+@@ -77,6 +86,8 @@ export function OtpForm({ className, ...props }: OtpFormProps) {
+   const otp = form.watch('otp')
+ 
+   async function onSubmit(data: z.infer<typeof otpFormSchema>) {
++    if (isLoading) return
 +
-+test('recognizes a login challenge without treating it as an auth bundle', () => {
-+  const challenge = {
-+    require_verification: true,
-+    flow_token: 'flow-token',
-+    expires_at: 1,
-+    methods: [{ method: '2fa', available: true }],
-+  }
-+
-+  expect(isLoginChallenge(challenge)).toBe(true)
-+  expect(isAuthBundle(challenge)).toBe(false)
-+  expect(isLoginChallenge({ ...challenge, flow_token: '' })).toBe(false)
-+})
-+
-+test('accepts a completed bundle and only internal redirect paths', () => {
-+  const bundle = {
-+    access_token: 'access-token',
-+    token_type: 'Bearer',
-+    access_expires_at: 1,
-+    user: { id: 1, username: 'user', role: 1 },
-+    session: {
-+      sid: 'session',
-+      current: true,
-+      login_method: 'password',
-+      ip: '',
-+      user_agent: '',
-+      created_at: 1,
-+      last_active_at: 1,
-+      expires_at: 2,
-+    },
-+  }
-+
-+  expect(isAuthBundle(bundle)).toBe(true)
-+  expect(safeLoginRedirect('/dashboard')).toBe('/dashboard')
-+  expect(safeLoginRedirect('//attacker.example')).toBeUndefined()
-+  expect(safeLoginRedirect('https://attacker.example')).toBeUndefined()
-+})
-diff --git a/web/default/src/bun-test.d.ts b/web/default/src/bun-test.d.ts
-new file mode 100644
-index 000000000..c72a3c85c
---- /dev/null
-+++ b/web/default/src/bun-test.d.ts
-@@ -0,0 +1,7 @@
-+declare module 'bun:test' {
-+  export function test(name: string, fn: () => void): void
-+  export function expect(value: unknown): {
-+    toBe(expected: unknown): void
-+    toBeUndefined(): void
-+  }
+     // Validate based on mode
+     if (useBackupCode) {
+       if (!isValidBackupCode(data.otp)) {
+@@ -94,34 +105,40 @@ export function OtpForm({ className, ...props }: OtpFormProps) {
+     try {
+       // Remove all hyphens from backup code before sending to backend
+       const code = useBackupCode ? cleanBackupCode(data.otp) : data.otp
+-      const res = await login2fa({ code })
++      const pending = useAuthStore.getState().auth.pendingLoginVerification
++      if (
++        !pending ||
++        pending.challenge.expires_at * 1000 <= Date.now()
++      ) {
++        toast.error(t('Session expired?'))
++        redirectToLogin()
++        return
++      }
++      const res = await login2fa({
++        code,
++        flow_token: pending.challenge.flow_token,
++      })
+ 
+       if (!res.success) {
+         toast.error(res.message || t('Invalid code'))
+         return
+       }
+ 
+-      // Handle user data from 2FA login response
+-      const userData = res.data
+-      if (!userData) {
++      if (!res.data) {
+         throw new Error('No user data received from login')
+       }
+ 
+-      // Update auth store
+-      auth.setUser(userData as User)
+-
+-      // Store user ID in localStorage for compatibility
+-      if (userData.id) {
+-        saveUserId(userData.id)
+-      }
+-
++      completed.current = true
+       toast.success(t('Signed in'))
+-      redirectToLogin() // This will redirect to dashboard via the redirect logic
++      await handleLoginSuccess(res.data, pending.redirectTo)
+     } catch (error) {
+-      // eslint-disable-next-line no-console
+-      console.error('2FA verification error:', error)
++      const responseMessage = (
++        error as { response?: { data?: { message?: unknown } } }
++      )?.response?.data?.message
+       const errorMessage =
+-        error instanceof Error ? error.message : t('Verification failed')
++        typeof responseMessage === 'string'
++          ? responseMessage
++          : t('Verification failed')
+       toast.error(errorMessage)
+     } finally {
+       setIsLoading(false)
+diff --git a/web/default/src/features/auth/sign-in/components/user-auth-form.tsx b/web/default/src/features/auth/sign-in/components/user-auth-form.tsx
+index 0e7ba53a8..a2275c076 100644
+--- a/web/default/src/features/auth/sign-in/components/user-auth-form.tsx
++++ b/web/default/src/features/auth/sign-in/components/user-auth-form.tsx
+@@ -86,7 +86,7 @@ export function UserAuthForm({
+     setTurnstileToken,
+     validateTurnstile,
+   } = useTurnstile()
+-  const { handleLoginSuccess, redirectTo2FA } = useAuthRedirect()
++  const { handleLoginSuccess, handleLoginResult } = useAuthRedirect()
+ 
+   const hasUserAgreement = Boolean(status?.user_agreement_enabled)
+   const hasPrivacyPolicy = Boolean(status?.privacy_policy_enabled)
+@@ -160,13 +160,9 @@ export function UserAuthForm({
+       })
+ 
+       if (res.success) {
+-        if (res.data?.require_2fa) {
+-          redirectTo2FA()
+-          return
++        if (await handleLoginResult(res.data, redirectTo)) {
++          toast.success(t('Welcome back!'))
+         }
+-
+-        await handleLoginSuccess(res.data as { id?: number } | null, redirectTo)
+-        toast.success(t('Welcome back!'))
+       }
+     } catch {
+       // Errors are handled by global interceptor
+diff --git a/web/default/src/features/auth/types.ts b/web/default/src/features/auth/types.ts
+index 640ff002f..85ee17e44 100644
+--- a/web/default/src/features/auth/types.ts
++++ b/web/default/src/features/auth/types.ts
+@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
+ 
+ For commercial licensing, please contact support@quantumnous.com
+ */
+-import type { User } from '@/features/users/types'
++import type { AuthBundle, LoginChallenge } from '@/stores/auth-store'
+ 
+ // ============================================================================
+ // API Payloads
+@@ -30,6 +30,7 @@ export interface LoginPayload {
+ 
+ export interface TwoFAPayload {
+   code: string
++  flow_token: string
+ }
+ 
+ export interface RegisterPayload {
+@@ -64,16 +65,13 @@ export interface BindEmailPayload {
+ export interface LoginResponse {
+   success: boolean
+   message: string
+-  data?: {
+-    require_2fa?: boolean
+-    id?: number
+-  }
++  data?: AuthBundle | LoginChallenge
+ }
+ 
+ export interface Login2FAResponse {
+   success: boolean
+   message: string
+-  data?: User
++  data?: AuthBundle
+ }
+ 
+ export interface ApiResponse {
+diff --git a/web/default/src/lib/api.ts b/web/default/src/lib/api.ts
+index b4b22917a..a2d06aa90 100644
+--- a/web/default/src/lib/api.ts
++++ b/web/default/src/lib/api.ts
+@@ -16,17 +16,20 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
+ 
+ For commercial licensing, please contact support@quantumnous.com
+ */
+-import axios, { type AxiosRequestConfig } from 'axios'
++import axios, { type AxiosError, type AxiosRequestConfig } from 'axios'
+ import { t } from 'i18next'
+ import { toast } from 'sonner'
+ 
+-import { useAuthStore } from '@/stores/auth-store'
++import { isAuthBundle } from '@/features/auth/lib/login-flow'
++import { useAuthStore, type AuthBundle } from '@/stores/auth-store'
+ 
+ declare module 'axios' {
+   export interface AxiosRequestConfig {
+     skipBusinessError?: boolean
+     skipErrorHandler?: boolean
+     disableDuplicate?: boolean
++    skipAuthRefresh?: boolean
++    authRetry?: boolean
+   }
+ }
+ 
+@@ -48,6 +51,38 @@ export const api = axios.create({
+   },
+ })
+ 
++export function applyAuthBundle(bundle: AuthBundle): void {
++  useAuthStore.getState().auth.setBundle(bundle)
 +}
++
++let refreshPromise: Promise<boolean> | null = null
++
++async function refreshAuthentication(): Promise<boolean> {
++  if (!refreshPromise) {
++    refreshPromise = (async () => {
++      try {
++        const response = await api.post('/api/user/auth/refresh', undefined, {
++          skipAuthRefresh: true,
++          skipErrorHandler: true,
++        })
++        const bundle = response.data?.success ? response.data.data : undefined
++        if (!isAuthBundle(bundle)) {
++          useAuthStore.getState().auth.reset()
++          return false
++        }
++        applyAuthBundle(bundle)
++        return true
++      } catch {
++        useAuthStore.getState().auth.reset()
++        return false
++      } finally {
++        refreshPromise = null
++      }
++    })()
++  }
++  return refreshPromise
++}
++
+ // ============================================================================
+ // Request Deduplication
+ // ============================================================================
+@@ -65,7 +100,8 @@ api.get = ((url: string, config: ApiRequestConfig = {}) => {
+   const key = `${url}?${params}`
+ 
+   // Return existing in-flight request if available
+-  if (inFlightGet.has(key)) return inFlightGet.get(key)!
++  const existingRequest = inFlightGet.get(key)
++  if (existingRequest) return existingRequest
+ 
+   // Create new request and clean up after completion
+   const req = originalGet(url, config).finally(() => inFlightGet.delete(key))
+@@ -97,15 +133,26 @@ api.interceptors.response.use(
+     }
+     return response
+   },
+-  (error) => {
+-    const skip = error?.config?.skipErrorHandler
++  async (error: AxiosError) => {
++    const config = error.config as ApiRequestConfig | undefined
++    const skip = config?.skipErrorHandler
+     const status = error?.response?.status
+ 
+     if (status === 401) {
+-      try {
++      if (config && !config.skipAuthRefresh && !config.authRetry) {
++        config.authRetry = true
++        if (await refreshAuthentication()) {
++          const accessToken = useAuthStore.getState().auth.accessToken
++          if (accessToken) {
++            config.headers = {
++              ...config.headers,
++              Authorization: `Bearer ${accessToken}`,
++            }
++          }
++          return api.request(config)
++        }
++      } else if (!config?.skipAuthRefresh) {
+         useAuthStore.getState().auth.reset()
+-      } catch {
+-        /* empty */
+       }
+ 
+       if (!skip) {
+@@ -113,8 +160,10 @@ api.interceptors.response.use(
+       }
+     } else if (!skip) {
+       // Other errors: show error message from response or default
+-      const msg =
+-        error?.response?.data?.message || error?.message || t('Request failed')
++      const responseData = error.response?.data as
++        | { message?: string }
++        | undefined
++      const msg = responseData?.message || error.message || t('Request failed')
+       toast.error(msg)
+     }
+     return Promise.reject(error)
+@@ -151,6 +200,10 @@ export function getCommonHeaders(): Record<string, string> {
+   if (uid) {
+     headers['New-Api-User'] = uid
+   }
++  const accessToken = useAuthStore.getState().auth.accessToken
++  if (accessToken) {
++    headers.Authorization = `Bearer ${accessToken}`
++  }
+ 
+   return headers
+ }
+@@ -166,6 +219,10 @@ api.interceptors.request.use((config) => {
+     // Custom header for user identification
+     ;(config.headers as Record<string, string>)['New-Api-User'] = uid
+   }
++  const accessToken = useAuthStore.getState().auth.accessToken
++  if (accessToken) {
++    config.headers.Authorization = `Bearer ${accessToken}`
++  }
+   return config
+ })
+ 
+diff --git a/web/default/src/stores/auth-store.ts b/web/default/src/stores/auth-store.ts
+index ef089f6b8..c998a616e 100644
+--- a/web/default/src/stores/auth-store.ts
++++ b/web/default/src/stores/auth-store.ts
+@@ -52,10 +52,49 @@ export interface AuthUser {
+   permissions?: UserPermissions
+ }
+ 
++export interface LoginSession {
++  sid: string
++  current: boolean
++  login_method: string
++  ip: string
++  user_agent: string
++  created_at: number
++  last_active_at: number
++  expires_at: number
++}
++
++export interface AuthBundle {
++  access_token: string
++  token_type: string
++  access_expires_at: number
++  user: AuthUser
++  session: LoginSession
++}
++
++export interface LoginChallenge {
++  require_verification: true
++  flow_token: string
++  expires_at: number
++  methods: Array<{ method: string; available: boolean; reason?: string }>
++}
++
++export interface PendingLoginVerification {
++  challenge: LoginChallenge
++  redirectTo?: string
++}
++
+ interface AuthState {
+   auth: {
+     user: AuthUser | null
++    accessToken: string | null
++    accessExpiresAt: number | null
++    session: LoginSession | null
++    pendingLoginVerification: PendingLoginVerification | null
+     setUser: (user: AuthUser | null) => void
++    setBundle: (bundle: AuthBundle) => void
++    setPendingLoginVerification: (
++      pending: PendingLoginVerification | null
++    ) => void
+     reset: () => void
+   }
+ }
+@@ -80,6 +119,10 @@ export const useAuthStore = create<AuthState>()((set) => {
+   return {
+     auth: {
+       user: initUser,
++      accessToken: null,
++      accessExpiresAt: null,
++      session: null,
++      pendingLoginVerification: null,
+       setUser: (user) =>
+         set((state) => {
+           // Persist user to localStorage
+@@ -92,14 +135,45 @@ export const useAuthStore = create<AuthState>()((set) => {
+           }
+           return { ...state, auth: { ...state.auth, user } }
+         }),
++      setBundle: (bundle) =>
++        set((state) => {
++          if (typeof window !== 'undefined') {
++            window.localStorage.setItem('user', JSON.stringify(bundle.user))
++            window.localStorage.setItem('uid', String(bundle.user.id))
++          }
++          return {
++            ...state,
++            auth: {
++              ...state.auth,
++              user: bundle.user,
++              accessToken: bundle.access_token,
++              accessExpiresAt: bundle.access_expires_at,
++              session: bundle.session,
++              pendingLoginVerification: null,
++            },
++          }
++        }),
++      setPendingLoginVerification: (pendingLoginVerification) =>
++        set((state) => ({
++          ...state,
++          auth: { ...state.auth, pendingLoginVerification },
++        })),
+       reset: () =>
+         set((state) => {
+           if (typeof window !== 'undefined') {
+             window.localStorage.removeItem('user')
++            window.localStorage.removeItem('uid')
+           }
+           return {
+             ...state,
+-            auth: { ...state.auth, user: null },
++            auth: {
++              ...state.auth,
++              user: null,
++              accessToken: null,
++              accessExpiresAt: null,
++              session: null,
++              pendingLoginVerification: null,
++            },
+           }
+         }),
+     },

@@ -70,10 +70,8 @@ export function useAuthRedirect() {
       if (savedLang && savedLang !== i18n.language) {
         await i18n.changeLanguage(savedLang)
       }
-      await navigate({
-        to: safeLoginRedirect(redirectTo) || '/dashboard',
-        replace: true,
-      })
+      const targetPath = safeLoginRedirect(redirectTo) || '/dashboard'
+      await navigate({ href: targetPath, replace: true })
       return
     }
 
@@ -107,7 +105,7 @@ export function useAuthRedirect() {
 
     // Navigate to target page
     const targetPath = safeLoginRedirect(redirectTo) || '/dashboard'
-    await navigate({ to: targetPath, replace: true })
+    await navigate({ href: targetPath, replace: true })
   }
 
   /** Route the primary login response without treating a pending challenge as a session. */
@@ -145,7 +143,7 @@ export function useAuthRedirect() {
    */
   const redirectToLogin = () => {
     auth.setPendingLoginVerification(null)
-    navigate({ to: '/sign-in', replace: true })
+    void navigate({ to: '/sign-in', replace: true })
   }
 
   /**
