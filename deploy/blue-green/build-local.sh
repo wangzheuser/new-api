@@ -207,7 +207,7 @@ cp -R "$DEFAULT_TREE/web/default/dist"/. "$DEFAULT_TREE/web/dist"/
 
 go_start="$(date +%s)"
 export GOCACHE="$WORK/go-cache"
-(cd "$DEFAULT_TREE" && "$GO_BIN" list ./... | grep -v '/artifacts/merge-verification$' | xargs "$GO_BIN" test) >"$OUTPUT/logs/go-test.log" 2>&1
+(cd "$DEFAULT_TREE" && "$GO_BIN" list ./... | grep -vE '/(artifacts/merge-verification|web/node_modules)(/|$)' | xargs "$GO_BIN" test) >"$OUTPUT/logs/go-test.log" 2>&1
 (cd "$DEFAULT_TREE" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 GOEXPERIMENT=greenteagc \
   "$GO_BIN" build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$VERSION'" -o "$RUNTIME_CONTEXT/new-api")
 printf 'go_test_build_seconds=%s\n' "$(( $(date +%s) - go_start ))"
