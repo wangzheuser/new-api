@@ -155,7 +155,7 @@ extract_clean_dist "$PREVIOUS_CLASSIC" "$PREVIOUS_CLASSIC_DIR"
 # Keep default's hoisted tree for the workspace-wide TypeScript dependency graph.
 (cd "$DEFAULT_TREE/web" && bun install --frozen-lockfile)
 # Classic has a separate dependency graph because it uses Tailwind 3.
-(cd "$CLASSIC_TREE/web" && bun install --filter ./classic --frozen-lockfile --linker isolated)
+(cd "$CLASSIC_TREE/web" && bun install --filter ./classic --frozen-lockfile --linker hoisted)
 
 build_default() {
   cd "$DEFAULT_TREE/web"
