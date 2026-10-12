@@ -257,6 +257,13 @@ func migrateDB() error {
 	if err := migrateTokenModelLimitsToText(); err != nil {
 		return err
 	}
+	// Replace legacy PostgreSQL unique constraints before GORM inspects the models.
+	if err := migrateTokenKeyUniqueness(DB); err != nil {
+		return err
+	}
+	if err := migratePrefillGroupUniqueness(DB); err != nil {
+		return err
+	}
 
 	err := DB.AutoMigrate(
 		&Channel{},
