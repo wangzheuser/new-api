@@ -81,3 +81,45 @@ result: rollback copy restored to BASELINE_FILE; current source and MODIFIED_FIL
 exit status: 0
 
 restored behavior/status: rollback was verified only on an isolated copy; the working tree remains on modified branch dev, and US remains rolled back on new-api-green dev-415087a8cec5-local-amd64.
+
+US blue-green deployment evidence:
+$ deploy/blue-green/build-local.sh self-check
+input: local release toolchain
+literal output: self_check=passed bash=5.3.3(1)-release bun=1.3.4 go=go1.26.0 docker=28.5.1 zstd=Zstandard
+exit status: 0
+
+$ TMPDIR=/tmp/new-api-release-build-242aa8edf67c GOFLAGS=-p=2 GOMAXPROCS=2 deploy/blue-green/build-local.sh prepare --commit 242aa8edf67c538c15d429b9dbc4b802f77b4c7c --previous-default /Users/777java/.cache/new-api-deploy/previous-56c3ece1440a/artifacts/default-clean-56c3ece1440a.tar.zst --previous-classic /Users/777java/.cache/new-api-deploy/previous-56c3ece1440a/artifacts/classic-clean-56c3ece1440a.tar.zst --output /Users/777java/.cache/new-api-deploy/releases/242aa8edf67c
+input: exact pushed origin/dev commit 242aa8edf67c538c15d429b9dbc4b802f77b4c7c
+literal output: frontend_build_seconds=9; go_test_build_seconds=155; prepare=passed; image_sha256=a5029757871c1a1bb6d05998598b0fa35c91c5766f53074272e40b321a8e91b0
+result: Default/Classic builds, full Go test matrix, linux/amd64 image, smoke and all artifact checks passed
+exit status: 0
+
+$ ./release-remote.sh backup; ./release-remote.sh stage; ./release-remote.sh gate; ./release-remote.sh cutover --dry-run; ./release-remote.sh rollback --dry-run
+input: release 20261012T112129Z-242aa8edf67c on server=us
+literal output: backup=passed bytes=2930922; stage=passed candidate=new-api-blue; gate=passed; cutover_dry_run=passed; rollback_dry_run=passed
+result: remote backup, candidate health, resource gate, and transition dry-runs passed
+exit status: 0
+
+$ CONFIRM_CUTOVER=20261012T112129Z-242aa8edf67c ./release-remote.sh cutover --execute
+input: authorized production switch to candidate blue
+literal output: cutover=passed production=new-api-blue standby=new-api-green version=dev-242aa8edf67c-local-amd64
+exit status: 0
+
+$ ./release-remote.sh observe --seconds 600 --interval 30
+input: one bounded observation window
+literal output: observation=passed evidence_mode=natural_comparison elapsed_seconds=601 checks=21 baseline_samples=42 baseline_errors_5xx=0 samples=38 errors_5xx=0 protocol_stability_rc=0 actionable_errors_5xx=0
+result: candidate passed the health, version, browser, protocol and HTTP error gates
+exit status: 0
+
+$ CONFIRM_FINALIZE=20261012T112129Z-242aa8edf67c ./release-remote.sh finalize --execute
+input: authorized finalization after passed observation
+literal output: finalize=passed decision=statistical_pass production=new-api-blue old=new-api-green old_state=exited old_restart_policy=unless-stopped
+exit status: 0
+
+$ CONFIRM_CLEANUP=20261012T112129Z-242aa8edf67c ./release-remote.sh cleanup --execute
+input: exact release cleanup after finalization
+literal output: cleanup=passed images=1 backups=1 rollback_available=false
+result: old slot and old release assets were retired; PostgreSQL, Redis, shared Nginx and gateway remained running
+exit status: 0
+
+production status after cleanup: new-api-blue healthy, version dev-242aa8edf67c-local-amd64; new-api-green absent; public https://api.codeai.de5.net/api/status returned the same version; public / and /sign-in browser checks returned root=1 with no page errors or console errors.
