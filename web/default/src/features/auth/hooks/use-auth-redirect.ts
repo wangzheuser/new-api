@@ -20,9 +20,14 @@ import { useNavigate } from '@tanstack/react-router'
 import i18n from 'i18next'
 
 import type { User } from '@/features/users/types'
-import { getSelf } from '@/lib/api'
-import { useAuthStore } from '@/stores/auth-store'
+import { applyAuthBundle, getSelf } from '@/lib/api'
+import { useAuthStore, type AuthBundle } from '@/stores/auth-store'
 
+import {
+  isAuthBundle,
+  isLoginChallenge,
+  safeLoginRedirect,
+} from '../lib/login-flow'
 import { saveUserId } from '../lib/storage'
 
 function getSavedLanguage(user: User): string | undefined {
@@ -56,9 +61,22 @@ export function useAuthRedirect() {
    * @param redirectTo - Redirect path after login
    */
   const handleLoginSuccess = async (
-    userData?: { id?: number } | null,
+    userData?: AuthBundle | { id?: number } | null,
     redirectTo?: string
   ) => {
+    if (isAuthBundle(userData)) {
+      applyAuthBundle(userData)
+      const savedLang = getSavedLanguage(userData.user as User)
+      if (savedLang && savedLang !== i18n.language) {
+        await i18n.changeLanguage(savedLang)
+      }
+      await navigate({
+        to: safeLoginRedirect(redirectTo) || '/dashboard',
+        replace: true,
+      })
+      return
+    }
+
     // Save user ID if available
     if (userData?.id) {
       saveUserId(userData.id)
@@ -88,8 +106,31 @@ export function useAuthRedirect() {
     }
 
     // Navigate to target page
-    const targetPath = redirectTo || '/dashboard'
-    navigate({ to: targetPath, replace: true })
+    const targetPath = safeLoginRedirect(redirectTo) || '/dashboard'
+    await navigate({ to: targetPath, replace: true })
+  }
+
+  /** Route the primary login response without treating a pending challenge as a session. */
+  const handleLoginResult = async (
+    result: unknown,
+    redirectTo?: string
+  ): Promise<boolean> => {
+    if (isAuthBundle(result)) {
+      await handleLoginSuccess(result, redirectTo)
+      return true
+    }
+    if (!isLoginChallenge(result)) {
+      throw new Error('Login failed')
+    }
+    if (result.expires_at * 1000 <= Date.now()) {
+      throw new Error('Login flow expired. Please sign in again.')
+    }
+    auth.setPendingLoginVerification({
+      challenge: result,
+      redirectTo: safeLoginRedirect(redirectTo),
+    })
+    await navigate({ to: '/otp', replace: true })
+    return false
   }
 
   /**
@@ -103,6 +144,7 @@ export function useAuthRedirect() {
    * Redirect to login page
    */
   const redirectToLogin = () => {
+    auth.setPendingLoginVerification(null)
     navigate({ to: '/sign-in', replace: true })
   }
 
@@ -115,6 +157,7 @@ export function useAuthRedirect() {
 
   return {
     handleLoginSuccess,
+    handleLoginResult,
     redirectTo2FA,
     redirectToLogin,
     redirectToRegister,

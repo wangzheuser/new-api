@@ -1,0 +1,82 @@
+changed branch/field: dev / default frontend password login challenge handling, OTP flow_token handoff, access-token session application and refresh retry
+
+artifacts:
+MODIFIED_FILE: artifacts/2fa-login-verification/MODIFIED_FILE
+DIFF_FILE: artifacts/2fa-login-verification/DIFF_FILE
+VERIFICATION.txt: artifacts/2fa-login-verification/VERIFICATION.txt
+ROLLBACK.sh: artifacts/2fa-login-verification/ROLLBACK.sh
+
+hashes:
+BASELINE_FILE: 141786e913558e435f34be820258ba044149137c8188f54d9cbd895789e529e2
+MODIFIED_FILE: f3739f87ff9aa1b1a63d9abae034be0a1ce3bbc45ed50f19cac838577a5e9af7
+DIFF_FILE: 4abc09eaaf900b3a92e53ff36bdd24e1f5f61258fb082908cb02e7af5214a3a9
+ROLLBACK.sh: 85e68ed67ca9d62ff58e056dafdfc725be86a67721c4d5371fe46f6d31bf93d6
+
+BASELINE command/input/result/exit:
+$ git archive HEAD | tar -x -C /tmp/new-api-2fa-baseline
+input: HEAD=444ebfccf84e7c58170494b9fc538839a4ed5277 before the default frontend fix
+output: baseline checkout created; exit status 0
+exit status: 0
+
+$ (cd /tmp/new-api-2fa-baseline/web/default && bun run typecheck && bun run build)
+input: baseline default frontend
+output: tsgo -b; recovery_build_version=0000; entry_assets_verified=7
+exit status: 0
+
+$ TEST_ROOT=/tmp/new-api-2fa-baseline/web/default/dist node /tmp/test-login-2fa.mjs
+input: fake local API returns require_verification=true and verifies only flow-7 + 123456
+literal output: page.waitForURL timeout; navigated to http://127.0.0.1:18081/dashboard then /dashboard/overview
+result: baseline failed to enter /otp and incorrectly treated the challenge as a completed login
+exit status: 1
+
+MODIFIED command/input/result/exit:
+$ (cd web/default && bun run typecheck)
+input: modified default frontend source
+output: tsgo -b
+exit status: 0
+
+$ (cd web/default && bun test src/features/auth/lib/login-flow.test.ts)
+input: challenge/bundle classification and redirect-boundary cases
+literal output: 2 pass; 0 fail; 7 expect() calls
+exit status: 0
+
+$ (cd web/default && bunx oxlint -c .oxlintrc.json src/stores/auth-store.ts src/features/auth/types.ts src/lib/api.ts src/features/auth/api.ts src/features/auth/hooks/use-auth-redirect.ts src/features/auth/sign-in/components/user-auth-form.tsx src/features/auth/otp/components/otp-form.tsx src/features/auth/lib/login-flow.ts src/features/auth/lib/login-flow.test.ts)
+input: modified authentication files
+output: one existing unicorn warning on Promise.reject; no lint errors
+exit status: 0
+
+$ (cd web/default && bun run build)
+input: modified default frontend
+output: recovery_build_version=0000; entry_assets_verified=7
+exit status: 0
+
+$ go test ./controller -run 'TestSecurityLoginCodeCompletesOnce|TestLogin|TestSecurity.*Login' -count=1
+input: backend login verification and session issuance regression cases
+output: ok github.com/QuantumNous/new-api/controller 4.067s
+exit status: 0
+
+$ go test ./service -run 'Test.*Login|Test.*Session' -count=1
+input: login/session service regression cases
+output: ok github.com/QuantumNous/new-api/service 0.081s
+exit status: 0
+
+$ go test ./model -run TestStartupMigratesAuthenticationStores -count=1
+input: authentication-store startup migration regression
+output: ok github.com/QuantumNous/new-api/model 0.142s
+exit status: 0
+
+$ node /tmp/test-login-2fa.mjs
+input: local browser against isolated API; invalid code 000000 followed by valid code 123456
+literal output: otp http://127.0.0.1:18081/otp; verify request {"flow_token":"flow-7","method":"2fa","code":"000000"}; verify request {"flow_token":"flow-7","method":"2fa","code":"123456"}; dashboard http://127.0.0.1:18081/dashboard/overview; {"otp_path":"/otp","final_path":"/dashboard/overview","login_verify":"flow-7 + 123456"}
+result: wrong code stayed on /otp; valid code issued the bundle and reached dashboard
+exit status: 0
+
+ROLLBACK command/input/result/exit:
+$ cp artifacts/2fa-login-verification/MODIFIED_FILE /tmp/new-api-2fa-rollback-target.ts
+input: modified artifact copy
+output: copy created; exit status 0
+$ artifacts/2fa-login-verification/ROLLBACK.sh /tmp/new-api-2fa-rollback-target.ts /tmp/new-api-2fa-baseline-target.ts
+input: target=/tmp/new-api-2fa-rollback-target.ts baseline=/tmp/new-api-2fa-baseline-target.ts
+literal output: 141786e913558e435f34be820258ba044149137c8188f54d9cbd895789e529e2  /tmp/new-api-2fa-rollback-target.ts
+result: rollback target equals BASELINE_FILE; MODIFIED_FILE and current source remain at modified hash
+exit status: 0

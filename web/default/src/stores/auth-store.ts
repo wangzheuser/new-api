@@ -52,10 +52,49 @@ export interface AuthUser {
   permissions?: UserPermissions
 }
 
+export interface LoginSession {
+  sid: string
+  current: boolean
+  login_method: string
+  ip: string
+  user_agent: string
+  created_at: number
+  last_active_at: number
+  expires_at: number
+}
+
+export interface AuthBundle {
+  access_token: string
+  token_type: string
+  access_expires_at: number
+  user: AuthUser
+  session: LoginSession
+}
+
+export interface LoginChallenge {
+  require_verification: true
+  flow_token: string
+  expires_at: number
+  methods: Array<{ method: string; available: boolean; reason?: string }>
+}
+
+export interface PendingLoginVerification {
+  challenge: LoginChallenge
+  redirectTo?: string
+}
+
 interface AuthState {
   auth: {
     user: AuthUser | null
+    accessToken: string | null
+    accessExpiresAt: number | null
+    session: LoginSession | null
+    pendingLoginVerification: PendingLoginVerification | null
     setUser: (user: AuthUser | null) => void
+    setBundle: (bundle: AuthBundle) => void
+    setPendingLoginVerification: (
+      pending: PendingLoginVerification | null
+    ) => void
     reset: () => void
   }
 }
@@ -80,6 +119,10 @@ export const useAuthStore = create<AuthState>()((set) => {
   return {
     auth: {
       user: initUser,
+      accessToken: null,
+      accessExpiresAt: null,
+      session: null,
+      pendingLoginVerification: null,
       setUser: (user) =>
         set((state) => {
           // Persist user to localStorage
@@ -92,14 +135,45 @@ export const useAuthStore = create<AuthState>()((set) => {
           }
           return { ...state, auth: { ...state.auth, user } }
         }),
+      setBundle: (bundle) =>
+        set((state) => {
+          if (typeof window !== 'undefined') {
+            window.localStorage.setItem('user', JSON.stringify(bundle.user))
+            window.localStorage.setItem('uid', String(bundle.user.id))
+          }
+          return {
+            ...state,
+            auth: {
+              ...state.auth,
+              user: bundle.user,
+              accessToken: bundle.access_token,
+              accessExpiresAt: bundle.access_expires_at,
+              session: bundle.session,
+              pendingLoginVerification: null,
+            },
+          }
+        }),
+      setPendingLoginVerification: (pendingLoginVerification) =>
+        set((state) => ({
+          ...state,
+          auth: { ...state.auth, pendingLoginVerification },
+        })),
       reset: () =>
         set((state) => {
           if (typeof window !== 'undefined') {
             window.localStorage.removeItem('user')
+            window.localStorage.removeItem('uid')
           }
           return {
             ...state,
-            auth: { ...state.auth, user: null },
+            auth: {
+              ...state.auth,
+              user: null,
+              accessToken: null,
+              accessExpiresAt: null,
+              session: null,
+              pendingLoginVerification: null,
+            },
           }
         }),
     },

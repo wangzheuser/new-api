@@ -44,14 +44,19 @@ export async function login(payload: LoginPayload) {
     {
       username: payload.username,
       password: payload.password,
-    }
+    },
+    { skipAuthRefresh: true }
   )
   return res.data
 }
 
 // Two-factor authentication login
 export async function login2fa(payload: TwoFAPayload) {
-  const res = await api.post<Login2FAResponse>('/api/user/login/2fa', payload)
+  const res = await api.post<Login2FAResponse>(
+    '/api/user/login/verify',
+    { flow_token: payload.flow_token, method: '2fa', code: payload.code },
+    { skipAuthRefresh: true }
+  )
   return res.data
 }
 

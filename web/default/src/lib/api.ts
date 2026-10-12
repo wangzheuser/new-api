@@ -16,17 +16,20 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import axios, { type AxiosRequestConfig } from 'axios'
+import axios, { type AxiosError, type AxiosRequestConfig } from 'axios'
 import { t } from 'i18next'
 import { toast } from 'sonner'
 
-import { useAuthStore } from '@/stores/auth-store'
+import { isAuthBundle } from '@/features/auth/lib/login-flow'
+import { useAuthStore, type AuthBundle } from '@/stores/auth-store'
 
 declare module 'axios' {
   export interface AxiosRequestConfig {
     skipBusinessError?: boolean
     skipErrorHandler?: boolean
     disableDuplicate?: boolean
+    skipAuthRefresh?: boolean
+    authRetry?: boolean
   }
 }
 
@@ -48,6 +51,38 @@ export const api = axios.create({
   },
 })
 
+export function applyAuthBundle(bundle: AuthBundle): void {
+  useAuthStore.getState().auth.setBundle(bundle)
+}
+
+let refreshPromise: Promise<boolean> | null = null
+
+async function refreshAuthentication(): Promise<boolean> {
+  if (!refreshPromise) {
+    refreshPromise = (async () => {
+      try {
+        const response = await api.post('/api/user/auth/refresh', undefined, {
+          skipAuthRefresh: true,
+          skipErrorHandler: true,
+        })
+        const bundle = response.data?.success ? response.data.data : undefined
+        if (!isAuthBundle(bundle)) {
+          useAuthStore.getState().auth.reset()
+          return false
+        }
+        applyAuthBundle(bundle)
+        return true
+      } catch {
+        useAuthStore.getState().auth.reset()
+        return false
+      } finally {
+        refreshPromise = null
+      }
+    })()
+  }
+  return refreshPromise
+}
+
 // ============================================================================
 // Request Deduplication
 // ============================================================================
@@ -65,7 +100,8 @@ api.get = ((url: string, config: ApiRequestConfig = {}) => {
   const key = `${url}?${params}`
 
   // Return existing in-flight request if available
-  if (inFlightGet.has(key)) return inFlightGet.get(key)!
+  const existingRequest = inFlightGet.get(key)
+  if (existingRequest) return existingRequest
 
   // Create new request and clean up after completion
   const req = originalGet(url, config).finally(() => inFlightGet.delete(key))
@@ -97,15 +133,26 @@ api.interceptors.response.use(
     }
     return response
   },
-  (error) => {
-    const skip = error?.config?.skipErrorHandler
+  async (error: AxiosError) => {
+    const config = error.config as ApiRequestConfig | undefined
+    const skip = config?.skipErrorHandler
     const status = error?.response?.status
 
     if (status === 401) {
-      try {
+      if (config && !config.skipAuthRefresh && !config.authRetry) {
+        config.authRetry = true
+        if (await refreshAuthentication()) {
+          const accessToken = useAuthStore.getState().auth.accessToken
+          if (accessToken) {
+            config.headers = {
+              ...config.headers,
+              Authorization: `Bearer ${accessToken}`,
+            }
+          }
+          return api.request(config)
+        }
+      } else if (!config?.skipAuthRefresh) {
         useAuthStore.getState().auth.reset()
-      } catch {
-        /* empty */
       }
 
       if (!skip) {
@@ -113,8 +160,10 @@ api.interceptors.response.use(
       }
     } else if (!skip) {
       // Other errors: show error message from response or default
-      const msg =
-        error?.response?.data?.message || error?.message || t('Request failed')
+      const responseData = error.response?.data as
+        | { message?: string }
+        | undefined
+      const msg = responseData?.message || error.message || t('Request failed')
       toast.error(msg)
     }
     return Promise.reject(error)
@@ -151,6 +200,10 @@ export function getCommonHeaders(): Record<string, string> {
   if (uid) {
     headers['New-Api-User'] = uid
   }
+  const accessToken = useAuthStore.getState().auth.accessToken
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`
+  }
 
   return headers
 }
@@ -165,6 +218,10 @@ api.interceptors.request.use((config) => {
   if (uid) {
     // Custom header for user identification
     ;(config.headers as Record<string, string>)['New-Api-User'] = uid
+  }
+  const accessToken = useAuthStore.getState().auth.accessToken
+  if (accessToken) {
+    config.headers.Authorization = `Bearer ${accessToken}`
   }
   return config
 })
