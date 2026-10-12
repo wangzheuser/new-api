@@ -1,0 +1,78 @@
+changed branch/field: dev / model/main.go database migration registration
+changed models: UserSession, AuthFlow, ExternalIdentityClaim, LoginEncryptionKey, TaskPlugin; fast migration path also now includes CasbinRule and AuthzRole
+
+artifacts:
+MODIFIED_FILE: artifacts/login-migration-verification/MODIFIED_FILE
+DIFF_FILE: artifacts/login-migration-verification/DIFF_FILE
+VERIFICATION.txt: artifacts/login-migration-verification/VERIFICATION.txt
+ROLLBACK.sh: artifacts/login-migration-verification/ROLLBACK.sh
+
+hashes:
+BASELINE model/main.go at HEAD: c26257cbf5fb8b85168460c93a2d72234df6441873633c2bcf5c4b43a6d3773b
+MODIFIED_FILE: 94cdc488050298ca33814f443c75e49a5ad49e0f89f48feef2012401b3ddef23
+DIFF_FILE: cc40d3d8b796ddee1f477a586a70e82fcf2199cbfdc6daeea186485a47e47db6
+ROLLBACK.sh: 85e68ed67ca9d62ff58e056dafdfc725be86a67721c4d5371fe46f6d31bf93d6
+
+BASELINE command/input/result/exit:
+$ git archive HEAD | tar -x -C /tmp/new-api-baseline
+input: repository HEAD before the migration fix
+result: /tmp/new-api-baseline created; exit status 0
+$ rtk go test ./model ./controller ./middleware
+output: Go test: 2295 passed in 3 packages
+exit status: 0
+
+MODIFIED command/input/result/exit:
+$ rtk go test ./model ./controller ./middleware
+input: working tree with model/main.go migration fix
+output: Go test: 2295 passed in 3 packages
+exit status: 0
+$ rtk go build -o /tmp/new-api-login-test .
+input: current dev source
+output: no output
+exit status: 0
+$ rtk sqlite3 /tmp/new-api-login-test-plain.db "select name from sqlite_master where type='table' and name in ('user_sessions','auth_flows','task_plugins','external_identity_claims','login_encryption_keys') order by name;"
+output:
+auth_flows
+external_identity_claims
+login_encryption_keys
+task_plugins
+user_sessions
+exit status: 0
+$ rtk curl -fsS -H "Content-Type: application/json" --data-binary '{"username":"root","password":"StrongPass123!","confirmPassword":"StrongPass123!"}' http://127.0.0.1:18080/api/setup
+output: {"data":null,"message":"System initialized successfully","message_key":"System initialized successfully","success":true}
+exit status: 0
+$ rtk curl -fsS -H "Content-Type: application/json" --data-binary '{"username":"root","password":"StrongPass123!"}' http://127.0.0.1:18080/api/user/login
+output: HTTP 200; response success=true; access_token and session.sid returned
+exit status: 0
+$ rtk curl -fsS -i http://127.0.0.1:18080/api/user/login/encryption-key
+output: HTTP/1.1 200 OK; enabled=true; kid and public_key returned
+exit status: 0
+$ rtk node < encrypted-login-script
+input: RSA-OAEP encrypted StrongPass123! with the returned kid
+output: HTTP 200; response success=true; access_token and session.sid returned
+exit status: 0
+$ rtk redis-cli -p 16379 --scan --pattern 'auth:session:*' | wc -l
+output: 1
+exit status: 0
+$ rtk docker exec new-api-migration-pg psql -U postgres -d new_api_test -Atc "select string_agg(table_name, ',' order by table_name) from information_schema.tables where table_schema='public' and table_name in ('user_sessions','auth_flows','task_plugins','external_identity_claims','login_encryption_keys');"
+output: auth_flows,external_identity_claims,login_encryption_keys,task_plugins,user_sessions
+exit status: 0
+$ rtk docker exec new-api-migration-mysql mysql -uroot -plocalpass new_api_test -NBe "select group_concat(table_name order by table_name) from information_schema.tables where table_schema='new_api_test' and table_name in ('user_sessions','auth_flows','task_plugins','external_identity_claims','login_encryption_keys');"
+output: auth_flows,external_identity_claims,login_encryption_keys,task_plugins,user_sessions (mysql emitted only its CLI password warning)
+exit status: 0
+$ rtk bun run build (workdir web/default)
+output: ready built in 3.53s; recovery_build_version=0000; entry_assets_verified=7
+exit status: 0
+
+ROLLBACK command/input/result/exit:
+$ rtk cp artifacts/login-migration-verification/MODIFIED_FILE /tmp/new-api-rollback-target.go
+input: modified artifact copy
+result: copy created; exit status 0
+$ artifacts/login-migration-verification/ROLLBACK.sh /tmp/new-api-rollback-target.go /tmp/new-api-main-baseline.go
+input: target=/tmp/new-api-rollback-target.go, baseline=/tmp/new-api-main-baseline.go
+output: c26257cbf5fb8b85168460c93a2d72234df6441873633c2bcf5c4b43a6d3773b  /tmp/new-api-rollback-target.go
+exit status: 0
+$ rtk cmp /tmp/new-api-rollback-target.go /tmp/new-api-main-baseline.go
+output: no output (files identical)
+exit status: 0
+restored behavior/status: rollback copy restored to BASELINE hash; MODIFIED_FILE remains at MODIFIED hash and current source remains changed.

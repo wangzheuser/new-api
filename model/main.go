@@ -269,9 +269,13 @@ func migrateDB() error {
 		&Channel{},
 		&Token{},
 		&User{},
+		&UserSession{},
+		&AuthFlow{},
+		&ExternalIdentityClaim{},
 		&UserAccessToken{},
 		&PasskeyCredential{},
 		&Option{},
+		&LoginEncryptionKey{},
 		&Redemption{},
 		&Ability{},
 		&Log{},
@@ -280,6 +284,7 @@ func migrateDB() error {
 		&TopUp{},
 		&QuotaData{},
 		&Task{},
+		&TaskPlugin{},
 		&Model{},
 		&Vendor{},
 		&PrefillGroup{},
@@ -306,7 +311,13 @@ func migrateDB() error {
 	if err != nil {
 		return err
 	}
+	if err := InitializeUserAuthVersions(); err != nil {
+		return err
+	}
 	if err := EnsureLegacyAccessTokenRetireAt(time.Now().Unix()); err != nil {
+		return err
+	}
+	if err := InitializeExternalIdentityClaims(); err != nil {
 		return err
 	}
 	if os.Getenv("LOG_SQL_DSN") == "" {
@@ -345,9 +356,13 @@ func migrateDBFast() error {
 		{&Channel{}, "Channel"},
 		{&Token{}, "Token"},
 		{&User{}, "User"},
+		{&UserSession{}, "UserSession"},
+		{&AuthFlow{}, "AuthFlow"},
+		{&ExternalIdentityClaim{}, "ExternalIdentityClaim"},
 		{&UserAccessToken{}, "UserAccessToken"},
 		{&PasskeyCredential{}, "PasskeyCredential"},
 		{&Option{}, "Option"},
+		{&LoginEncryptionKey{}, "LoginEncryptionKey"},
 		{&Redemption{}, "Redemption"},
 		{&Ability{}, "Ability"},
 		{&Log{}, "Log"},
@@ -356,6 +371,7 @@ func migrateDBFast() error {
 		{&TopUp{}, "TopUp"},
 		{&QuotaData{}, "QuotaData"},
 		{&Task{}, "Task"},
+		{&TaskPlugin{}, "TaskPlugin"},
 		{&Model{}, "Model"},
 		{&Vendor{}, "Vendor"},
 		{&PrefillGroup{}, "PrefillGroup"},
@@ -376,6 +392,8 @@ func migrateDBFast() error {
 		{&SystemInstance{}, "SystemInstance"},
 		{&SystemTask{}, "SystemTask"},
 		{&SystemTaskLock{}, "SystemTaskLock"},
+		{&CasbinRule{}, "CasbinRule"},
+		{&AuthzRole{}, "AuthzRole"},
 	}
 	if os.Getenv("LOG_SQL_DSN") == "" {
 		migrations = append(migrations, struct {
@@ -406,7 +424,13 @@ func migrateDBFast() error {
 			return err
 		}
 	}
+	if err := InitializeUserAuthVersions(); err != nil {
+		return err
+	}
 	if err := EnsureLegacyAccessTokenRetireAt(time.Now().Unix()); err != nil {
+		return err
+	}
+	if err := InitializeExternalIdentityClaims(); err != nil {
 		return err
 	}
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {

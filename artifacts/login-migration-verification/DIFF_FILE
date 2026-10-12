@@ -1,0 +1,89 @@
+--- /tmp/new-api-main-baseline.go	2026-10-12 12:09:17
++++ artifacts/login-migration-verification/MODIFIED_FILE	2026-10-12 12:09:38
+@@ -269,9 +269,13 @@
+ 		&Channel{},
+ 		&Token{},
+ 		&User{},
++		&UserSession{},
++		&AuthFlow{},
++		&ExternalIdentityClaim{},
+ 		&UserAccessToken{},
+ 		&PasskeyCredential{},
+ 		&Option{},
++		&LoginEncryptionKey{},
+ 		&Redemption{},
+ 		&Ability{},
+ 		&Log{},
+@@ -280,6 +284,7 @@
+ 		&TopUp{},
+ 		&QuotaData{},
+ 		&Task{},
++		&TaskPlugin{},
+ 		&Model{},
+ 		&Vendor{},
+ 		&PrefillGroup{},
+@@ -304,11 +309,17 @@
+ 		&AuthzRole{},
+ 	)
+ 	if err != nil {
++		return err
++	}
++	if err := InitializeUserAuthVersions(); err != nil {
+ 		return err
+ 	}
+ 	if err := EnsureLegacyAccessTokenRetireAt(time.Now().Unix()); err != nil {
+ 		return err
+ 	}
++	if err := InitializeExternalIdentityClaims(); err != nil {
++		return err
++	}
+ 	if os.Getenv("LOG_SQL_DSN") == "" {
+ 		if err := DB.AutoMigrate(&ConversationLog{}); err != nil {
+ 			return err
+@@ -345,9 +356,13 @@
+ 		{&Channel{}, "Channel"},
+ 		{&Token{}, "Token"},
+ 		{&User{}, "User"},
++		{&UserSession{}, "UserSession"},
++		{&AuthFlow{}, "AuthFlow"},
++		{&ExternalIdentityClaim{}, "ExternalIdentityClaim"},
+ 		{&UserAccessToken{}, "UserAccessToken"},
+ 		{&PasskeyCredential{}, "PasskeyCredential"},
+ 		{&Option{}, "Option"},
++		{&LoginEncryptionKey{}, "LoginEncryptionKey"},
+ 		{&Redemption{}, "Redemption"},
+ 		{&Ability{}, "Ability"},
+ 		{&Log{}, "Log"},
+@@ -356,6 +371,7 @@
+ 		{&TopUp{}, "TopUp"},
+ 		{&QuotaData{}, "QuotaData"},
+ 		{&Task{}, "Task"},
++		{&TaskPlugin{}, "TaskPlugin"},
+ 		{&Model{}, "Model"},
+ 		{&Vendor{}, "Vendor"},
+ 		{&PrefillGroup{}, "PrefillGroup"},
+@@ -376,6 +392,8 @@
+ 		{&SystemInstance{}, "SystemInstance"},
+ 		{&SystemTask{}, "SystemTask"},
+ 		{&SystemTaskLock{}, "SystemTaskLock"},
++		{&CasbinRule{}, "CasbinRule"},
++		{&AuthzRole{}, "AuthzRole"},
+ 	}
+ 	if os.Getenv("LOG_SQL_DSN") == "" {
+ 		migrations = append(migrations, struct {
+@@ -406,9 +424,15 @@
+ 			return err
+ 		}
+ 	}
++	if err := InitializeUserAuthVersions(); err != nil {
++		return err
++	}
+ 	if err := EnsureLegacyAccessTokenRetireAt(time.Now().Unix()); err != nil {
+ 		return err
+ 	}
++	if err := InitializeExternalIdentityClaims(); err != nil {
++		return err
++	}
+ 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
+ 		if err := ensureSubscriptionPlanTableSQLite(); err != nil {
+ 			return err
