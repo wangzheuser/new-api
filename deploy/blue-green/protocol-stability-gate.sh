@@ -220,7 +220,7 @@ for window, filename in (("pre", baseline), ("post", observation)):
         if line.startswith("[INFO]") and len(parts) == 3 and parts[2].strip() == "relay canceled by client":
             canceled.add(parts[1].strip())
         if line.startswith("[ERR]") and len(parts) == 3 and re.fullmatch(
-            r"user \d+ \| No available channel for model [^\r\n]+ under group [^\r\n]+ \(distributor\)", parts[2].strip()
+            r"user \d+ \| (?:No available channel for model [^\r\n]+ under group [^\r\n]+ \(distributor\)|channel has no compatible protocol route)", parts[2].strip()
         ):
             rejected.add(parts[1].strip())
     counts = collections.Counter()

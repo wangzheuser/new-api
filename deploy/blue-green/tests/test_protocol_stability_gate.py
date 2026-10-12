@@ -372,6 +372,18 @@ class ProtocolStabilityGateTest(unittest.TestCase):
         report = json.loads(files["http-observations.json"])
         self.assertEqual(report["post"]["/v1/messages:pre_upstream_rejected"], 1)
 
+    def test_protocol_route_rejection_is_not_pending_settlement(self):
+        """A terminal protocol-route rejection is also a pre-upstream outcome."""
+        logs = self.app_logs()
+        logs["post"] += (
+            "[ERR] fixture | route-failed | user 1 | channel has no compatible protocol route\n"
+            "[GIN] fixture | relay | route-failed | 503 | 1ms | local | POST /v1/messages\n"
+        )
+        result, files = self.run_gate(app_logs=logs)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        report = json.loads(files["http-observations.json"])
+        self.assertEqual(report["post"]["/v1/messages:pre_upstream_rejected"], 1)
+
     def test_policy_marker_requires_matching_request_and_403(self):
         """Keep raw counts; only a same-request local policy marker creates evidence."""
         logs = self.app_logs()
