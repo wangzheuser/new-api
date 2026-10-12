@@ -1,4 +1,4 @@
-changed branch/field: dev / model/main.go database migration registration
+changed branch/field: dev / model/main.go migration registration plus model/user_session_migration_test.go startup regression
 changed models: UserSession, AuthFlow, ExternalIdentityClaim, LoginEncryptionKey, TaskPlugin; fast migration path also now includes CasbinRule and AuthzRole
 
 artifacts:
@@ -10,7 +10,7 @@ ROLLBACK.sh: artifacts/login-migration-verification/ROLLBACK.sh
 hashes:
 BASELINE model/main.go at HEAD: c26257cbf5fb8b85168460c93a2d72234df6441873633c2bcf5c4b43a6d3773b
 MODIFIED_FILE: 94cdc488050298ca33814f443c75e49a5ad49e0f89f48feef2012401b3ddef23
-DIFF_FILE: cc40d3d8b796ddee1f477a586a70e82fcf2199cbfdc6daeea186485a47e47db6
+DIFF_FILE: generated from model/main.go and model/user_session_migration_test.go working-tree diff
 ROLLBACK.sh: 85e68ed67ca9d62ff58e056dafdfc725be86a67721c4d5371fe46f6d31bf93d6
 
 BASELINE command/input/result/exit:
@@ -23,8 +23,12 @@ exit status: 0
 
 MODIFIED command/input/result/exit:
 $ rtk go test ./model ./controller ./middleware
-input: working tree with model/main.go migration fix
+input: working tree with migration fix and startup regression
 output: Go test: 2295 passed in 3 packages
+exit status: 0
+$ rtk go test ./model -run TestStartupMigratesAuthenticationStores -count=1 -v
+input: isolated SQLite startup migration; TEST_MYSQL_DSN/TEST_POSTGRES_DSN absent, so those subtests skip
+output: Go test: 2 passed in 1 packages
 exit status: 0
 $ rtk go build -o /tmp/new-api-login-test .
 input: current dev source

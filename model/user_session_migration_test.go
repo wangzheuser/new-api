@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,6 +19,71 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+// TestStartupMigratesAuthenticationStores exercises startup rather than test-only AutoMigrate fixtures.
+func TestStartupMigratesAuthenticationStores(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			dsn := "local"
+			if dialect != "sqlite" {
+				dsn = os.Getenv("TEST_" + strings.ToUpper(dialect) + "_DSN")
+				if dsn == "" {
+					t.Skip("isolated test database DSN is not configured")
+				}
+			}
+			originalDB, originalLogDB := DB, LOG_DB
+			originalPath, originalMaster, originalRedis := common.SQLitePath, common.IsMasterNode, common.RedisEnabled
+			originalMainType, originalLogType := common.MainDatabaseType(), common.LogDatabaseType()
+			t.Cleanup(func() {
+				DB, LOG_DB = originalDB, originalLogDB
+				common.SQLitePath, common.IsMasterNode, common.RedisEnabled = originalPath, originalMaster, originalRedis
+				common.SetMainDatabaseType(originalMainType)
+				common.SetLogDatabaseType(originalLogType)
+				initCol()
+			})
+			common.SQLitePath = filepath.Join(t.TempDir(), "startup.db")
+			common.IsMasterNode, common.RedisEnabled = true, false
+			t.Setenv("SQL_DSN", dsn)
+			t.Setenv("LOG_SQL_DSN", "")
+			require.NoError(t, InitDB())
+			sqlDB, err := DB.DB()
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = sqlDB.Close() })
+			for _, store := range []any{&UserSession{}, &AuthFlow{}, &ExternalIdentityClaim{}, &LoginEncryptionKey{}, &TaskPlugin{}, &CasbinRule{}, &AuthzRole{}} {
+				require.True(t, DB.Migrator().HasTable(store), "%T must be available after startup", store)
+			}
+
+			user := User{Username: "startup-user", Password: "stored-password-hash", TelegramId: "startup-telegram", AffCode: "startup-aff"}
+			require.NoError(t, DB.Create(&user).Error)
+			require.NoError(t, DB.Model(&user).UpdateColumn("auth_version", 0).Error)
+			// Preserve existing records while initializing legacy authentication state twice.
+			for range 2 {
+				require.NoError(t, migrateDB())
+			}
+			require.NoError(t, DB.First(&user, user.Id).Error)
+			assert.EqualValues(t, 1, user.AuthVersion)
+			assert.Equal(t, "stored-password-hash", user.Password)
+			var claims []ExternalIdentityClaim
+			require.NoError(t, DB.Where("user_id = ?", user.Id).Find(&claims).Error)
+			require.Len(t, claims, 1)
+			assert.Equal(t, user.TelegramId, claims[0].Subject)
+			session := newTestUserSession("startup-session", user.Id, time.Now().Unix())
+			require.NoError(t, CreateUserSession(session))
+			count, err := CountActiveUserSessions(user.Id, time.Now().Unix())
+			require.NoError(t, err)
+			assert.EqualValues(t, 1, count)
+			token, _, err := CreateAuthFlow(AuthFlowCreate{Purpose: AuthFlowPurposeOAuth, ExpiresAt: time.Now().Add(time.Minute)})
+			require.NoError(t, err)
+			_, err = ConsumeAuthFlow(token, AuthFlowMatch{Purpose: AuthFlowPurposeOAuth})
+			require.NoError(t, err)
+			_, err = ConsumeAuthFlow(token, AuthFlowMatch{Purpose: AuthFlowPurposeOAuth})
+			assert.ErrorIs(t, err, ErrAuthFlowConsumed)
+			_, err = GetTaskPluginSyncSnapshot()
+			require.NoError(t, err)
+			require.NoError(t, InitPasswordEncryption())
+		})
+	}
+}
 
 type previousRefreshHashMigrationLegacy struct {
 	SID                 string `gorm:"column:sid;type:varchar(64);primaryKey"`

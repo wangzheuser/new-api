@@ -1,89 +1,87 @@
---- /tmp/new-api-main-baseline.go	2026-10-12 12:09:17
-+++ artifacts/login-migration-verification/MODIFIED_FILE	2026-10-12 12:09:38
-@@ -269,9 +269,13 @@
- 		&Channel{},
- 		&Token{},
- 		&User{},
-+		&UserSession{},
-+		&AuthFlow{},
-+		&ExternalIdentityClaim{},
- 		&UserAccessToken{},
- 		&PasskeyCredential{},
- 		&Option{},
-+		&LoginEncryptionKey{},
- 		&Redemption{},
- 		&Ability{},
- 		&Log{},
-@@ -280,6 +284,7 @@
- 		&TopUp{},
- 		&QuotaData{},
- 		&Task{},
-+		&TaskPlugin{},
- 		&Model{},
- 		&Vendor{},
- 		&PrefillGroup{},
-@@ -304,11 +309,17 @@
- 		&AuthzRole{},
- 	)
- 	if err != nil {
-+		return err
-+	}
-+	if err := InitializeUserAuthVersions(); err != nil {
- 		return err
- 	}
- 	if err := EnsureLegacyAccessTokenRetireAt(time.Now().Unix()); err != nil {
- 		return err
- 	}
-+	if err := InitializeExternalIdentityClaims(); err != nil {
-+		return err
-+	}
- 	if os.Getenv("LOG_SQL_DSN") == "" {
- 		if err := DB.AutoMigrate(&ConversationLog{}); err != nil {
- 			return err
-@@ -345,9 +356,13 @@
- 		{&Channel{}, "Channel"},
- 		{&Token{}, "Token"},
- 		{&User{}, "User"},
-+		{&UserSession{}, "UserSession"},
-+		{&AuthFlow{}, "AuthFlow"},
-+		{&ExternalIdentityClaim{}, "ExternalIdentityClaim"},
- 		{&UserAccessToken{}, "UserAccessToken"},
- 		{&PasskeyCredential{}, "PasskeyCredential"},
- 		{&Option{}, "Option"},
-+		{&LoginEncryptionKey{}, "LoginEncryptionKey"},
- 		{&Redemption{}, "Redemption"},
- 		{&Ability{}, "Ability"},
- 		{&Log{}, "Log"},
-@@ -356,6 +371,7 @@
- 		{&TopUp{}, "TopUp"},
- 		{&QuotaData{}, "QuotaData"},
- 		{&Task{}, "Task"},
-+		{&TaskPlugin{}, "TaskPlugin"},
- 		{&Model{}, "Model"},
- 		{&Vendor{}, "Vendor"},
- 		{&PrefillGroup{}, "PrefillGroup"},
-@@ -376,6 +392,8 @@
- 		{&SystemInstance{}, "SystemInstance"},
- 		{&SystemTask{}, "SystemTask"},
- 		{&SystemTaskLock{}, "SystemTaskLock"},
-+		{&CasbinRule{}, "CasbinRule"},
-+		{&AuthzRole{}, "AuthzRole"},
- 	}
- 	if os.Getenv("LOG_SQL_DSN") == "" {
- 		migrations = append(migrations, struct {
-@@ -406,9 +424,15 @@
- 			return err
- 		}
- 	}
-+	if err := InitializeUserAuthVersions(); err != nil {
-+		return err
-+	}
- 	if err := EnsureLegacyAccessTokenRetireAt(time.Now().Unix()); err != nil {
- 		return err
- 	}
-+	if err := InitializeExternalIdentityClaims(); err != nil {
-+		return err
-+	}
- 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
- 		if err := ensureSubscriptionPlanTableSQLite(); err != nil {
- 			return err
+model/user_session_migration_test.go | 67 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 67 insertions(+)
+
+Changes:
+
+model/user_session_migration_test.go
+  @@ -4,11 +4,13 @@ import (
+  +	"path/filepath"
+   	"strings"
+   	"sync"
+   	"testing"
+   	"time"
+   
+  +	"github.com/QuantumNous/new-api/common"
+   	"github.com/glebarez/sqlite"
+   	"github.com/stretchr/testify/assert"
+   	"github.com/stretchr/testify/require"
+  @@ -18,6 +20,71 @@ import (
+  +// TestStartupMigratesAuthenticationStores exercises startup rather than test-only AutoMigrate fixtures.
+  +func TestStartupMigratesAuthenticationStores(t *testing.T) {
+  +	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+  +		t.Run(dialect, func(t *testing.T) {
+  +			dsn := "local"
+  +			if dialect != "sqlite" {
+  +				dsn = os.Getenv("TEST_" + strings.ToUpper(dialect) + "_DSN")
+  +				if dsn == "" {
+  +					t.Skip("isolated test database DSN is not configured")
+  +				}
+  +			}
+  +			originalDB, originalLogDB := DB, LOG_DB
+  +			originalPath, originalMaster, originalRedis := common.SQLitePath, common.IsMasterNode, common.RedisEnabled
+  +			originalMainType, originalLogType := common.MainDatabaseType(), common.LogDatabaseType()
+  +			t.Cleanup(func() {
+  +				DB, LOG_DB = originalDB, originalLogDB
+  +				common.SQLitePath, common.IsMasterNode, common.RedisEnabled = originalPath, originalMaster, originalRedis
+  +				common.SetMainDatabaseType(originalMainType)
+  +				common.SetLogDatabaseType(originalLogType)
+  +				initCol()
+  +			})
+  +			common.SQLitePath = filepath.Join(t.TempDir(), "startup.db")
+  +			common.IsMasterNode, common.RedisEnabled = true, false
+  +			t.Setenv("SQL_DSN", dsn)
+  +			t.Setenv("LOG_SQL_DSN", "")
+  +			require.NoError(t, InitDB())
+  +			sqlDB, err := DB.DB()
+  +			require.NoError(t, err)
+  +			t.Cleanup(func() { _ = sqlDB.Close() })
+  +			for _, store := range []any{&UserSession{}, &AuthFlow{}, &ExternalIdentityClaim{}, &LoginEncryptionKey{}, &TaskPlugin{}, &CasbinRule{}, &AuthzRole{}} {
+  +				require.True(t, DB.Migrator().HasTable(store), "%T must be available after startup", store)
+  +			}
+  +
+  +			user := User{Username: "startup-user", Password: "stored-password-hash", TelegramId: "startup-telegram", AffCode: "startup-aff"}
+  +			require.NoError(t, DB.Create(&user).Error)
+  +			require.NoError(t, DB.Model(&user).UpdateColumn("auth_version", 0).Error)
+  +			// Preserve existing records while initializing legacy authentication state twice.
+  +			for range 2 {
+  +				require.NoError(t, migrateDB())
+  +			}
+  +			require.NoError(t, DB.First(&user, user.Id).Error)
+  +			assert.EqualValues(t, 1, user.AuthVersion)
+  +			assert.Equal(t, "stored-password-hash", user.Password)
+  +			var claims []ExternalIdentityClaim
+  +			require.NoError(t, DB.Where("user_id = ?", user.Id).Find(&claims).Error)
+  +			require.Len(t, claims, 1)
+  +			assert.Equal(t, user.TelegramId, claims[0].Subject)
+  +			session := newTestUserSession("startup-session", user.Id, time.Now().Unix())
+  +			require.NoError(t, CreateUserSession(session))
+  +			count, err := CountActiveUserSessions(user.Id, time.Now().Unix())
+  +			require.NoError(t, err)
+  +			assert.EqualValues(t, 1, count)
+  +			token, _, err := CreateAuthFlow(AuthFlowCreate{Purpose: AuthFlowPurposeOAuth, ExpiresAt: time.Now().Add(time.Minute)})
+  +			require.NoError(t, err)
+  +			_, err = ConsumeAuthFlow(token, AuthFlowMatch{Purpose: AuthFlowPurposeOAuth})
+  +			require.NoError(t, err)
+  +			_, err = ConsumeAuthFlow(token, AuthFlowMatch{Purpose: AuthFlowPurposeOAuth})
+  +			assert.ErrorIs(t, err, ErrAuthFlowConsumed)
+  +			_, err = GetTaskPluginSyncSnapshot()
+  +			require.NoError(t, err)
+  +			require.NoError(t, InitPasswordEncryption())
+  +		})
+  +	}
+  +}
+  +
+   type previousRefreshHashMigrationLegacy struct {
+   	SID                 string `gorm:"column:sid;type:varchar(64);primaryKey"`
+   	PreviousRefreshHash string `gorm:"column:previous_refresh_hash;type:char(64)"`
+  +67 -0
