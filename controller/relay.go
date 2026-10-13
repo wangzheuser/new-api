@@ -676,6 +676,13 @@ func shouldRetry(c *gin.Context, relayInfo *relaycommon.RelayInfo, openaiErr *ty
 
 func retryBlockedByClientCommit(c *gin.Context, relayInfo *relaycommon.RelayInfo) bool {
 	if relayInfo != nil && relayInfo.IsStream && relayInfo.StreamStatus != nil {
+		status := relayInfo.StreamStatus
+		if status.RetryCommitPolicy() == relaycommon.StreamRetryCommitPolicyPayload &&
+			relayInfo.ReceivedResponseCount > 0 &&
+			!status.ClientPayloadIsCommitted() && !status.ErrorFrameIsWritten() {
+			// An unclassified upstream event may already have been forwarded by a legacy handler.
+			return true
+		}
 		httpCommitted := c != nil && c.Writer != nil && c.Writer.Written()
 		return relayInfo.StreamStatus.RetryBlocked(httpCommitted)
 	}

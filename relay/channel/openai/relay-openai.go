@@ -102,6 +102,7 @@ func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, fo
 }
 
 func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+	info.EnablePayloadRetry()
 	if resp == nil || resp.Body == nil {
 		logger.LogError(c, common.LogText("invalid response or response body"))
 		return nil, types.NewOpenAIError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse, http.StatusInternalServerError)

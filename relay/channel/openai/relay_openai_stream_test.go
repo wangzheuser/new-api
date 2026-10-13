@@ -54,6 +54,7 @@ func TestOaiStreamHandlerRejectsEOFMissingTerminal(t *testing.T) {
 
 	require.NotNil(t, usage)
 	assert.Greater(t, usage.CompletionTokens, 0)
+	assert.Equal(t, relaycommon.StreamRetryCommitPolicyPayload, info.StreamStatus.RetryCommitPolicy())
 	require.NotNil(t, apiError)
 	assert.True(t, types.IsSkipRetryError(apiError))
 	assert.Contains(t, recorder.Body.String(), "first")

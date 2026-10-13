@@ -52,6 +52,7 @@ func TokenModelLimitAllows(limit map[string]bool, modelName string) bool {
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		var channel *model.Channel
+		var selectErr *service.ChannelSelectError
 		defer func() {
 			if c.Writer.Status() >= 400 {
 				service.RecordRequestPolicyTermination(c, types.NewErrorWithStatusCode(errors.New("request rejected"), types.ErrorCodeInvalidRequest, c.Writer.Status(), types.ErrOptionWithSkipRetry()))
@@ -116,7 +117,6 @@ func Distribute() func(c *gin.Context) {
 		}
 		if pinned || shouldSelectChannel {
 			usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
-			var selectErr *service.ChannelSelectError
 			channel, _, selectErr = service.SelectChannelForRequest(c, modelRequest.Model, &service.RetryParam{
 				Ctx: c, ModelName: modelRequest.Model, TokenGroup: usingGroup,
 				RequestPath: c.Request.URL.Path, IsStream: modelRequest.Stream, Retry: common.GetPointer(0),
@@ -137,7 +137,32 @@ func Distribute() func(c *gin.Context) {
 		}
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
 		defer service.FinishChannelKeyProbe(c, false)
-		if setupErr := SetupContextForSelectedChannel(c, channel, modelRequest.Model); setupErr != nil {
+		retryParam := &service.RetryParam{
+			Ctx:                c,
+			ModelName:          modelRequest.Model,
+			TokenGroup:         common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
+			RequestPath:        c.Request.URL.Path,
+			IsStream:           modelRequest.Stream,
+			Retry:              common.GetPointer(0),
+			ExcludedChannelIDs: make(map[int]struct{}),
+		}
+		for {
+			setupErr := SetupContextForSelectedChannel(c, channel, modelRequest.Model)
+			if setupErr == nil {
+				break
+			}
+			_, pinned, _ := constraints.ResolvedPin()
+			failedChannel := channel
+			if setupErr.GetErrorCode() == types.ErrorCodeChannelNoAvailableKey && failedChannel != nil && !pinned &&
+				!service.ShouldSkipRetryAfterChannelAffinityFailure(c) && retryParam.GetRetry() < common.RetryTimes {
+				retryParam.ExcludedChannelIDs[failedChannel.Id] = struct{}{}
+				retryParam.IncreaseRetry()
+				channel, _, selectErr = service.SelectChannelForRequest(c, modelRequest.Model, retryParam)
+				if selectErr == nil {
+					continue
+				}
+			}
+			recordDistributorSetupError(c, failedChannel, setupErr)
 			abortWithOpenAiMessage(c, http.StatusServiceUnavailable, setupErr.Error(), types.ErrorCodeModelNotFound)
 			return
 		}

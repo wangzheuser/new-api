@@ -232,6 +232,31 @@ func TestShouldRetryAllowsPlannedStreamAfterPingOnly(t *testing.T) {
 	assert.True(t, shouldRetry(ctx, info, relayErr, 2))
 }
 
+func TestShouldRetryAllowsPayloadAwareEnvelopeErrorBeforeAnyEvent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	helper.SetEventStreamHeaders(ctx)
+	require.NoError(t, helper.FlushWriter(ctx))
+
+	streamStatus := relaycommon.NewStreamStatus()
+	streamStatus.MarkAppHTTPCommitted()
+	streamStatus.SetRetryCommitPolicy(relaycommon.StreamRetryCommitPolicyPayload)
+	info := &relaycommon.RelayInfo{
+		IsStream:     true,
+		StreamStatus: streamStatus,
+	}
+	relayErr := types.NewErrorWithStatusCode(
+		errors.New("upstream returned 200 with a retryable error envelope"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusTooManyRequests,
+		types.ErrOptionWithUpstreamStatusCode(http.StatusOK),
+	)
+
+	assert.True(t, shouldRetry(ctx, info, relayErr, 1))
+}
+
 func TestShouldRetryRejectsPlannedStreamAfterBusinessPayloadOrErrorFrame(t *testing.T) {
 	tests := []struct {
 		name   string

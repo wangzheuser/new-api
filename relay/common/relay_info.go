@@ -1092,6 +1092,17 @@ func (info *RelayInfo) ResolveStreamRetryCommitPolicy() StreamRetryCommitPolicy 
 	}
 }
 
+// EnablePayloadRetry marks a shared stream handler as payload-aware.
+func (info *RelayInfo) EnablePayloadRetry() {
+	if info == nil || !info.IsStream {
+		return
+	}
+	if info.StreamStatus == nil {
+		info.StreamStatus = NewStreamStatus()
+	}
+	info.StreamStatus.SetRetryCommitPolicy(StreamRetryCommitPolicyPayload)
+}
+
 func GenRelayInfoResponsesCompaction(c *gin.Context, raw any) *RelayInfo {
 	request, ok := raw.(*dto.OpenAIResponsesCompactionRequest)
 	if !ok {
