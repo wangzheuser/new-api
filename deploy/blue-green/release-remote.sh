@@ -8,11 +8,11 @@ COMPOSE_TEMPLATE="${COMPOSE_TEMPLATE:-$SCRIPT_DIR/docker-compose.slot.yml}"
 
 usage() {
   cat <<'EOF'
-Usage: release-remote.sh <self-check|doctor|recover|status|backup|stage|gate|cutover|observe|finalize|rollback|cleanup> [options]
+Usage: release-remote.sh <self-check|doctor|recover|status|backup|stage|gate|cutover|observe|review|finalize|rollback|cleanup> [options]
 
 Mutating production actions require:
   cutover  --execute   CONFIRM_CUTOVER=<release-id>
-  finalize --execute [--accept-inconclusive]  CONFIRM_FINALIZE=<release-id>
+  finalize --execute [--accept-inconclusive|--accept-ai-review]  CONFIRM_FINALIZE=<release-id>
   rollback --execute  CONFIRM_ROLLBACK=<release-id>
   cleanup --execute   CONFIRM_CLEANUP=<release-id> (permanently retires old rollback assets)
   cleanup [--dry-run|--execute] [--accept-current] (explicit acceptance of a completed non-passing observation)
@@ -24,6 +24,7 @@ Observation gate:
   it requires the candidate gate, public browser check, bounded hold and zero unexplained HTTP 5xx;
   it records an explicit release decision without rewriting observation.result
   an inconclusive observation requires ALLOW_INCONCLUSIVE_ROLLBACK=1 for an explicit rollback
+  review builds a redacted evidence package; AI_VERDICT_FILE supplies a JSON verdict for validation
 EOF
 }
 
@@ -219,6 +220,7 @@ action_self_check() {
   bash -n "$0"
   bash -n "$SCRIPT_DIR/protocol-stability-gate.sh"
   python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SCRIPT_DIR/low-traffic-evidence.py"
+  python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SCRIPT_DIR/ai-gate-review.py"
   python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SCRIPT_DIR/retention.py"
   python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SCRIPT_DIR/gateway_control.py"
   load_config
@@ -612,7 +614,7 @@ action_observe() {
 
 action_finalize() {
   load_config
-  local mode=--dry-run accept_inconclusive=false
+  local mode=--dry-run accept_inconclusive=false accept_ai_review=false
   local minimum_observe_seconds=600 observation_result observation_state field
   local observed_release="" observed_production="" observed_version=""
   local requested_seconds="" elapsed_seconds=""
@@ -621,6 +623,7 @@ action_finalize() {
     case "$field" in
       --dry-run|--execute) mode="$field" ;;
       --accept-inconclusive) accept_inconclusive=true ;;
+      --accept-ai-review) accept_ai_review=true ;;
       *) usage >&2; return 2 ;;
     esac
   done
@@ -659,6 +662,20 @@ action_finalize() {
         return 1
       fi
       decision_mode=accepted_inconclusive
+      ;;
+    observation=failed)
+      if [[ "$accept_ai_review" != true || "${ACCEPT_AI_REVIEW:-0}" != 1 ]]; then
+        printf 'finalize_blocked=observation_failed acceptance_required=1\n' >&2
+        return 1
+      fi
+      if [[ ! -r "$STATE_DIR/ai-review.result" ]] ||
+        ! grep -q '^validation=passed .*verdict=external_incident .*required_action=finalize' "$STATE_DIR/ai-review.result"; then
+        printf 'finalize_blocked=ai_review_required\n' >&2
+        return 1
+      fi
+      accept_reason="${AI_REVIEW_REASON:-AI审查确认候选未新增故障，原有选路前拒绝属于外部既有问题}"
+      [[ -n "$accept_reason" && ${#accept_reason} -le 256 && "$accept_reason" != *$'\n'* && "$accept_reason" != *$'\r'* ]]
+      decision_mode=accepted_ai_review
       ;;
     *)
       printf 'finalize_blocked=observation_failed\n' >&2
@@ -720,6 +737,27 @@ action_finalize() {
   chmod 600 "$STATE_DIR/decision.result"
   printf 'finalize=passed decision=%s production=%s old=%s old_state=exited old_restart_policy=unless-stopped version=%s docker_cleanup=manifest_required\n' \
     "$decision_mode" "$NEW" "$OLD" "$VERSION" | tee "$STATE_DIR/final.result"
+}
+
+action_review() {
+  load_config
+  python3 "$SCRIPT_DIR/ai-gate-review.py" build \
+    --state-dir "$STATE_DIR" --output "$STATE_DIR/ai-review-input.json"
+  if [[ -n "${AI_VERDICT_FILE:-}" ]]; then
+    python3 "$SCRIPT_DIR/ai-gate-review.py" validate \
+      --input "$STATE_DIR/ai-review-input.json" --verdict-file "$AI_VERDICT_FILE" \
+      --output "$STATE_DIR/ai-review.result.json"
+    python3 - "$STATE_DIR/ai-review.result.json" "$STATE_DIR/ai-review.result" <<'PY'
+import json, sys
+from pathlib import Path
+data = json.loads(Path(sys.argv[1]).read_text())
+Path(sys.argv[2]).write_text(
+    "validation=passed verdict=%s confidence=%s required_action=%s reason=%s\n" %
+    (data["verdict"], data["confidence"], data["required_action"], data["reason"].replace(" ", "_"))
+)
+PY
+    chmod 600 "$STATE_DIR/ai-review.result" "$STATE_DIR/ai-review.result.json"
+  fi
 }
 
 action_rollback() {
@@ -846,7 +884,7 @@ ACTION="${1:-}"
 shift || true
 # All state-changing phases share one lock, including observation and asset retirement.
 case "$ACTION" in
-  backup|stage|gate|cutover|observe|finalize|rollback|cleanup|recover)
+  backup|stage|gate|cutover|observe|review|finalize|rollback|cleanup|recover)
     load_config
     exec 9>"${CUTOVER_LOCK:-/var/lock/new-api-cutover.lock}"
     flock -n 9
@@ -862,6 +900,7 @@ case "$ACTION" in
   gate) action_gate "$@" ;;
   cutover) action_cutover "$@" ;;
   observe) action_observe "$@" ;;
+  review) action_review "$@" ;;
   finalize) action_finalize "$@" ;;
   rollback) action_rollback "$@" ;;
   cleanup) action_cleanup "$@" ;;

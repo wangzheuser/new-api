@@ -1,7 +1,19 @@
 # 发布 AI 审查模板
 
-固定规则做最终约束，AI 负责解释证据、选择本次功能测试，不直接操作业务权限来消除错误。
+固定规则做最终约束，AI 负责解释脱敏证据和归因，不直接操作切流、回滚或业务权限。
 本文件不增加 LLM API 调用或部署依赖；由发布执行者填写并保存在该 release 的 state 目录。
+
+## 机器校验流程
+
+观察结束后执行 `release-remote.sh review`，生成 `state/ai-review-input.json`。将该文件交给
+审查 agent，要求只返回下方 JSON；再设置 `AI_VERDICT_FILE` 执行同一命令完成固定规则校验。
+只有 `external_incident`、置信度至少 `0.8`、候选没有新增或增加的本地错误、基线和候选均有
+选路前拒绝、所有硬门禁及公网浏览器门禁通过时，才允许显式使用
+`finalize --accept-ai-review`。原始 `observation.result` 永远保留，AI 不能把确定性失败改写成通过。
+
+```json
+{"verdict":"external_incident|candidate_regression|inconclusive|pass","confidence":0.0,"reason":"单行原因","evidence_refs":["fingerprints"],"required_action":"rollback|hold|finalize"}
+```
 
 ## 可复用审查提示词
 

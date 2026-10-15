@@ -166,7 +166,7 @@ deploy/blue-green/build-local.sh prepare \
 
 - `release.env`；
 - 镜像 `.tar.zst`；
-- `release-remote.sh`、`gateway_control.py`、`protocol-stability-gate.sh`、`low-traffic-evidence.py`、`retention.py`（必须同提交、同目录上传）；
+- `release-remote.sh`、`gateway_control.py`、`protocol-stability-gate.sh`、`low-traffic-evidence.py`、`ai-gate-review.py`、`retention.py`（必须同提交、同目录上传）；
 - `docker-compose.slot.yml`；
 - 两套 target-clean-dist 归档。
 
