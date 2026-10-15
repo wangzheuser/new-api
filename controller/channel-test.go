@@ -27,6 +27,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -469,6 +470,32 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, op
 			context:     c,
 			localErr:    err,
 			newAPIError: types.NewError(err, types.ErrorCodeChannelModelMappedError),
+		}
+	}
+	if directNativeProbe {
+		// 原生探测也要应用模型映射中的推理后缀，保持与真实请求一致。
+		if err := helper.ApplyReasoningModelSuffix(c, info, request); err != nil {
+			return testResult{
+				context:     c,
+				localErr:    err,
+				newAPIError: types.NewError(err, types.ErrorCodeConvertRequestFailed),
+			}
+		}
+		if info.ReasoningConversion != nil {
+			var err error
+			switch req := request.(type) {
+			case *dto.ClaudeRequest:
+				err = relayconvert.ApplyClaudeThinkingModel(req, info)
+			case *dto.GeminiChatRequest:
+				err = relayconvert.ApplyGeminiThinkingConfigChecked(req, info)
+			}
+			if err != nil {
+				return testResult{
+					context:     c,
+					localErr:    err,
+					newAPIError: types.NewError(err, types.ErrorCodeConvertRequestFailed),
+				}
+			}
 		}
 	}
 

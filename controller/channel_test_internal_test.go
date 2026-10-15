@@ -1497,6 +1497,68 @@ func TestTestAllChannelsRejectsExistingActiveTask(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), "A channel test task is already running or queued")
 }
 
+// TestChannelNativeProbeAppliesReasoningSuffix verifies native probes render mapped effort controls.
+func TestChannelNativeProbeAppliesReasoningSuffix(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	service.InitHttpClient()
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"claude-sonnet-5":0.01}`))
+
+	settings := model_setting.GetGlobalSettings()
+	originalPassThrough := settings.PassThroughRequestEnabled
+	settings.PassThroughRequestEnabled = false
+	t.Cleanup(func() { settings.PassThroughRequestEnabled = originalPassThrough })
+
+	user := model.User{
+		Id:       1,
+		Username: "native-probe-reasoning-user",
+		Password: "test-password",
+		Role:     common.RoleRootUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+		Quota:    1_000_000,
+	}
+	user.SetSetting(dto.UserSetting{BillingPreference: "wallet_only", AcceptUnsetRatioModel: true})
+	require.NoError(t, db.Create(&user).Error)
+
+	captured := make(chan []byte, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		captured <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"msg-native-probe","type":"message","role":"assistant","model":"workbuddy-ai/glm-5.3-flash","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":1}}`)
+	}))
+	defer upstream.Close()
+
+	channel := model.Channel{
+		Id:           201,
+		Name:         "native-probe-reasoning",
+		Type:         constant.ChannelTypeAnthropic,
+		Key:          "fixture-upstream-key",
+		Status:       common.ChannelStatusEnabled,
+		Group:        "default",
+		Models:       "claude-sonnet-5",
+		BaseURL:      &upstream.URL,
+		ModelMapping: common.GetPointer(`{"claude-sonnet-5":"workbuddy-ai/glm-5.3-flash@effort:high"}`),
+	}
+
+	result := testChannel(t.Context(), &channel, user.Id, channelTestOptions{
+		model:             "claude-sonnet-5",
+		endpointType:      string(constant.EndpointTypeAnthropic),
+		nativeProbe:       true,
+		protocolProbeCase: protocolProbeCaseBasic,
+		transientProbe:    true,
+	})
+	require.NoError(t, result.localErr)
+	require.Nil(t, result.newAPIError)
+
+	body := <-captured
+	var payload map[string]any
+	require.NoError(t, common.Unmarshal(body, &payload))
+	assert.Equal(t, "workbuddy-ai/glm-5.3-flash", payload["model"])
+	assert.Equal(t, map[string]any{"effort": "high"}, payload["output_config"])
+	assert.NotContains(t, string(body), "@effort:")
+}
+
 // TestChannelTestSharesRelayWithoutCharging verifies the channel-100 mapping and accounting contract on each database.
 func TestChannelTestSharesRelayWithoutCharging(t *testing.T) {
 	service.InitHttpClient()
