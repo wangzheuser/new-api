@@ -1,11 +1,13 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -15,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -157,13 +160,13 @@ func TestChannelTestStreamingRequestsBuildMatchingRelayInfo(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			ctx, _ := gin.CreateTestContext(recorder)
 			ctx.Request = httptest.NewRequest(http.MethodPost, test.requestPath, nil)
-			request := buildTestRequest("test-model", string(test.endpointType), nil, channelTestOptions{isStream: true})
+			request := buildTestRequest("test-model", string(test.endpointType), &model.Channel{}, channelTestOptions{isStream: true})
 
 			info, err := relaycommon.GenRelayInfo(ctx, test.relayFormat, request, nil)
 
 			require.NoError(t, err)
 			assert.True(t, info.IsStream)
-			assert.True(t, request.IsStream(ctx))
+			assert.True(t, request.IsStream(ctx.Request))
 		})
 	}
 }
@@ -233,22 +236,20 @@ func TestChannelConnectionTestOutputLimit(t *testing.T) {
 	require.Len(t, compactInput, 1)
 	assert.Equal(t, "hi", compactInput[0]["content"])
 
-	for _, endpointType := range []constant.EndpointType{
-		constant.EndpointTypeAnthropic,
-		constant.EndpointTypeGemini,
-	} {
-		request, requestOk := buildTestRequest(
-			"text-model",
-			string(endpointType),
-			nil,
-			channelTestOptions{userPrompt: customPrompt, maxOutputTokens: customChannelTestMaxOutputTokens},
-		).(*dto.GeneralOpenAIRequest)
-		require.True(t, requestOk)
-		require.Len(t, request.Messages, 1)
-		assert.Equal(t, customPrompt, request.Messages[0].StringContent())
-		require.NotNil(t, request.MaxTokens)
-		assert.Equal(t, uint(1024), *request.MaxTokens)
-	}
+	claudeRequest, ok := buildTestRequest("text-model", string(constant.EndpointTypeAnthropic), nil,
+		channelTestOptions{userPrompt: customPrompt, maxOutputTokens: customChannelTestMaxOutputTokens}).(*dto.ClaudeRequest)
+	require.True(t, ok)
+	require.Len(t, claudeRequest.Messages, 1)
+	assert.Equal(t, customPrompt, claudeRequest.Messages[0].Content)
+	require.NotNil(t, claudeRequest.MaxTokens)
+	assert.Equal(t, uint(1024), *claudeRequest.MaxTokens)
+	geminiRequest, ok := buildTestRequest("text-model", string(constant.EndpointTypeGemini), nil,
+		channelTestOptions{userPrompt: customPrompt, maxOutputTokens: customChannelTestMaxOutputTokens}).(*dto.GeminiChatRequest)
+	require.True(t, ok)
+	require.Len(t, geminiRequest.Contents, 1)
+	assert.Equal(t, customPrompt, geminiRequest.Contents[0].Parts[0].Text)
+	require.NotNil(t, geminiRequest.GenerationConfig.MaxOutputTokens)
+	assert.Equal(t, uint(1024), *geminiRequest.GenerationConfig.MaxOutputTokens)
 
 	embeddingRequest, ok := buildTestRequest(
 		"embedding-model",
@@ -432,7 +433,11 @@ func TestChannelConnectionTestAppliesSavedSystemPrompt(t *testing.T) {
 				} `json:"messages"`
 			}
 			require.NoError(t, common.Unmarshal(body, &upstreamRequest))
-			assert.Equal(t, "gpt-4o", upstreamRequest.Model)
+			wantModel := "gpt-4o"
+			if test.settings.PassThroughBodyEnabled || test.globalPassThrough {
+				wantModel = "gpt-4o-mini"
+			}
+			assert.Equal(t, wantModel, upstreamRequest.Model)
 
 			systemPrompts := make([]string, 0, 1)
 			for _, message := range upstreamRequest.Messages {
@@ -1490,4 +1495,135 @@ func TestTestAllChannelsRejectsExistingActiveTask(t *testing.T) {
 	require.Equal(t, http.StatusConflict, recorder.Code)
 	require.Contains(t, recorder.Body.String(), existing.TaskID)
 	require.Contains(t, recorder.Body.String(), "A channel test task is already running or queued")
+}
+
+// TestChannelTestSharesRelayWithoutCharging verifies the channel-100 mapping and accounting contract on each database.
+func TestChannelTestSharesRelayWithoutCharging(t *testing.T) {
+	service.InitHttpClient()
+	oldLog, oldExport, oldBatch := common.LogConsumeEnabled, common.DataExportEnabled, common.BatchUpdateEnabled
+	common.LogConsumeEnabled, common.DataExportEnabled, common.BatchUpdateEnabled = true, false, false
+	t.Cleanup(func() {
+		common.LogConsumeEnabled, common.DataExportEnabled, common.BatchUpdateEnabled = oldLog, oldExport, oldBatch
+	})
+	for _, dialect := range []struct{ kind, env string }{{"sqlite", ""}, {"mysql", "TEST_MYSQL_DSN"}, {"postgres", "TEST_POSTGRES_DSN"}} {
+		t.Run(dialect.kind, func(t *testing.T) {
+			if dialect.env != "" && os.Getenv(dialect.env) == "" {
+				t.Skip("set " + dialect.env + " to run this database")
+			}
+			db := modelManagementDB(t, dialect.kind, os.Getenv(dialect.env))
+			require.NoError(t, db.AutoMigrate(&model.Log{}, &model.Token{}, &model.UserSubscription{}, &model.SubscriptionPlan{}))
+			require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"claude-sonnet-5":0.01}`))
+			user := model.User{Id: 1, Username: "relay-contract", Password: "test-password", Role: common.RoleRootUser, Status: common.UserStatusEnabled, Group: "default", Quota: 1000000}
+			user.SetSetting(dto.UserSetting{BillingPreference: "wallet_only"})
+			require.NoError(t, db.Create(&user).Error)
+			token := model.Token{UserId: user.Id, Key: "fixture-client-key", Name: "client", RemainQuota: 1000000}
+			require.NoError(t, db.Create(&token).Error)
+
+			type capturedRequest struct {
+				Path, Key string
+				Body      []byte
+			}
+			captured := make(chan capturedRequest, 8)
+			var fail atomic.Bool
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				captured <- capturedRequest{r.URL.RequestURI(), r.Header.Get("x-api-key"), body}
+				w.Header().Set("Content-Type", "application/json")
+				if fail.Load() {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					_, _ = io.WriteString(w, `{"type":"error","error":{"type":"overloaded_error","message":"fixture overloaded"}}`)
+					return
+				}
+				_, _ = io.WriteString(w, `{"id":"msg-fixture","type":"message","role":"assistant","model":"workbuddy-ai/glm-5.3-flash","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":1}}`)
+			}))
+			defer upstream.Close()
+			channel := model.Channel{Id: 100, Name: "channel-100-fixture", Type: constant.ChannelTypeAnthropic, Key: "fixture-upstream-key", Status: common.ChannelStatusEnabled, Group: "default", Models: "claude-sonnet-5", BaseURL: &upstream.URL, ModelMapping: common.GetPointer(`{"claude-sonnet-5":"workbuddy-ai/glm-5.3-flash@effort:high"}`)}
+			channel.SetSetting(dto.ChannelSettings{ModelSystemPrompts: map[string]string{"claude-sonnet-5": "shared model prompt"}})
+			require.NoError(t, db.Create(&channel).Error)
+			options := channelTestOptions{model: "claude-sonnet-5", endpointType: string(constant.EndpointTypeAnthropic), userPrompt: "hi", maxOutputTokens: 128, applySystemPrompt: true}
+			result := testChannel(t.Context(), &channel, user.Id, options)
+			require.NoError(t, result.localErr)
+			require.Nil(t, result.newAPIError)
+			testRequest := <-captured
+			var payload map[string]any
+			require.NoError(t, common.Unmarshal(testRequest.Body, &payload))
+			assert.Equal(t, "workbuddy-ai/glm-5.3-flash", payload["model"])
+			assert.Equal(t, map[string]any{"effort": "high"}, payload["output_config"])
+			assert.Equal(t, "/v1/messages", testRequest.Path)
+			assert.Equal(t, channel.Key, testRequest.Key)
+
+			var afterUser model.User
+			var afterToken model.Token
+			var afterChannel model.Channel
+			require.NoError(t, db.First(&afterUser, user.Id).Error)
+			require.NoError(t, db.First(&afterToken, token.Id).Error)
+			require.NoError(t, db.First(&afterChannel, channel.Id).Error)
+			assert.Equal(t, user.Quota, afterUser.Quota)
+			assert.Zero(t, afterUser.UsedQuota)
+			assert.Zero(t, afterUser.RequestCount)
+			assert.Equal(t, token.RemainQuota, afterToken.RemainQuota)
+			assert.Zero(t, afterToken.UsedQuota)
+			assert.Zero(t, afterChannel.UsedQuota)
+			var logs []model.Log
+			require.NoError(t, db.Where("type = ?", model.LogTypeConsume).Find(&logs).Error)
+			require.Len(t, logs, 1)
+			assert.Equal(t, "模型测试", logs[0].Content)
+			assert.Equal(t, "模型测试", logs[0].TokenName)
+			require.Positive(t, logs[0].Quota)
+			assert.Equal(t, 2, logs[0].PromptTokens)
+			assert.Equal(t, 1, logs[0].CompletionTokens)
+
+			// The public relay receives the identical input and must still debit both wallet and token.
+			body, err := common.Marshal(buildTestRequest(options.model, options.endpointType, &channel, options))
+			require.NoError(t, err)
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+			ctx.Request.Header.Set("Content-Type", "application/json")
+			cache, err := model.GetUserCache(user.Id)
+			require.NoError(t, err)
+			cache.WriteContext(ctx)
+			ctx.Set("id", user.Id)
+			ctx.Set("group", "default")
+			common.SetContextKey(ctx, constant.ContextKeyTokenId, token.Id)
+			common.SetContextKey(ctx, constant.ContextKeyTokenKey, token.Key)
+			require.Nil(t, middleware.SetupContextForSelectedChannel(ctx, &channel, options.model))
+			Relay(ctx, types.RelayFormatClaude)
+			common.CleanupBodyStorage(ctx)
+			require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+			clientRequest := <-captured
+			assert.Equal(t, testRequest.Path, clientRequest.Path)
+			assert.Equal(t, testRequest.Key, clientRequest.Key)
+			assert.JSONEq(t, string(testRequest.Body), string(clientRequest.Body))
+			require.NoError(t, db.First(&afterUser, user.Id).Error)
+			require.NoError(t, db.First(&afterToken, token.Id).Error)
+			require.NoError(t, db.First(&afterChannel, channel.Id).Error)
+			assert.Equal(t, user.Quota-logs[0].Quota, afterUser.Quota)
+			assert.Equal(t, logs[0].Quota, int(afterUser.UsedQuota))
+			assert.Equal(t, 1, afterUser.RequestCount)
+			assert.Equal(t, token.RemainQuota-logs[0].Quota, afterToken.RemainQuota)
+			assert.Equal(t, logs[0].Quota, int(afterToken.UsedQuota))
+			assert.Equal(t, logs[0].Quota, int(afterChannel.UsedQuota))
+
+			// An unsaved draft and explicit key stay pinned even when the upstream fails.
+			fail.Store(true)
+			draft := channel
+			draft.Key = "draft-key-a\ndraft-key-b"
+			draft.ChannelInfo = model.ChannelInfo{IsMultiKey: true, MultiKeySize: 2, MultiKeyMode: constant.MultiKeyModePolling}
+			draft.ModelMapping = common.GetPointer(`{"claude-sonnet-5":"draft-model@effort:high"}`)
+			draft.ParamOverride = common.GetPointer(common.GetJsonString(finalErrorOverrideForTest("test final error", 429, "fixture_final")))
+			options.keyIndex = common.GetPointer(1)
+			result = testChannel(t.Context(), &draft, user.Id, options)
+			require.Error(t, result.localErr)
+			require.NotNil(t, result.newAPIError)
+			assert.Equal(t, 429, result.newAPIError.StatusCode)
+			assert.Contains(t, result.newAPIError.Error(), "test final error")
+			assert.Equal(t, 503, result.upstreamStatus)
+			draftRequest := <-captured
+			assert.Equal(t, "draft-key-b", draftRequest.Key)
+			require.NoError(t, common.Unmarshal(draftRequest.Body, &payload))
+			assert.Equal(t, "draft-model", payload["model"])
+			assert.Empty(t, captured, "tests must not retry another key or channel")
+		})
+	}
 }

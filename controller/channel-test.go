@@ -406,6 +406,9 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, op
 			}
 		}
 	}
+	if !options.nativeProbe && (channelTestEndpointSupportsStream(effectiveEndpointType) || effectiveEndpointType == constant.EndpointTypeOpenAIResponseCompact) {
+		return testTextChannel(c, w, channel, request, relayFormat, effectiveEndpointType, options)
+	}
 
 	info, err := relaycommon.GenRelayInfo(c, relayFormat, request, nil)
 
@@ -1149,12 +1152,23 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 				Model: model,
 				Input: defaultResponsesInput,
 			}
-		case constant.EndpointTypeAnthropic, constant.EndpointTypeGemini, constant.EndpointTypeOpenAI:
+		case constant.EndpointTypeAnthropic:
+			return &dto.ClaudeRequest{
+				Model:     model,
+				Messages:  []dto.ClaudeMessage{{Role: "user", Content: userPrompt}},
+				Stream:    lo.ToPtr(options.isStream),
+				MaxTokens: lo.ToPtr(lo.Ternary(options.maxOutputTokens > 0, options.maxOutputTokens, uint(16))),
+			}
+		case constant.EndpointTypeGemini:
+			request := &dto.GeminiChatRequest{
+				Contents:         []dto.GeminiChatContent{{Role: "user", Parts: []dto.GeminiPart{{Text: userPrompt}}}},
+				GenerationConfig: dto.GeminiChatGenerationConfig{MaxOutputTokens: lo.ToPtr(lo.Ternary(options.maxOutputTokens > 0, options.maxOutputTokens, uint(3000)))},
+			}
+			request.SetModelName(model)
+			return request
+		case constant.EndpointTypeOpenAI:
 			// 返回 GeneralOpenAIRequest
 			maxTokens := uint(16)
-			if constant.EndpointType(endpointType) == constant.EndpointTypeGemini {
-				maxTokens = 3000
-			}
 			req := &dto.GeneralOpenAIRequest{
 				Model:  model,
 				Stream: lo.ToPtr(options.isStream),
@@ -1266,6 +1280,10 @@ func buildRootTestRequest(modelName string, endpointType string, options channel
 	switch request.(type) {
 	case *dto.GeneralOpenAIRequest:
 		converted = &rootdto.GeneralOpenAIRequest{}
+	case *dto.ClaudeRequest:
+		converted = &rootdto.ClaudeRequest{}
+	case *dto.GeminiChatRequest:
+		converted = &rootdto.GeminiChatRequest{}
 	case *dto.OpenAIResponsesRequest:
 		converted = &rootdto.OpenAIResponsesRequest{}
 	case *dto.OpenAIResponsesCompactionRequest:

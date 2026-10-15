@@ -419,7 +419,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	if usage == nil {
 		extraContent = append(extraContent, common.NewMessage("Upstream returned no usage"))
 	}
-	if originUsage != nil {
+	if originUsage != nil && !relayInfo.IsChannelTest {
 		ObserveChannelAffinityUsageCacheByRelayFormat(ctx, rootUsage(billingUsage), relayInfo.GetFinalRequestRelayFormat())
 	}
 
@@ -483,7 +483,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		if relayInfo.StreamStatus != nil {
 			relayInfo.StreamStatus.MarkBillingFailed()
 		}
-	} else if summary.hasBillableUsage() {
+	} else if summary.hasBillableUsage() && !relayInfo.IsChannelTest {
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, summary.Quota)
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, summary.Quota)
 	}
@@ -565,6 +565,10 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	if relayInfo.IsContextFallbackActive() {
 		logChannelID = relayInfo.ContextFallback.SourceChannelID
 	}
+	var logContent any = extraContent
+	if relayInfo.IsChannelTest {
+		logContent = "模型测试"
+	}
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
 		ChannelId:           logChannelID,
 		PromptTokens:        summary.PromptTokens,
@@ -575,7 +579,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		ModelName:           logModel,
 		TokenName:           summary.TokenName,
 		Quota:               summary.Quota,
-		Content:             extraContent,
+		Content:             logContent,
 		TokenId:             relayInfo.TokenId,
 		UseTimeSeconds:      int(summary.UseTimeSeconds),
 		IsStream:            relayInfo.IsStream,
@@ -585,9 +589,11 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	// Health is classified from the final stream outcome so failed and
 	// interrupted responses cannot be counted as successful just because
 	// their usage was settled.
-	gopool.Go(func() {
-		perfmetrics.RecordRelayResult(context.Background(), relayInfo, nil)
-	})
+	if !relayInfo.IsChannelTest {
+		gopool.Go(func() {
+			perfmetrics.RecordRelayResult(context.Background(), relayInfo, nil)
+		})
+	}
 	return settleErr
 }
 

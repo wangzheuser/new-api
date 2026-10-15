@@ -524,6 +524,15 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	if ok {
 		channelMeta.ChannelSetting = channelSetting
 	}
+	// Resolve the same model-specific prompt for every protocol and channel test.
+	promptSettings := rootdto.ChannelSettings{
+		SystemPrompt:         channelSetting.SystemPrompt,
+		SystemPromptOverride: channelSetting.SystemPromptOverride,
+		ModelSystemPrompts:   channelSetting.ModelSystemPrompts,
+	}
+	channelMeta.ChannelSetting.SystemPrompt, channelMeta.ChannelSetting.SystemPromptOverride, _, _ = model_setting.ResolveSystemPrompt(
+		promptSettings, info.GetRequestedModelName(), attemptModelName, info.IsContextFallbackActive(),
+	)
 
 	channelOtherSettings, ok := common.GetContextKeyType[dto.ChannelOtherSettings](c, constant.ContextKeyChannelOtherSetting)
 	if !ok {

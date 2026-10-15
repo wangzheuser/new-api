@@ -70,7 +70,13 @@ func geminiRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewA
 	return err
 }
 
+// Relay executes a normal client request through the shared relay pipeline.
 func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+	executeRelayRequest(c, relayFormat, nil)
+}
+
+// executeRelayRequest keeps channel tests on the client pipeline while pinning their channel snapshot.
+func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChannel *model.Channel) (relayInfo *relaycommon.RelayInfo, newAPIError *types.NewAPIError) {
 	defer service.FinishChannelKeyProbe(c, false)
 	handlerStartedAt := time.Now()
 	common.SetContextKey(c, constant.ContextKeyRelayUpstreamSucceeded, false)
@@ -80,11 +86,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	//originalModel := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 
 	var (
-		newAPIError           *types.NewAPIError
 		clientResponseError   *types.NewAPIError
 		rawFinalError         *types.NewAPIError
 		ws                    *websocket.Conn
-		relayInfo             *relaycommon.RelayInfo
 		relayStarted          bool
 		billingFinalizerArmed bool
 	)
@@ -129,16 +133,23 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			if finalizeErr != nil {
 				logger.LogError(c, "error finalizing failed stream billing: "+finalizeErr.Error())
 			}
-			service.ChargeViolationFeeIfNeeded(c, relayInfo, newAPIError)
+			if testChannel == nil {
+				service.ChargeViolationFeeIfNeeded(c, relayInfo, newAPIError)
+			}
 		}
-		if newAPIError != nil && finalization != relaycommon.BillingSettled && finalization != relaycommon.BillingSettledPartial {
+		if testChannel == nil && newAPIError != nil && finalization != relaycommon.BillingSettled && finalization != relaycommon.BillingSettledPartial {
 			perfmetrics.RecordRelayResultSync(context.Background(), relayInfo, newAPIError)
 		}
 		conversationError := newAPIError
 		if conversationError == nil {
 			conversationError = clientResponseError
 		}
-		service.RecordConversationLog(c, relayInfo, conversationError)
+		if testChannel == nil {
+			service.RecordConversationLog(c, relayInfo, conversationError)
+		}
+		if newAPIError == nil {
+			newAPIError = clientResponseError
+		}
 	}()
 
 	request, err := helper.GetAndValidateRequest(c, relayFormat)
@@ -158,6 +169,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
 	}
+	relayInfo.IsChannelTest = testChannel != nil
 	if relayFormat != types.RelayFormatOpenAIRealtime {
 		installRequestedModelResponseWriter(c, relayInfo)
 	}
@@ -218,7 +230,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	if priceData.FreeModel {
 		logger.LogInfo(c, fmt.Sprintf("模型 %s 免费，跳过预扣费", relayInfo.OriginModelName))
-	} else {
+	} else if !relayInfo.IsChannelTest {
 		newAPIError = service.PreConsumeBilling(c, priceData.QuotaToPreConsume, relayInfo)
 		if newAPIError != nil {
 			return
@@ -250,7 +262,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		relayInfo.RetryIndex = retryParam.GetRetry()
-		channel, channelErr := getChannel(c, relayInfo, retryParam)
+		channel := testChannel
+		var channelErr *types.NewAPIError
+		if channel == nil {
+			channel, channelErr = getChannel(c, relayInfo, retryParam)
+		} else {
+			service.RequestPolicy(c).BeginAttempt(channel, relayInfo.UsingGroup)
+		}
 		if channelErr != nil {
 			logger.LogError(c, channelErr.Error())
 			newAPIError = channelErr
@@ -283,9 +301,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		if newAPIError == nil {
 			service.FinishChannelKeyProbe(c, true)
-			service.RecordChannelUpstreamResponseAsync(channel, http.StatusOK,
-				common.GetContextKeyString(c, constant.ContextKeyChannelKey),
-				common.GetContextKeyString(c, constant.ContextKeyChannelHealthModel))
+			if testChannel == nil {
+				service.RecordChannelUpstreamResponseAsync(channel, http.StatusOK,
+					common.GetContextKeyString(c, constant.ContextKeyChannelKey),
+					common.GetContextKeyString(c, constant.ContextKeyChannelHealthModel))
+			}
 			relayInfo.LastError = nil
 			// Response overrides may map one successful, billable upstream attempt
 			// to a client 4xx/5xx without changing its internal success semantics.
@@ -312,6 +332,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
 		relayInfo.LastError = newAPIError
+		// Tests report this exact channel/key; callers retain their existing health policy.
+		if testChannel != nil {
+			break
+		}
 
 		willRetry := shouldRetry(c, relayInfo, newAPIError, common.RetryTimes-retryParam.GetRetry())
 		localBillingError := types.IsLocalBillingError(newAPIError)
@@ -392,6 +416,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			newAPIError = resolveConfiguredFinalRelayError(c, relayInfo)
 		}
 	}
+	return
 }
 
 // rootRequestForContextFallback adapts the standalone relaykit DTO to the

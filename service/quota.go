@@ -389,7 +389,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		} else {
 			extraContent += ", 计费结算失败，保留预扣待对账"
 		}
-	} else if totalTokens > 0 || fixedPriceBilling {
+	} else if (totalTokens > 0 || fixedPriceBilling) && !relayInfo.IsChannelTest {
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
 	}
