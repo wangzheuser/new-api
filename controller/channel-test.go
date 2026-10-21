@@ -48,16 +48,29 @@ type testResult struct {
 	responseBodyTruncated bool
 	upstreamStatus        int
 	effectiveEndpointType constant.EndpointType
+	upstreamEndpointType  constant.EndpointType
+	upstreamModel         string
 	isStream              bool
 }
 
+// channelTestPromptDetails exposes policy decisions without the prompt body.
+type channelTestPromptDetails struct {
+	Applied      bool   `json:"applied"`
+	Source       string `json:"source,omitempty"`
+	MatchedModel string `json:"matched_model,omitempty"`
+	BypassReason string `json:"bypass_reason,omitempty"`
+}
+
 type channelTestResponseDetails struct {
-	EffectiveEndpointType constant.EndpointType `json:"effective_endpoint_type"`
-	Stream                bool                  `json:"stream"`
-	Content               string                `json:"content,omitempty"`
-	ReasoningContent      string                `json:"reasoning_content,omitempty"`
-	RawResponse           string                `json:"raw_response"`
-	RawResponseTruncated  bool                  `json:"raw_response_truncated"`
+	EffectiveEndpointType constant.EndpointType     `json:"effective_endpoint_type"`
+	UpstreamEndpointType  constant.EndpointType     `json:"upstream_endpoint_type,omitempty"`
+	UpstreamModel         string                    `json:"upstream_model,omitempty"`
+	SystemPrompt          *channelTestPromptDetails `json:"system_prompt,omitempty"`
+	Stream                bool                      `json:"stream"`
+	Content               string                    `json:"content,omitempty"`
+	ReasoningContent      string                    `json:"reasoning_content,omitempty"`
+	RawResponse           string                    `json:"raw_response"`
+	RawResponseTruncated  bool                      `json:"raw_response_truncated"`
 }
 
 type channelTestOptions struct {
@@ -519,7 +532,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, op
 		info.FinalRequestRelayFormat = relayFormat
 	}
 	if options.applySystemPrompt {
-		if apiErr := applySystemPromptForRelayRequest(c, info, request); apiErr != nil {
+		if apiErr := relay.ApplySystemPromptForRequest(c, info, request); apiErr != nil {
 			return testResult{
 				context:     c,
 				localErr:    apiErr,
@@ -937,43 +950,6 @@ func rootRequestFromRelay(request dto.Request) (rootdto.Request, error) {
 		return nil, err
 	}
 	return converted, nil
-}
-
-// applySystemPromptForRelayRequest reuses the host prompt policy for relaykit requests.
-func applySystemPromptForRelayRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.Request) *types.NewAPIError {
-	data, err := common.Marshal(request)
-	if err != nil {
-		return types.NewError(err, types.ErrorCodeJsonMarshalFailed)
-	}
-	var rootRequest rootdto.Request
-	switch request.(type) {
-	case *dto.GeneralOpenAIRequest:
-		rootRequest = &rootdto.GeneralOpenAIRequest{}
-	case *dto.OpenAIResponsesRequest:
-		rootRequest = &rootdto.OpenAIResponsesRequest{}
-	case *dto.OpenAIResponsesCompactionRequest:
-		rootRequest = &rootdto.OpenAIResponsesCompactionRequest{}
-	case *dto.ClaudeRequest:
-		rootRequest = &rootdto.ClaudeRequest{}
-	case *dto.GeminiChatRequest:
-		rootRequest = &rootdto.GeminiChatRequest{}
-	default:
-		return nil
-	}
-	if err := common.Unmarshal(data, rootRequest); err != nil {
-		return types.NewError(err, types.ErrorCodeJsonMarshalFailed)
-	}
-	if apiErr := relay.ApplySystemPromptForRequest(c, info, rootRequest); apiErr != nil {
-		return apiErr
-	}
-	updated, err := common.Marshal(rootRequest)
-	if err != nil {
-		return types.NewError(err, types.ErrorCodeJsonMarshalFailed)
-	}
-	if err := common.Unmarshal(updated, request); err != nil {
-		return types.NewError(err, types.ErrorCodeJsonMarshalFailed)
-	}
-	return nil
 }
 
 func coerceTestUsage(usageAny any, isStream bool, estimatePromptTokens int) (*dto.Usage, error) {
@@ -1967,14 +1943,25 @@ func buildChannelTestResponseDetails(result testResult) channelTestResponseDetai
 	sanitizedBody, _ := service.SanitizeConversationBody(result.responseBody)
 	sanitizedBody, truncated := truncateChannelTestResponseDetail(sanitizedBody)
 
-	return channelTestResponseDetails{
+	details := channelTestResponseDetails{
 		EffectiveEndpointType: result.effectiveEndpointType,
+		UpstreamEndpointType:  result.upstreamEndpointType,
+		UpstreamModel:         result.upstreamModel,
 		Stream:                result.isStream,
 		Content:               content,
 		ReasoningContent:      reasoningContent,
 		RawResponse:           string(sanitizedBody),
 		RawResponseTruncated:  result.responseBodyTruncated || truncated,
 	}
+	if result.context != nil && common.GetContextKeyString(result.context, constant.ContextKeySystemPromptSource) != "" {
+		details.SystemPrompt = &channelTestPromptDetails{
+			Applied:      common.GetContextKeyBool(result.context, constant.ContextKeySystemPromptApplied),
+			Source:       common.GetContextKeyString(result.context, constant.ContextKeySystemPromptSource),
+			MatchedModel: common.GetContextKeyString(result.context, constant.ContextKeySystemPromptModel),
+			BypassReason: common.GetContextKeyString(result.context, constant.ContextKeySystemPromptBypassReason),
+		}
+	}
+	return details
 }
 
 // truncateChannelTestResponseDetail limits a display response without splitting a UTF-8 sequence.

@@ -209,7 +209,7 @@ func TestTextRequestViaResponsesConvertsClaudeDirectly(t *testing.T) {
 	assert.Equal(t, "ok", response.Content[0].GetText())
 }
 
-func TestApplySystemPromptIfNeededSkipsToolLoadingMessages(t *testing.T) {
+func TestApplySystemPromptSkipsToolLoadingMessages(t *testing.T) {
 	tools := json.RawMessage(`[{"type":"function","function":{"name":"get_current_time","parameters":{"type":"object","properties":{"city":{"type":"string"}}}}}]`)
 	toolLoading := dto.Message{Role: "system", Tools: tools}
 	user := dto.Message{Role: "user", Content: "What time is it in Beijing?"}
@@ -259,7 +259,7 @@ func TestApplySystemPromptIfNeededSkipsToolLoadingMessages(t *testing.T) {
 				Messages: append([]dto.Message(nil), tt.messages...),
 			}
 
-			applySystemPromptIfNeeded(c, info, request)
+			applyOpenAISystemPrompt(c, request, info.ChannelSetting.SystemPrompt, info.ChannelSetting.SystemPromptOverride)
 
 			require.Len(t, request.Messages, len(tt.wantMessages))
 			for i, want := range tt.wantMessages {

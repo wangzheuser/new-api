@@ -25,6 +25,9 @@ func ParseSystemPrompt(value string) (*dto.ModelSystemPromptPolicy, error) {
 	if p == nil {
 		return nil, fmt.Errorf("system_prompt: policy must be an object")
 	}
+	if p.Models == nil {
+		return nil, fmt.Errorf("system_prompt: models must be an object")
+	}
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}

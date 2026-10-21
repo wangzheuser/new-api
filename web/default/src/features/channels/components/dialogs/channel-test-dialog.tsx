@@ -1605,6 +1605,38 @@ function TestDetailsSheet({
   const content = result?.details?.content ?? ''
   const reasoningContent = result?.details?.reasoning_content ?? ''
   const rawResponse = result?.details?.raw_response ?? ''
+  const upstreamProtocol = result?.details?.upstream_endpoint_type
+  const upstreamOption = getChannelTestEndpointConfig(upstreamProtocol)
+  const upstreamProtocolLabel = upstreamOption
+    ? t(upstreamOption.label)
+    : upstreamProtocol
+  const upstreamModel = result?.details?.upstream_model
+  const systemPrompt = result?.details?.system_prompt
+  const promptSources: Record<string, string> = {
+    global_model_requested: t('Global model system prompts'),
+    global_model_attempt: t('Global model system prompts'),
+    model_requested: t('Model-specific prompt'),
+    model_attempt: t('Model-specific prompt'),
+    channel_default: t('Channel default prompt'),
+  }
+  const promptBypasses: Record<string, string> = {
+    not_matched: t('No matching system prompt'),
+    pass_through: t(
+      'Request body passthrough is enabled, so system prompts are not injected.'
+    ),
+    client_system_prompt: t('Client system prompt preserved'),
+  }
+  const promptStatus = systemPrompt?.applied
+    ? t('System prompt injected')
+    : t('System prompt not injected')
+  const promptDescription = systemPrompt?.bypass_reason
+    ? (promptBypasses[systemPrompt.bypass_reason] ?? systemPrompt.bypass_reason)
+    : [
+        promptSources[systemPrompt?.source ?? ''] ?? systemPrompt?.source,
+        systemPrompt?.matched_model,
+      ]
+        .filter(Boolean)
+        .join(' · ')
   const failureDisplay = getFailureStatusDisplay({
     errorText: result?.error?.trim(),
     fallbackSummary: t('Test failed'),
@@ -1634,7 +1666,18 @@ function TestDetailsSheet({
       sections.push(`${t('Error Code')}: ${result.errorCode}`)
     }
     if (showEffectiveEndpoint && effectiveEndpointLabel) {
-      sections.push(`${t('Effective Endpoint')}: ${effectiveEndpointLabel}`)
+      sections.push(`${t('Test protocol')}: ${effectiveEndpointLabel}`)
+    }
+    if (upstreamProtocolLabel) {
+      sections.push(`${t('Upstream protocol')}: ${upstreamProtocolLabel}`)
+    }
+    if (upstreamModel) {
+      sections.push(`${t('Upstream Model')}: ${upstreamModel}`)
+    }
+    if (systemPrompt) {
+      sections.push(
+        `${t('System Prompt')}: ${promptStatus} · ${promptDescription}`
+      )
     }
     if (!isStructuredResponse && reasoningContent) {
       sections.push(`${t('Reasoning Content')}:\n${reasoningContent}`)
@@ -1662,6 +1705,11 @@ function TestDetailsSheet({
     showEffectiveEndpoint,
     statusLabel,
     t,
+    upstreamProtocolLabel,
+    upstreamModel,
+    systemPrompt,
+    promptStatus,
+    promptDescription,
   ])
 
   return (
@@ -1717,10 +1765,39 @@ function TestDetailsSheet({
                 {showEffectiveEndpoint && effectiveEndpointLabel && (
                   <div className='space-y-1'>
                     <div className='text-muted-foreground text-xs font-medium'>
-                      {t('Effective Endpoint')}
+                      {t('Test protocol')}
                     </div>
                     <p className='text-sm leading-snug wrap-break-word'>
                       {effectiveEndpointLabel}
+                    </p>
+                  </div>
+                )}
+                {upstreamProtocolLabel && (
+                  <div className='space-y-1'>
+                    <div className='text-muted-foreground text-xs font-medium'>
+                      {t('Upstream protocol')}
+                    </div>
+                    <p className='text-sm leading-snug wrap-break-word'>
+                      {upstreamProtocolLabel}
+                    </p>
+                  </div>
+                )}
+                {upstreamModel && (
+                  <div className='col-span-2 space-y-1'>
+                    <div className='text-muted-foreground text-xs font-medium'>
+                      {t('Upstream Model')}
+                    </div>
+                    <p className='text-sm break-all'>{upstreamModel}</p>
+                  </div>
+                )}
+                {systemPrompt && (
+                  <div className='col-span-2 space-y-1'>
+                    <div className='text-muted-foreground text-xs font-medium'>
+                      {t('System Prompt')}
+                    </div>
+                    <p className='text-sm'>{promptStatus}</p>
+                    <p className='text-muted-foreground text-xs wrap-break-word'>
+                      {promptDescription}
                     </p>
                   </div>
                 )}

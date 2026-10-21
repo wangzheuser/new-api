@@ -33,6 +33,7 @@ import {
   CONTEXT_OPTION,
   SYSTEM_PROMPT_OPTION,
   DEFAULT_CACHE,
+  parseSystemPromptPolicy,
   validateInputPolicies,
   type CachePolicy,
   type ContextPolicy,
@@ -78,7 +79,7 @@ export function GlobalInputPolicies() {
   try {
     context = JSON.parse(contextRaw)
     cache = JSON.parse(cacheRaw)
-    systemPrompt = JSON.parse(systemPromptRaw)
+    systemPrompt = parseSystemPromptPolicy(systemPromptRaw)
     if (
       !context?.models ||
       !cache ||
@@ -187,7 +188,10 @@ export function GlobalInputPolicies() {
               )
             }
             onClick={() =>
-              save.mutate({ key: SYSTEM_PROMPT_OPTION, value: systemPromptRaw })
+              save.mutate({
+                key: SYSTEM_PROMPT_OPTION,
+                value: JSON.stringify(systemPrompt),
+              })
             }
           >
             {t('Save global system prompts')}

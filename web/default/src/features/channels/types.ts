@@ -256,6 +256,14 @@ export interface ChannelTestResponseDetails {
   response_time?: number
   error?: string
   effective_endpoint_type?: string
+  upstream_endpoint_type?: string
+  upstream_model?: string
+  system_prompt?: {
+    applied: boolean
+    source?: string
+    matched_model?: string
+    bypass_reason?: string
+  }
   stream?: boolean
   content?: string
   reasoning_content?: string

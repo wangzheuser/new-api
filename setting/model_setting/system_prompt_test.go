@@ -33,4 +33,8 @@ func TestParseSystemPromptValidation(t *testing.T) {
 	require.NoError(t, ValidateInputPolicyOption(SystemPromptOption, `{"models":{"m":"prompt"}}`))
 	assert.Error(t, ValidateInputPolicyOption(SystemPromptOption, `{"models":{"m":"  "}}`))
 	assert.Error(t, ValidateInputPolicyOption(SystemPromptOption, `{"models":{" m":"prompt"}}`))
+	for _, value := range []string{`{}`, `null`, `{"models":null}`, `{"models":[]}`} {
+		assert.Error(t, ValidateInputPolicyOption(SystemPromptOption, value), value)
+	}
+	require.NoError(t, ValidateInputPolicyOption(SystemPromptOption, `{"models":{}}`))
 }

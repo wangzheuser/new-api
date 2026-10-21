@@ -100,6 +100,17 @@ export const systemPromptPolicySchema = z.object({
 
 export type SystemPromptPolicy = z.input<typeof systemPromptPolicySchema>
 
+/** Read legacy empty policies without changing the configured prompt text. */
+export function parseSystemPromptPolicy(raw: string): SystemPromptPolicy {
+  const parsed = JSON.parse(raw)
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Invalid system prompt policy')
+  }
+  const policy = { ...parsed, models: parsed.models ?? {} }
+  systemPromptPolicySchema.parse(policy)
+  return policy
+}
+
 /** Validate a draft before replacing or adding one model prompt. */
 export function updateGlobalModelSystemPrompts(
   value: Record<string, string>,

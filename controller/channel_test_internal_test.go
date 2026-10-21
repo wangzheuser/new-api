@@ -580,6 +580,13 @@ func TestChannelTestResponseOverrideMatchStillRecordsUsage(t *testing.T) {
 
 // TestChannelTestFinalClientResponseMatrix verifies every dialog endpoint and supported stream shape traverses a real upstream relay.
 func TestChannelTestFinalClientResponseMatrix(t *testing.T) {
+	require.NoError(t, model_setting.SetSystemPrompt(common.GetJsonString(dto.ModelSystemPromptPolicy{
+		Models: map[string]string{
+			"test-model": "matrix system prompt",
+			ratio_setting.WithCompactModelSuffix("test-model"): "matrix system prompt",
+		},
+	})))
+	t.Cleanup(func() { require.NoError(t, model_setting.SetSystemPrompt(`{"models":{}}`)) })
 	db := setupModelListControllerTestDB(t)
 	service.InitHttpClient()
 	originalStreamingTimeout := constant.StreamingTimeout
@@ -650,8 +657,13 @@ func TestChannelTestFinalClientResponseMatrix(t *testing.T) {
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			requestCount := 0
-			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 				requestCount++
+				body, err := io.ReadAll(request.Body)
+				assert.NoError(t, err)
+				if channelTestEndpointSupportsStream(test.endpointType) || test.endpointType == constant.EndpointTypeOpenAIResponseCompact {
+					assert.Equal(t, 1, strings.Count(string(body), "matrix system prompt"))
+				}
 				w.Header().Set("Content-Type", test.contentType)
 				_, _ = io.WriteString(w, test.upstreamBody)
 			}))
@@ -1686,6 +1698,105 @@ func TestChannelTestSharesRelayWithoutCharging(t *testing.T) {
 			require.NoError(t, common.Unmarshal(draftRequest.Body, &payload))
 			assert.Equal(t, "draft-model", payload["model"])
 			assert.Empty(t, captured, "tests must not retry another key or channel")
+		})
+	}
+}
+
+// TestChannelConnectionGlobalSystemPrompt exercises the same channel-test entry used by the dialog.
+func TestChannelConnectionGlobalSystemPrompt(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	service.InitHttpClient()
+	user := &model.User{Id: 1, Username: "audit-channel-prompt", Password: "fixture-password", Role: common.RoleRootUser, Status: common.UserStatusEnabled, Quota: 1000000, Group: "default"}
+	user.SetSetting(dto.UserSetting{AcceptUnsetRatioModel: true})
+	require.NoError(t, db.Create(user).Error)
+	oldLog := common.LogConsumeEnabled
+	oldPass := model_setting.GetGlobalSettings().PassThroughRequestEnabled
+	common.LogConsumeEnabled = false
+	model_setting.GetGlobalSettings().PassThroughRequestEnabled = false
+	t.Cleanup(func() {
+		common.LogConsumeEnabled = oldLog
+		model_setting.GetGlobalSettings().PassThroughRequestEnabled = oldPass
+		_ = model_setting.SetSystemPrompt(`{"models":{}}`)
+	})
+	const marker = "GLOBAL_SYSTEM_PROMPT"
+	for _, tc := range []struct {
+		name, endpoint, policyKey string
+		kind                      int
+		settings                  dto.ChannelSettings
+		expected                  string
+	}{
+		{name: "openai_global_exact", kind: constant.ChannelTypeOpenAI, policyKey: "claude-sonnet-5", expected: marker},
+		{name: "newapi_global_exact", kind: constant.ChannelTypeNewAPI, policyKey: "claude-sonnet-5", expected: marker},
+		{name: "channel_model_overrides_global", kind: constant.ChannelTypeOpenAI, policyKey: "claude-sonnet-5", settings: dto.ChannelSettings{ModelSystemPrompts: map[string]string{"claude-sonnet-5": "CHANNEL_PROMPT"}}, expected: "CHANNEL_PROMPT"},
+		{name: "upstream_model_key_does_not_match_public_model", kind: constant.ChannelTypeOpenAI, policyKey: "upstream-model"},
+		{name: "passthrough_skips_global", kind: constant.ChannelTypeOpenAI, policyKey: "claude-sonnet-5", settings: dto.ChannelSettings{PassThroughBodyEnabled: true}},
+		{name: "responses_global", kind: constant.ChannelTypeOpenAI, endpoint: string(constant.EndpointTypeOpenAIResponse), policyKey: "claude-sonnet-5", expected: marker},
+		{name: "chat_to_claude_global", kind: constant.ChannelTypeAnthropic, policyKey: "claude-sonnet-5", expected: marker},
+		{name: "chat_to_gemini_global", kind: constant.ChannelTypeGemini, policyKey: "claude-sonnet-5", expected: marker},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, err := common.Marshal(map[string]any{"models": map[string]string{tc.policyKey: marker}})
+			require.NoError(t, err)
+			require.NoError(t, model_setting.SetSystemPrompt(string(b)))
+			captured := make(chan string, 1)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				data, err := io.ReadAll(r.Body)
+				if err != nil {
+					http.Error(w, err.Error(), 500)
+					return
+				}
+				captured <- string(data)
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case strings.Contains(r.URL.Path, "generateContent"):
+					_, _ = io.WriteString(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":1,"totalTokenCount":3}}`)
+				case r.URL.Path == "/v1/messages":
+					_, _ = io.WriteString(w, `{"id":"msg_audit","type":"message","role":"assistant","model":"upstream-model","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":1}}`)
+				case r.URL.Path == "/v1/responses":
+					_, _ = io.WriteString(w, `{"id":"resp_audit","object":"response","model":"upstream-model","status":"completed","output":[{"id":"msg_audit","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}`)
+				default:
+					_, _ = io.WriteString(w, `{"id":"chatcmpl_audit","object":"chat.completion","created":1,"model":"upstream-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`)
+				}
+			}))
+			defer upstream.Close()
+			base := upstream.URL
+			mapping := `{"claude-sonnet-5":"upstream-model"}`
+			channel := &model.Channel{Id: 1, Type: tc.kind, Key: "fixture-key", Status: common.ChannelStatusEnabled, Name: "audit", BaseURL: &base, Models: "claude-sonnet-5", Group: "default", ModelMapping: &mapping, CreatedTime: common.GetTimestamp()}
+			channel.SetSetting(tc.settings)
+			result := testChannel(t.Context(), channel, 1, channelTestOptions{model: "claude-sonnet-5", endpointType: tc.endpoint, userPrompt: "你的模型？", maxOutputTokens: 1024, applySystemPrompt: shouldApplySystemPromptForConnectionTest(channel)})
+			require.NoError(t, result.localErr)
+			require.Nil(t, result.newAPIError)
+			var data string
+			select {
+			case data = <-captured:
+			default:
+				t.Fatal("no captured request")
+			}
+
+			if tc.expected != "" {
+				assert.Equal(t, 1, strings.Count(data, tc.expected))
+				details := buildChannelTestResponseDetails(result)
+				require.NotNil(t, details.SystemPrompt)
+				assert.True(t, details.SystemPrompt.Applied)
+				assert.Equal(t, "claude-sonnet-5", details.SystemPrompt.MatchedModel)
+				assert.Equal(t, "upstream-model", details.UpstreamModel)
+				wantEndpoint := constant.EndpointTypeOpenAI
+				switch {
+				case tc.kind == constant.ChannelTypeAnthropic:
+					wantEndpoint = constant.EndpointTypeAnthropic
+				case tc.kind == constant.ChannelTypeGemini:
+					wantEndpoint = constant.EndpointTypeGemini
+				case tc.endpoint != "":
+					wantEndpoint = constant.EndpointType(tc.endpoint)
+				}
+				assert.Equal(t, wantEndpoint, details.UpstreamEndpointType)
+			} else {
+				assert.NotContains(t, data, marker)
+				details := buildChannelTestResponseDetails(result)
+				require.NotNil(t, details.SystemPrompt)
+				assert.False(t, details.SystemPrompt.Applied)
+				assert.NotEmpty(t, details.SystemPrompt.BypassReason)
+			}
 		})
 	}
 }

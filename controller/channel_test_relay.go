@@ -42,6 +42,22 @@ func testTextChannel(c *gin.Context, recorder *httptest.ResponseRecorder, channe
 	defer common.CleanupBodyStorage(c)
 
 	info, apiErr := executeRelayRequest(c, format, channel)
+	if info != nil && info.ChannelMeta != nil {
+		result.upstreamModel = info.UpstreamModelName
+		switch info.GetFinalRequestRelayFormat() {
+		case types.RelayFormatOpenAI:
+			result.upstreamEndpointType = constant.EndpointTypeOpenAI
+		case types.RelayFormatOpenAIResponses, types.RelayFormatOpenAIResponsesCompaction:
+			result.upstreamEndpointType = constant.EndpointTypeOpenAIResponse
+			if endpoint == constant.EndpointTypeOpenAIResponseCompact {
+				result.upstreamEndpointType = endpoint
+			}
+		case types.RelayFormatClaude:
+			result.upstreamEndpointType = constant.EndpointTypeAnthropic
+		case types.RelayFormatGemini:
+			result.upstreamEndpointType = constant.EndpointTypeGemini
+		}
+	}
 	if common.GetContextKeyBool(c, constant.ContextKeyRelayUpstreamSucceeded) {
 		result.upstreamStatus = http.StatusOK
 	} else if info != nil && info.LastError != nil {

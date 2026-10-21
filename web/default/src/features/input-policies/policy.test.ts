@@ -28,11 +28,28 @@ import {
   cachePolicySchema,
   contextPolicySchema,
   mergeInputPolicy,
+  parseSystemPromptPolicy,
   systemPromptPolicySchema,
   validateInputPolicies,
 } from './policy'
 
 describe('input policy form contracts', () => {
+  test('legacy empty system prompt policies can be opened and saved canonically', () => {
+    for (const raw of ['{}', '{"models":null}', '{"models":{}}']) {
+      const policy = parseSystemPromptPolicy(raw)
+      assert.deepEqual(policy, { models: {} })
+      assert.equal(JSON.stringify(policy), '{"models":{}}')
+    }
+    assert.deepEqual(
+      parseSystemPromptPolicy('{"models":{"model":" prompt "}}'),
+      {
+        models: { model: ' prompt ' },
+      }
+    )
+    for (const raw of ['null', '[]', '{"models":[]}']) {
+      assert.throws(() => parseSystemPromptPolicy(raw))
+    }
+  })
   test('independent defaults and explicit zero survive save/reload', () => {
     const p = cachePolicySchema.parse({ read_trigger_percent: 0 })
     assert.equal(p.creation_trigger_percent, 20)

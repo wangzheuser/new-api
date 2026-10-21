@@ -19,6 +19,7 @@ import (
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/tidwall/sjson"
 )
 
 // applyRealtimeSystemPrompt 将渠道提示词应用到 Realtime session.update。
@@ -31,15 +32,12 @@ func applyRealtimeSystemPrompt(c *gin.Context, info *relaycommon.RelayInfo, even
 	}
 
 	modelName := info.GetRequestedModelName()
-	settingBytes, err := common.Marshal(info.ChannelSetting)
-	if err != nil {
-		return false
+	channelSetting := rootdto.ChannelSettings{
+		SystemPrompt:         info.ChannelSetting.SystemPrompt,
+		SystemPromptOverride: info.ChannelSetting.SystemPromptOverride,
+		ModelSystemPrompts:   info.ChannelSetting.ModelSystemPrompts,
 	}
-	var channelSetting rootdto.ChannelSettings
-	if err := common.Unmarshal(settingBytes, &channelSetting); err != nil {
-		return false
-	}
-	prompt, prepend, source, _ := model_setting.ResolveSystemPrompt(channelSetting, modelName, info.GetAttemptModelName(), info.IsContextFallbackActive())
+	prompt, prepend, source, matchedModel := model_setting.ResolveSystemPrompt(channelSetting, modelName, info.GetAttemptModelName(), info.IsContextFallbackActive())
 	if prompt == "" {
 		return false
 	}
@@ -58,8 +56,16 @@ func applyRealtimeSystemPrompt(c *gin.Context, info *relaycommon.RelayInfo, even
 
 	common.SetContextKey(c, constant.ContextKeySystemPromptApplied, true)
 	common.SetContextKey(c, constant.ContextKeySystemPromptSource, source)
-	common.SetContextKey(c, constant.ContextKeySystemPromptModel, modelName)
+	common.SetContextKey(c, constant.ContextKeySystemPromptModel, matchedModel)
 	return event.Session.Instructions != existing
+}
+
+// rewriteRealtimeSystemPrompt changes only instructions, preserving omitted and provider-specific session fields.
+func rewriteRealtimeSystemPrompt(c *gin.Context, info *relaycommon.RelayInfo, event *dto.RealtimeEvent, message []byte) ([]byte, error) {
+	if !applyRealtimeSystemPrompt(c, info, event) {
+		return message, nil
+	}
+	return sjson.SetBytes(message, "session.instructions", event.Session.Instructions)
 }
 
 func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.RealtimeUsage) {
@@ -116,12 +122,10 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 						}
 					}
 				}
-				if applyRealtimeSystemPrompt(c, info, realtimeEvent) {
-					message, err = common.Marshal(realtimeEvent)
-					if err != nil {
-						errChan <- fmt.Errorf("error marshalling session update: %v", err)
-						return
-					}
+				message, err = rewriteRealtimeSystemPrompt(c, info, realtimeEvent, message)
+				if err != nil {
+					errChan <- fmt.Errorf("error updating session instructions: %v", err)
+					return
 				}
 
 				textToken, audioToken, err := service.CountTokenRealtime(info, *realtimeEvent, info.UpstreamModelName)

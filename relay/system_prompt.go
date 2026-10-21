@@ -31,16 +31,20 @@ type SystemPromptPreview struct {
 }
 
 // resolveSystemPrompt 解析当前渠道对原始请求模型生效的系统提示词。
-func resolveSystemPrompt(info *relaycommon.RelayInfo) (string, bool) {
+func resolveSystemPrompt(info *relaycommon.RelayInfo) (string, bool, string, string) {
 	if info == nil {
-		return "", false
+		return "", false, "", ""
 	}
-	prompt, prepend, _, _ := model_setting.ResolveSystemPrompt(rootChannelSettings(info.ChannelSetting),
+	settings := info.ChannelSetting
+	return model_setting.ResolveSystemPrompt(dto.ChannelSettings{
+		SystemPrompt:         settings.SystemPrompt,
+		SystemPromptOverride: settings.SystemPromptOverride,
+		ModelSystemPrompts:   settings.ModelSystemPrompts,
+	},
 		info.GetRequestedModelName(),
 		info.GetAttemptModelName(),
 		info.IsContextFallbackActive(),
 	)
-	return prompt, prepend
 }
 
 // PreviewSystemPromptTokens 在不修改原请求、计费会话和审计上下文的情况下预演当前渠道提示词。
@@ -111,51 +115,70 @@ func copySystemPromptRequest(request any) (dto.Request, error) {
 	case *dto.GeminiChatRequest:
 		return common.DeepCopy(typedRequest)
 	case *kitdto.GeneralOpenAIRequest:
-		return copyKitRequest(typedRequest, func() *dto.GeneralOpenAIRequest { return &dto.GeneralOpenAIRequest{} })
+		return common.DeepCopy(typedRequest)
 	case *kitdto.OpenAIResponsesRequest:
-		return copyKitRequest(typedRequest, func() *dto.OpenAIResponsesRequest { return &dto.OpenAIResponsesRequest{} })
+		return common.DeepCopy(typedRequest)
 	case *kitdto.OpenAIResponsesCompactionRequest:
-		return copyKitRequest(typedRequest, func() *dto.OpenAIResponsesCompactionRequest { return &dto.OpenAIResponsesCompactionRequest{} })
+		return common.DeepCopy(typedRequest)
 	case *kitdto.ClaudeRequest:
-		return copyKitRequest(typedRequest, func() *dto.ClaudeRequest { return &dto.ClaudeRequest{} })
+		return common.DeepCopy(typedRequest)
 	case *kitdto.GeminiChatRequest:
-		return copyKitRequest(typedRequest, func() *dto.GeminiChatRequest { return &dto.GeminiChatRequest{} })
+		return common.DeepCopy(typedRequest)
 	default:
 		return nil, fmt.Errorf("context fallback does not handle request type %T", request)
 	}
 }
 
-func copyKitRequest[T any, R dto.Request](request *T, newRoot func() R) (dto.Request, error) {
-	data, err := common.Marshal(request)
-	if err != nil {
-		return nil, err
-	}
-	converted := newRoot()
-	if err := common.Unmarshal(data, converted); err != nil {
-		return nil, err
-	}
-	return converted, nil
-}
-
 // applySystemPromptToRequest 使用同一份协议逻辑处理预演与实际请求。
 func applySystemPromptToRequest(c *gin.Context, request dto.Request, systemPrompt string, prepend bool) (bool, error) {
+	if systemPrompt == "" {
+		return false, nil
+	}
+	// Root DTO callers are previews and legacy probes; production keeps its relaykit fields intact.
+	var converted dto.Request
 	switch typedRequest := request.(type) {
-	case *dto.GeneralOpenAIRequest:
+	case *kitdto.GeneralOpenAIRequest:
 		return applyOpenAISystemPrompt(c, typedRequest, systemPrompt, prepend), nil
-	case *dto.OpenAIResponsesRequest:
+	case *kitdto.OpenAIResponsesRequest:
 		return applyResponsesSystemPrompt(c, typedRequest, systemPrompt, prepend)
-	case *dto.OpenAIResponsesCompactionRequest:
-		responsesRequest := &dto.OpenAIResponsesRequest{Instructions: typedRequest.Instructions}
+	case *kitdto.OpenAIResponsesCompactionRequest:
+		responsesRequest := &kitdto.OpenAIResponsesRequest{Instructions: typedRequest.Instructions}
 		applied, err := applyResponsesSystemPrompt(c, responsesRequest, systemPrompt, prepend)
 		typedRequest.Instructions = responsesRequest.Instructions
 		return applied, err
-	case *dto.ClaudeRequest:
+	case *kitdto.ClaudeRequest:
 		return applyClaudeSystemPrompt(c, typedRequest, systemPrompt, prepend), nil
-	case *dto.GeminiChatRequest:
+	case *kitdto.GeminiChatRequest:
 		return applyGeminiSystemPrompt(c, typedRequest, systemPrompt, prepend), nil
+	case *dto.GeneralOpenAIRequest:
+		converted = &kitdto.GeneralOpenAIRequest{}
+	case *dto.OpenAIResponsesRequest:
+		converted = &kitdto.OpenAIResponsesRequest{}
+	case *dto.OpenAIResponsesCompactionRequest:
+		converted = &kitdto.OpenAIResponsesCompactionRequest{}
+	case *dto.ClaudeRequest:
+		converted = &kitdto.ClaudeRequest{}
+	case *dto.GeminiChatRequest:
+		converted = &kitdto.GeminiChatRequest{}
 	default:
 		return false, nil
 	}
+	data, err := common.Marshal(request)
+	if err != nil {
+		return false, err
+	}
+	if err := common.Unmarshal(data, converted); err != nil {
+		return false, err
+	}
+	applied, err := applySystemPromptToRequest(c, converted, systemPrompt, prepend)
+	if err != nil || !applied {
+		return applied, err
+	}
+	data, err = common.Marshal(converted)
+	if err != nil {
+		return false, err
+	}
+	return true, common.Unmarshal(data, request)
 }
 
 // ApplySystemPromptForRequest 将渠道系统提示词应用到指定请求，并同步注入后的 Token 估算。
@@ -164,7 +187,24 @@ func ApplySystemPromptForRequest(c *gin.Context, info *relaycommon.RelayInfo, re
 		return nil
 	}
 
-	systemPrompt, prepend := resolveSystemPrompt(info)
+	systemPrompt, prepend, source, matchedModel := resolveSystemPrompt(info)
+	if c != nil {
+		common.SetContextKey(c, constant.ContextKeySystemPromptSource, source)
+		common.SetContextKey(c, constant.ContextKeySystemPromptModel, matchedModel)
+	}
+	bypassReason := ""
+	switch {
+	case model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled:
+		bypassReason = "pass_through"
+	case strings.TrimSpace(systemPrompt) == "":
+		bypassReason = "not_matched"
+	}
+	if bypassReason != "" {
+		if c != nil {
+			common.SetContextKey(c, constant.ContextKeySystemPromptBypassReason, bypassReason)
+		}
+		return nil
+	}
 	before := request.GetTokenCountMeta()
 	applied, err := applySystemPromptToRequest(c, request, systemPrompt, prepend)
 	if err != nil {
@@ -172,7 +212,14 @@ func ApplySystemPromptForRequest(c *gin.Context, info *relaycommon.RelayInfo, re
 	}
 
 	if !applied {
+		if c != nil {
+			common.SetContextKey(c, constant.ContextKeySystemPromptBypassReason, "client_system_prompt")
+		}
 		return nil
+	}
+	if c != nil {
+		common.SetContextKey(c, constant.ContextKeySystemPromptApplied, true)
+		common.SetContextKey(c, constant.ContextKeySystemPromptBypassReason, "")
 	}
 	return accountInjectedSystemPrompt(c, info, before, request.GetTokenCountMeta())
 }
@@ -182,8 +229,6 @@ func accountInjectedSystemPrompt(c *gin.Context, info *relaycommon.RelayInfo, be
 	if info == nil || before == nil || after == nil {
 		return nil
 	}
-	markSystemPromptApplied(c, info)
-
 	beforeText := *before
 	beforeText.Files = nil
 	afterText := *after
@@ -196,14 +241,15 @@ func accountInjectedSystemPrompt(c *gin.Context, info *relaycommon.RelayInfo, be
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeCountTokenFailed, types.ErrOptionWithSkipRetry())
 	}
-	delta := afterTokens - beforeTokens
+	delta := max(afterTokens-beforeTokens, 0)
+	info.SetInjectedPromptTokenDelta(delta)
+	if c != nil {
+		common.SetContextKey(c, constant.ContextKeySystemPromptTokens, delta)
+	}
 	if delta <= 0 {
 		return nil
 	}
-
-	info.SetInjectedPromptTokenDelta(delta)
-	common.SetContextKey(c, constant.ContextKeySystemPromptTokens, delta)
-	if info.Billing == nil {
+	if info.Billing == nil || info.IsChannelTest {
 		return nil
 	}
 
@@ -217,21 +263,6 @@ func accountInjectedSystemPrompt(c *gin.Context, info *relaycommon.RelayInfo, be
 	return nil
 }
 
-// markSystemPromptApplied 记录本次生效的提示词来源，不记录提示词正文。
-func markSystemPromptApplied(c *gin.Context, info *relaycommon.RelayInfo) {
-	if c == nil || info == nil {
-		return
-	}
-	_, _, source, modelName := model_setting.ResolveSystemPrompt(rootChannelSettings(info.ChannelSetting),
-		info.GetRequestedModelName(),
-		info.GetAttemptModelName(),
-		info.IsContextFallbackActive(),
-	)
-	common.SetContextKey(c, constant.ContextKeySystemPromptApplied, true)
-	common.SetContextKey(c, constant.ContextKeySystemPromptSource, source)
-	common.SetContextKey(c, constant.ContextKeySystemPromptModel, modelName)
-}
-
 // markSystemPromptOverridden 记录渠道提示词已前置到客户端系统提示词。
 func markSystemPromptOverridden(c *gin.Context) {
 	if c != nil {
@@ -240,14 +271,15 @@ func markSystemPromptOverridden(c *gin.Context) {
 }
 
 // applyOpenAISystemPrompt 将渠道提示词应用到 OpenAI Chat Completions 请求。
-func applyOpenAISystemPrompt(c *gin.Context, request *dto.GeneralOpenAIRequest, systemPrompt string, prepend bool) bool {
+func applyOpenAISystemPrompt(c *gin.Context, request *kitdto.GeneralOpenAIRequest, systemPrompt string, prepend bool) bool {
 	if request == nil || systemPrompt == "" {
 		return false
 	}
 
 	systemRole := request.GetSystemRoleName()
 	for i, message := range request.Messages {
-		if message.Role != systemRole {
+		// Dynamic tool-loading messages declare tools, not system instructions.
+		if message.Role != systemRole || len(message.Tools) > 0 {
 			continue
 		}
 		if !prepend {
@@ -260,14 +292,14 @@ func applyOpenAISystemPrompt(c *gin.Context, request *dto.GeneralOpenAIRequest, 
 			return true
 		}
 		contents := message.ParseContent()
-		request.Messages[i].Content = append([]dto.MediaContent{{
+		request.Messages[i].Content = append([]kitdto.MediaContent{{
 			Type: dto.ContentTypeText,
 			Text: systemPrompt,
 		}}, contents...)
 		return true
 	}
 
-	request.Messages = append([]dto.Message{{
+	request.Messages = append([]kitdto.Message{{
 		Role:    systemRole,
 		Content: systemPrompt,
 	}}, request.Messages...)
@@ -275,7 +307,7 @@ func applyOpenAISystemPrompt(c *gin.Context, request *dto.GeneralOpenAIRequest, 
 }
 
 // applyResponsesSystemPrompt 将渠道提示词应用到 OpenAI Responses 请求。
-func applyResponsesSystemPrompt(c *gin.Context, request *dto.OpenAIResponsesRequest, systemPrompt string, prepend bool) (bool, error) {
+func applyResponsesSystemPrompt(c *gin.Context, request *kitdto.OpenAIResponsesRequest, systemPrompt string, prepend bool) (bool, error) {
 	if request == nil || systemPrompt == "" {
 		return false, nil
 	}
@@ -310,7 +342,7 @@ func applyResponsesSystemPrompt(c *gin.Context, request *dto.OpenAIResponsesRequ
 }
 
 // applyClaudeSystemPrompt 将渠道提示词应用到 Claude Messages 请求。
-func applyClaudeSystemPrompt(c *gin.Context, request *dto.ClaudeRequest, systemPrompt string, prepend bool) bool {
+func applyClaudeSystemPrompt(c *gin.Context, request *kitdto.ClaudeRequest, systemPrompt string, prepend bool) bool {
 	if request == nil || systemPrompt == "" {
 		return false
 	}
@@ -334,27 +366,27 @@ func applyClaudeSystemPrompt(c *gin.Context, request *dto.ClaudeRequest, systemP
 		return true
 	}
 
-	newSystem := dto.ClaudeMediaMessage{Type: dto.ContentTypeText}
+	newSystem := kitdto.ClaudeMediaMessage{Type: dto.ContentTypeText}
 	newSystem.SetText(systemPrompt)
 	systemContents := request.ParseSystem()
-	request.System = append([]dto.ClaudeMediaMessage{newSystem}, systemContents...)
+	request.System = append([]kitdto.ClaudeMediaMessage{newSystem}, systemContents...)
 	return true
 }
 
 // applyGeminiSystemPrompt 将渠道提示词应用到 Gemini GenerateContent 请求。
-func applyGeminiSystemPrompt(c *gin.Context, request *dto.GeminiChatRequest, systemPrompt string, prepend bool) bool {
+func applyGeminiSystemPrompt(c *gin.Context, request *kitdto.GeminiChatRequest, systemPrompt string, prepend bool) bool {
 	if request == nil || systemPrompt == "" {
 		return false
 	}
 
 	if request.SystemInstructions == nil {
-		request.SystemInstructions = &dto.GeminiChatContent{
-			Parts: []dto.GeminiPart{{Text: systemPrompt}},
+		request.SystemInstructions = &kitdto.GeminiChatContent{
+			Parts: []kitdto.GeminiPart{{Text: systemPrompt}},
 		}
 		return true
 	}
 	if len(request.SystemInstructions.Parts) == 0 {
-		request.SystemInstructions.Parts = []dto.GeminiPart{{Text: systemPrompt}}
+		request.SystemInstructions.Parts = []kitdto.GeminiPart{{Text: systemPrompt}}
 		return true
 	}
 	if !prepend {
@@ -369,17 +401,8 @@ func applyGeminiSystemPrompt(c *gin.Context, request *dto.GeminiChatRequest, sys
 		request.SystemInstructions.Parts[i].Text = systemPrompt + "\n" + request.SystemInstructions.Parts[i].Text
 		return true
 	}
-	request.SystemInstructions.Parts = append([]dto.GeminiPart{{Text: systemPrompt}}, request.SystemInstructions.Parts...)
+	request.SystemInstructions.Parts = append([]kitdto.GeminiPart{{Text: systemPrompt}}, request.SystemInstructions.Parts...)
 	return true
-}
-
-func rootChannelSettings(settings kitdto.ChannelSettings) dto.ChannelSettings {
-	var converted dto.ChannelSettings
-	data, err := common.Marshal(settings)
-	if err == nil {
-		_ = common.Unmarshal(data, &converted)
-	}
-	return converted
 }
 
 func relayChannelSettings(settings dto.ChannelSettings) kitdto.ChannelSettings {
