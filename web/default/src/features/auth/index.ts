@@ -29,6 +29,7 @@ export {
   sendEmailVerification,
   bindEmail,
   getOAuthState,
+  createOAuthAuthorization,
   githubOAuthStart,
   wechatLoginByCode,
 } from './api'

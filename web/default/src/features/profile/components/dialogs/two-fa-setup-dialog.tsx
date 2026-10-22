@@ -28,6 +28,10 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  SecureVerificationDialog,
+  useSecureVerification,
+} from '@/features/auth/secure-verification'
 import { setup2FA, enable2FA } from '@/lib/api'
 
 import type { TwoFASetupData } from '../../types'
@@ -53,6 +57,22 @@ export function TwoFASetupDialog({
   const [step, setStep] = useState(0)
   const [setupData, setSetupData] = useState<TwoFASetupData | null>(null)
   const [code, setCode] = useState('')
+  const security = useSecureVerification({
+    onSuccess: (result) => {
+      if (
+        result &&
+        typeof result === 'object' &&
+        'data' in result &&
+        result.data &&
+        typeof result.data === 'object' &&
+        'flow_token' in result.data
+      ) {
+        setSetupData(result.data as TwoFASetupData)
+        setStep(0)
+      }
+    },
+  })
+  const startVerification = security.startVerification
   const stepLabels = [
     t('Scan QR Code'),
     t('Save Backup Codes'),
@@ -62,15 +82,13 @@ export function TwoFASetupDialog({
   const handleSetup = useCallback(async () => {
     try {
       setInitializing(true)
-      const response = await setup2FA()
-
-      if (response.success && response.data) {
-        setSetupData(response.data)
-        setStep(0)
-      } else {
-        toast.error(response.message || t('Failed to setup 2FA'))
-        onOpenChange(false)
-      }
+      await startVerification((proofToken) => setup2FA(proofToken), {
+        operation: { scope: '2fa.setup' },
+        title: t('Security verification'),
+        description: t(
+          'Confirm your identity before setting up two-factor authentication.'
+        ),
+      })
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error('Setup 2FA error:', error)
@@ -79,7 +97,7 @@ export function TwoFASetupDialog({
     } finally {
       setInitializing(false)
     }
-  }, [onOpenChange, t])
+  }, [onOpenChange, startVerification, t])
 
   const handleEnable = async () => {
     if (!code) {
@@ -89,7 +107,7 @@ export function TwoFASetupDialog({
 
     try {
       setLoading(true)
-      const response = await enable2FA(code)
+      const response = await enable2FA(setupData?.flow_token ?? '', code)
 
       if (response.success) {
         toast.success(t('Two-factor authentication enabled successfully!'))
@@ -102,7 +120,7 @@ export function TwoFASetupDialog({
       } else {
         toast.error(response.message || t('Failed to enable 2FA'))
       }
-    } catch (_error) {
+    } catch {
       toast.error(t('Failed to enable 2FA'))
     } finally {
       setLoading(false)
@@ -132,7 +150,7 @@ export function TwoFASetupDialog({
 
   return (
     <Dialog
-      open={open}
+      open={open && !security.open}
       onOpenChange={handleOpenChange}
       title={t('Setup Two-Factor Authentication')}
       description={
@@ -177,6 +195,7 @@ export function TwoFASetupDialog({
       }
     >
       <div className='space-y-4 py-4'>
+        {/* eslint-disable-next-line no-nested-ternary */}
         {initializing ? (
           <div className='flex flex-col items-center justify-center gap-3 py-8'>
             <div className='border-primary h-8 w-8 animate-spin rounded-full border-4 border-t-transparent' />
@@ -236,9 +255,9 @@ export function TwoFASetupDialog({
                 </Alert>
                 <div className='rounded-lg border p-4'>
                   <div className='grid grid-cols-2 gap-2'>
-                    {setupData.backup_codes.map((code, index) => (
+                    {setupData.backup_codes.map((code) => (
                       <div
-                        key={index}
+                        key={code}
                         className='bg-muted rounded-md p-2 text-center font-mono text-sm'
                       >
                         {code}
@@ -282,6 +301,19 @@ export function TwoFASetupDialog({
           </>
         )}
       </div>
+      <SecureVerificationDialog
+        open={security.open}
+        onOpenChange={(next) => !next && security.cancel()}
+        methods={security.methods}
+        state={security.state}
+        onVerify={(method, value) => {
+          void security.executeVerification(method, value)
+        }}
+        onCancel={security.cancel}
+        onCodeChange={security.setCode}
+        onMethodChange={security.switchMethod}
+        onOAuthProviderChange={security.setOAuthProvider}
+      />
     </Dialog>
   )
 }

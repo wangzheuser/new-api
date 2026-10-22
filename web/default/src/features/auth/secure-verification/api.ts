@@ -16,51 +16,69 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { api, get2FAStatus } from '@/lib/api'
+import { api } from '@/lib/api'
+import { buildOAuthAuthorizationUrl } from '@/lib/oauth'
 import {
   buildAssertionResult,
   prepareCredentialRequestOptions,
   isPasskeySupported as detectPasskeySupport,
 } from '@/lib/passkey'
-
 import {
-  beginPasskeyVerification,
-  finishPasskeyVerification,
-  getPasskeyStatus,
-} from '../passkey'
-import type { VerificationMethod, VerificationMethods } from './types'
+  AuthOperationError,
+  authRequestOptions,
+  authResult,
+} from '@/lib/secure-verification'
+
+import { createOAuthAuthorization } from '../api'
+import { openOAuthPopup } from '../lib/oauth-popup'
+import { encryptPassword } from '../lib/password-encryption'
+import { beginPasskeyVerification, finishPasskeyVerification } from '../passkey'
+import type { SystemStatus } from '../types'
+import type {
+  SecurityProof,
+  VerificationMethod,
+  VerificationMethods,
+  VerificationOperation,
+} from './types'
 
 /**
  * Fetch available verification methods for the current user.
  */
-export async function checkVerificationMethods(): Promise<VerificationMethods> {
-  try {
-    const [twoFAResponse, passkeyResponse, passkeySupported] =
-      await Promise.all([
-        get2FAStatus(),
-        getPasskeyStatus(),
-        detectPasskeySupport(),
-      ])
+export async function checkVerificationMethods(
+  operation: VerificationOperation
+): Promise<VerificationMethods> {
+  const [requirements, passkeySupported] = await Promise.all([
+    authResult<{
+      methods: Array<{ method: string; available: boolean }>
+      oauth_providers?: Array<{ slug: string; name: string }>
+      password_encryption_enabled?: boolean
+    }>(
+      api.get('/api/verify/methods', {
+        ...authRequestOptions,
+        params: { scope: operation.scope },
+        disableDuplicate: true,
+      })
+    ),
+    detectPasskeySupport(),
+  ])
+  const has2FA = requirements.methods.some(
+    (method) => method.method === '2fa' && method.available
+  )
+  const hasPasskey = requirements.methods.some(
+    (method) => method.method === 'passkey' && method.available
+  )
+  const hasPassword = requirements.methods.some(
+    (method) => method.method === 'password' && method.available
+  )
 
-    const has2FA =
-      Boolean(twoFAResponse?.success) && Boolean(twoFAResponse?.data?.enabled)
-    const hasPasskey =
-      Boolean(passkeyResponse?.success) &&
-      Boolean(passkeyResponse?.data?.enabled)
-
-    return {
-      has2FA,
-      hasPasskey,
-      passkeySupported,
-    }
-  } catch (error) {
-    // eslint-disable-next-line no-console
-    console.error('[Secure Verification] Failed to check methods', error)
-    return {
-      has2FA: false,
-      hasPasskey: false,
-      passkeySupported: false,
-    }
+  return {
+    has2FA,
+    hasPasskey,
+    passkeySupported,
+    hasPassword,
+    passwordEncryptionEnabled:
+      requirements.password_encryption_enabled === true,
+    oauthProviders: requirements.oauth_providers ?? [],
   }
 }
 
@@ -69,54 +87,149 @@ export async function checkVerificationMethods(): Promise<VerificationMethods> {
  */
 export async function verify(
   method: VerificationMethod,
-  code?: string
-): Promise<void> {
+  operation: VerificationOperation,
+  code?: string,
+  signal?: AbortSignal,
+  passwordEncryptionEnabled = false
+): Promise<SecurityProof> {
   switch (method) {
     case '2fa':
-      return verifyTwoFA(code)
+      return verifyTwoFA(operation, code, signal)
     case 'passkey':
-      return verifyPasskey()
+      return verifyPasskey(operation, signal)
+    case 'password':
+      return verifyPassword(operation, code, signal, passwordEncryptionEnabled)
+    case 'oauth':
+      return verifyOAuth(operation, code, signal)
     default:
       throw new Error(`Unsupported verification method: ${method}`)
   }
 }
 
+async function verifyOAuth(
+  operation: VerificationOperation,
+  provider: string | undefined,
+  signal?: AbortSignal
+): Promise<SecurityProof> {
+  if (!provider) throw new Error('Select a linked OAuth account first')
+
+  const exchange = await openOAuthPopup({
+    provider,
+    intent: 'verify',
+    signal: signal ?? new AbortController().signal,
+    prepare: async (popupSignal) => {
+      const [authorization, status] = await Promise.all([
+        createOAuthAuthorization(provider, 'verify', operation, popupSignal),
+        authResult<SystemStatus>(
+          api.get('/api/status', {
+            ...authRequestOptions,
+            signal: popupSignal,
+            disableDuplicate: true,
+          })
+        ),
+      ])
+      return {
+        state: authorization.state,
+        url:
+          authorization.authorizationUrl ??
+          buildOAuthAuthorizationUrl(provider, authorization.state, status),
+      }
+    },
+  })
+
+  try {
+    const proof = await authResult<SecurityProof>(
+      api.get(`/api/oauth/${provider}`, {
+        ...authRequestOptions,
+        singleUseAuthorization: true,
+        disableDuplicate: true,
+        signal: exchange.signal,
+        params: {
+          state: exchange.callback.state,
+          code: exchange.callback.code,
+          error: exchange.callback.error,
+          error_description: exchange.callback.errorDescription,
+        },
+      })
+    )
+    exchange.signal.throwIfAborted()
+    exchange.finish({ success: true })
+    return proof
+  } catch (error) {
+    const failure = AuthOperationError.from(
+      exchange.signal.aborted ? exchange.signal.reason : error
+    )
+    exchange.finish({ success: false, message: failure.message })
+    throw failure
+  }
+}
+
+async function verifyPassword(
+  operation: VerificationOperation,
+  password: string | undefined,
+  signal?: AbortSignal,
+  passwordEncryptionEnabled = false
+): Promise<SecurityProof> {
+  const value = password?.trim()
+  if (!value) throw new Error('Please enter your password')
+  const passwordFields = passwordEncryptionEnabled
+    ? await encryptPassword(value)
+    : { password: value }
+  return authResult<SecurityProof>(
+    api.post(
+      '/api/verify',
+      {
+        method: 'password',
+        scope: operation.scope,
+        context: operation.context,
+        ...passwordFields,
+      },
+      { ...authRequestOptions, signal }
+    )
+  )
+}
+
 /**
  * Perform 2FA verification flow.
  */
-async function verifyTwoFA(code?: string | null): Promise<void> {
+async function verifyTwoFA(
+  operation: VerificationOperation,
+  code?: string | null,
+  signal?: AbortSignal
+): Promise<SecurityProof> {
   const trimmed = code?.trim()
   if (!trimmed) {
     throw new Error('Please enter the verification code or backup code')
   }
 
-  const res = await api.post('/api/verify', {
-    method: '2fa',
-    code: trimmed,
-  })
-
-  if (!res.data?.success) {
-    throw new Error(res.data?.message || 'Verification failed')
-  }
+  return authResult<SecurityProof>(
+    api.post(
+      '/api/verify',
+      {
+        method: '2fa',
+        scope: operation.scope,
+        context: operation.context,
+        code: trimmed,
+      },
+      { ...authRequestOptions, signal }
+    )
+  )
 }
 
 /**
  * Perform Passkey verification flow.
  */
-async function verifyPasskey(): Promise<void> {
+async function verifyPasskey(
+  operation: VerificationOperation,
+  signal?: AbortSignal
+): Promise<SecurityProof> {
   if (typeof navigator === 'undefined' || !navigator.credentials) {
     throw new Error('Passkey verification is not supported in this environment')
   }
 
   try {
-    const beginResponse = await beginPasskeyVerification()
-    if (!beginResponse.success) {
-      throw new Error(beginResponse.message || 'Failed to start verification')
-    }
-
-    const publicKey = prepareCredentialRequestOptions(
-      beginResponse.data?.options ?? beginResponse.data
-    )
+    const beginResponse = await beginPasskeyVerification(operation, signal)
+    const publicKey = prepareCredentialRequestOptions(beginResponse.options)
 
     const credential = (await navigator.credentials.get({
       publicKey,
@@ -131,20 +244,19 @@ async function verifyPasskey(): Promise<void> {
       throw new Error('Unable to build Passkey assertion')
     }
 
-    const finishResponse = await finishPasskeyVerification(assertion)
-    if (!finishResponse.success) {
-      throw new Error(finishResponse.message || 'Passkey verification failed')
+    const proof = await finishPasskeyVerification(
+      beginResponse.flow_token,
+      assertion,
+      signal
+    )
+    if (
+      proof.scope !== operation.scope ||
+      proof.method !== 'passkey' ||
+      proof.expires_at * 1000 <= Date.now()
+    ) {
+      throw new AuthOperationError('Verification proof was not returned')
     }
-
-    const verifyResponse = await api.post('/api/verify', {
-      method: 'passkey',
-    })
-
-    if (!verifyResponse.data?.success) {
-      throw new Error(
-        verifyResponse.data?.message || 'Failed to complete verification'
-      )
-    }
+    return proof
   } catch (error: unknown) {
     if (error instanceof DOMException && error.name === 'NotAllowedError') {
       throw new Error('Passkey verification was cancelled or timed out', {

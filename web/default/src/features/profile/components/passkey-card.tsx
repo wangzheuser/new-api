@@ -98,6 +98,10 @@ export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
       has2FA: restrictedMethod === '2fa' && verificationMethods.has2FA,
       hasPasskey:
         restrictedMethod === 'passkey' && verificationMethods.hasPasskey,
+      hasPassword:
+        restrictedMethod === 'password' && verificationMethods.hasPassword,
+      oauthProviders:
+        restrictedMethod === 'oauth' ? verificationMethods.oauthProviders : [],
     }
   }, [restrictedMethod, verificationMethods])
 
@@ -107,31 +111,42 @@ export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
       return
     }
 
-    const methods = await fetchVerificationMethods()
-    if (!methods.has2FA) {
-      // Without 2FA enabled, register directly. The browser-level Passkey prompt
-      // is itself a strong proof of presence, so no extra verification is needed.
-      await register()
-      return
+    const methods = await fetchVerificationMethods({
+      scope: 'passkey.register',
+    })
+    let preferredMethod: VerificationMethod | null = null
+    if (methods.has2FA) {
+      preferredMethod = '2fa'
+    } else if (methods.hasPasskey && methods.passkeySupported) {
+      preferredMethod = 'passkey'
+    } else if (methods.hasPassword) {
+      preferredMethod = 'password'
+    } else if (methods.oauthProviders.length > 0) {
+      preferredMethod = 'oauth'
     }
-
-    setRestrictedMethod('2fa')
+    if (!preferredMethod) return
+    setRestrictedMethod(preferredMethod)
     await startVerification(register, {
-      preferredMethod: '2fa',
+      preferredMethod,
       title: t('Security verification'),
       description: t(
         'Confirm your identity with Two-factor Authentication before registering a Passkey.'
       ),
+      operation: { scope: 'passkey.register' },
     })
   }, [fetchVerificationMethods, register, startVerification, supported, t])
 
   const handleRemove = useCallback(async () => {
-    const methods = await fetchVerificationMethods()
+    const methods = await fetchVerificationMethods({ scope: 'passkey.delete' })
     let required: VerificationMethod | null = null
     if (methods.has2FA) {
       required = '2fa'
     } else if (methods.hasPasskey) {
       required = 'passkey'
+    } else if (methods.hasPassword) {
+      required = 'password'
+    } else if (methods.oauthProviders.length > 0) {
+      required = 'oauth'
     }
 
     if (!required) {
@@ -156,6 +171,7 @@ export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
       description: t(
         'Confirm your identity before removing this Passkey from your account.'
       ),
+      operation: { scope: 'passkey.delete' },
     })
   }, [fetchVerificationMethods, remove, startVerification, t])
 

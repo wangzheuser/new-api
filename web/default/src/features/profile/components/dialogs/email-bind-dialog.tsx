@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Loader2 } from 'lucide-react'
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -25,13 +25,14 @@ import { Dialog } from '@/components/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  SecureVerificationDialog,
+  useSecureVerification,
+} from '@/features/auth/secure-verification'
 import { useCountdown } from '@/hooks/use-countdown'
 
-import { sendEmailVerification, bindEmail } from '../../api'
-
-// ============================================================================
-// Email Bind Dialog Component
-// ============================================================================
+import { bindEmail, resendEmailBinding, startEmailBinding } from '../../api'
+import type { EmailBindingFlow } from '../../types'
 
 interface EmailBindDialogProps {
   open: boolean
@@ -40,164 +41,228 @@ interface EmailBindDialogProps {
   onSuccess: () => void
 }
 
-export function EmailBindDialog({
-  open,
-  onOpenChange,
-  currentEmail,
-  onSuccess,
-}: EmailBindDialogProps) {
+export function EmailBindDialog(props: EmailBindDialogProps) {
   const { t } = useTranslation()
-  const [loading, setLoading] = useState(false)
-  const [sendingCode, setSendingCode] = useState(false)
-  const [email, setEmail] = useState('')
-  const [code, setCode] = useState('')
-  const {
-    secondsLeft,
-    isActive,
-    start: startCountdown,
-    reset: resetCountdown,
-  } = useCountdown({
-    initialSeconds: 60,
+  const security = useSecureVerification({
+    onSuccess: (result) => {
+      if (result && typeof result === 'object' && 'flow_token' in result) {
+        applyFlow(result as EmailBindingFlow)
+      }
+    },
   })
+  const [flow, setFlow] = useState<EmailBindingFlow | null>(null)
+  const [email, setEmail] = useState('')
+  const [newCode, setNewCode] = useState('')
+  const [oldCode, setOldCode] = useState('')
+  const resend = useCountdown({ initialSeconds: 60 })
+  const deadline = useCountdown({ initialSeconds: 600 })
+  const cancelSecurity = security.cancel
+  const resetResend = resend.reset
+  const resetDeadline = deadline.reset
 
-  const handleSendCode = async () => {
-    if (!email || !email.includes('@')) {
+  const reset = useCallback(() => {
+    cancelSecurity()
+    setFlow(null)
+    setEmail('')
+    setNewCode('')
+    setOldCode('')
+    resetResend()
+    resetDeadline()
+  }, [cancelSecurity, resetDeadline, resetResend])
+  useEffect(() => {
+    if (!props.open) reset()
+  }, [props.open, reset])
+
+  const applyFlow = (next: EmailBindingFlow) => {
+    setFlow(next)
+    setEmail(next.email)
+    setNewCode('')
+    setOldCode('')
+    const now = Date.now() / 1000
+    resend.start(Math.max(1, Math.ceil(next.resend_at - now)))
+    deadline.start(Math.max(1, Math.ceil(next.expires_at - now)))
+  }
+
+  const submit = async () => {
+    const normalizedEmail = email.trim().toLowerCase()
+    if (!flow && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
       toast.error(t('Please enter a valid email address'))
       return
     }
-
-    try {
-      setSendingCode(true)
-      const response = await sendEmailVerification(email)
-
-      if (response.success) {
-        toast.success(t('Verification code sent! Please check your email.'))
-        startCountdown()
-      } else {
-        toast.error(response.message || t('Failed to send verification code'))
-      }
-    } catch (_error) {
-      toast.error(t('Failed to send verification code'))
-    } finally {
-      setSendingCode(false)
-    }
-  }
-
-  const handleBind = async () => {
-    if (!email || !code) {
-      toast.error(t('Please enter email and verification code'))
+    if (!flow) {
+      await security.startVerification(
+        (proofToken) => startEmailBinding(normalizedEmail, proofToken),
+        {
+          operation: {
+            scope: 'account.binding.bind',
+            context: { provider: 'email', email: normalizedEmail },
+          },
+          title: t('Security verification'),
+          description: t('Confirm your identity before changing your email.'),
+        }
+      )
       return
     }
+    if (!deadline.isActive) return
+    if (!/^\d{6}$/.test(newCode.trim())) {
+      toast.error(t('Enter the 6-digit email verification code.'))
+      return
+    }
+    if (flow.old_email_required && !/^\d{6}$/.test(oldCode.trim())) {
+      toast.error(t('Enter the current email verification code.'))
+      return
+    }
+    const result = await security.withVerification(
+      () => bindEmail(flow.flow_token, newCode.trim(), oldCode.trim()),
+      {
+        operation: {
+          scope: 'account.binding.bind',
+          context: { provider: 'email', email: flow.email },
+        },
+      }
+    )
+    if (!result) return
+    toast.success(t('Email bound successfully!'))
+    props.onOpenChange(false)
+    props.onSuccess()
+  }
 
+  const resendCodes = async () => {
+    if (!flow || resend.isActive || !deadline.isActive) return
     try {
-      setLoading(true)
-      const response = await bindEmail(email, code)
-
-      if (response.success) {
-        toast.success(t('Email bound successfully!'))
-        onOpenChange(false)
-        onSuccess()
-        // Reset form
-        setEmail('')
-        setCode('')
-        resetCountdown()
-      } else {
-        toast.error(response.message || t('Failed to bind email'))
-      }
-    } catch (_error) {
-      toast.error(t('Failed to bind email'))
-    } finally {
-      setLoading(false)
+      applyFlow(await resendEmailBinding(flow.flow_token))
+      toast.success(t('Verification code sent! Please check your email.'))
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : t('Failed to resend codes')
+      )
     }
   }
 
-  const handleOpenChange = (open: boolean) => {
-    if (!loading) {
-      onOpenChange(open)
-      if (!open) {
-        // Reset form when closing
-        setEmail('')
-        setCode('')
-        resetCountdown()
-      }
-    }
-  }
-
+  const expired = Boolean(flow && !deadline.isActive)
   return (
-    <Dialog
-      open={open}
-      onOpenChange={handleOpenChange}
-      title={t('Bind Email')}
-      description={
-        currentEmail
-          ? t('Current email: {{email}}. Enter a new email to change.', {
-              email: currentEmail,
-            })
-          : t('Bind an email address to your account.')
-      }
-      contentClassName='sm:max-w-md'
-      contentHeight='auto'
-      bodyClassName='space-y-4'
-      footer={
-        <>
-          <Button
-            type='button'
-            variant='outline'
-            onClick={() => handleOpenChange(false)}
-            disabled={loading}
-          >
-            {t('Cancel')}
-          </Button>
-          <Button
-            type='button'
-            onClick={handleBind}
-            disabled={loading || !email || !code}
-          >
-            {loading && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
-            {loading ? t('Binding...') : t('Bind Email')}
-          </Button>
-        </>
-      }
-    >
-      <div className='space-y-4 py-4'>
-        <div className='space-y-2'>
-          <Label htmlFor='email'>{t('Email Address')}</Label>
-          <Input
-            id='email'
-            type='email'
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder={t('Enter your email')}
-            disabled={loading}
-          />
-        </div>
-
-        <div className='space-y-2'>
-          <Label htmlFor='code'>{t('Verification Code')}</Label>
-          <div className='flex gap-2'>
-            <Input
-              id='code'
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              placeholder={t('Enter code')}
-              disabled={loading}
-              maxLength={6}
-            />
+    <>
+      <Dialog
+        open={props.open && !security.open}
+        onOpenChange={(open) => {
+          if (!open) reset()
+          props.onOpenChange(open)
+        }}
+        title={t('Bind Email')}
+        description={
+          props.currentEmail
+            ? t('Current email: {{email}}. Enter a new email to change.', {
+                email: props.currentEmail,
+              })
+            : t('Bind an email address to your account.')
+        }
+        contentClassName='sm:max-w-md'
+        contentHeight='auto'
+        bodyClassName='space-y-4'
+        footer={
+          <>
             <Button
               type='button'
               variant='outline'
-              onClick={handleSendCode}
-              disabled={sendingCode || isActive || !email}
+              onClick={() => props.onOpenChange(false)}
             >
-              {isActive
-                ? `${secondsLeft}s`
-                : sendingCode
-                  ? t('Sending...')
-                  : t('Send')}
+              {t('Cancel')}
             </Button>
+            <Button
+              type='button'
+              onClick={() => void submit()}
+              disabled={security.isLoading || expired}
+            >
+              {security.isLoading && (
+                <Loader2 className='size-4 animate-spin' />
+              )}
+              {flow ? t('Confirm email') : t('Continue')}
+            </Button>
+          </>
+        }
+      >
+        <div className='space-y-4'>
+          <div className='space-y-2'>
+            <Label htmlFor='bind-email'>{t('Email Address')}</Label>
+            <Input
+              id='bind-email'
+              type='email'
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              disabled={Boolean(flow) || security.isLoading}
+            />
           </div>
+          {flow && (
+            <>
+              <p className='text-muted-foreground text-sm'>
+                {t(
+                  flow.old_email_required
+                    ? 'Confirm both your current and new email addresses to finish this change.'
+                    : 'Confirm the verification code sent to your new email address.'
+                )}
+              </p>
+              <div className='space-y-2'>
+                <Label htmlFor='new-email-code'>
+                  {t('New email verification code')}
+                </Label>
+                <Input
+                  id='new-email-code'
+                  inputMode='numeric'
+                  maxLength={6}
+                  value={newCode}
+                  onChange={(event) => setNewCode(event.target.value)}
+                  disabled={expired || security.isLoading}
+                />
+              </div>
+              {flow.old_email_required && (
+                <div className='space-y-2'>
+                  <Label htmlFor='old-email-code'>
+                    {t('Current email verification code')}
+                  </Label>
+                  <Input
+                    id='old-email-code'
+                    inputMode='numeric'
+                    maxLength={6}
+                    value={oldCode}
+                    onChange={(event) => setOldCode(event.target.value)}
+                    disabled={expired || security.isLoading}
+                  />
+                </div>
+              )}
+              <Button
+                type='button'
+                variant='outline'
+                onClick={() => void resendCodes()}
+                disabled={resend.isActive || expired || security.isLoading}
+              >
+                {resend.isActive
+                  ? t('Resend in {{seconds}}s', { seconds: resend.secondsLeft })
+                  : t('Resend codes')}
+              </Button>
+              {expired && (
+                <p className='text-destructive text-sm'>
+                  {t('Email verification has ended. Start again to continue.')}
+                </p>
+              )}
+            </>
+          )}
         </div>
-      </div>
-    </Dialog>
+      </Dialog>
+      <SecureVerificationDialog
+        open={security.open}
+        onOpenChange={(open) => {
+          if (!open) security.cancel()
+        }}
+        methods={security.methods}
+        state={security.state}
+        onVerify={(method, code) => {
+          void security.executeVerification(method, code)
+        }}
+        onCancel={security.cancel}
+        onCodeChange={security.setCode}
+        onMethodChange={security.switchMethod}
+        onOAuthProviderChange={security.setOAuthProvider}
+      />
+    </>
   )
 }

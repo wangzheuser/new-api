@@ -24,7 +24,7 @@ import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth-store'
 
-import { getOAuthState } from '../api'
+import { createOAuthAuthorization } from '../api'
 import {
   buildGitHubOAuthUrl,
   buildDiscordOAuthUrl,
@@ -96,19 +96,10 @@ export function useOAuthLogin(status: SystemStatus | null) {
 
     try {
       await resetSession()
-      const state = await getOAuthState('github')
-      if (!state) {
-        toast.error(t('Failed to initialize OAuth'))
-        if (githubTimeoutRef.current) {
-          clearTimeout(githubTimeoutRef.current)
-        }
-        setIsLoading(false)
-        setGithubButtonText(t('Continue with GitHub'))
-        setGithubButtonDisabled(false)
-        return
-      }
-
-      const url = buildGitHubOAuthUrl(status.github_client_id, state)
+      const authorization = await createOAuthAuthorization('github', 'login')
+      const url =
+        authorization.authorizationUrl ??
+        buildGitHubOAuthUrl(status.github_client_id, authorization.state)
       window.open(url, '_self')
     } catch {
       toast.error(t('Failed to start GitHub login'))
@@ -127,13 +118,10 @@ export function useOAuthLogin(status: SystemStatus | null) {
     setIsLoading(true)
     try {
       await resetSession()
-      const state = await getOAuthState('discord')
-      if (!state) {
-        toast.error(t('Failed to initialize OAuth'))
-        return
-      }
-
-      const url = buildDiscordOAuthUrl(status.discord_client_id, state)
+      const authorization = await createOAuthAuthorization('discord', 'login')
+      const url =
+        authorization.authorizationUrl ??
+        buildDiscordOAuthUrl(status.discord_client_id, authorization.state)
       window.open(url, '_self')
     } catch {
       toast.error(t('Failed to start Discord login'))
@@ -148,17 +136,14 @@ export function useOAuthLogin(status: SystemStatus | null) {
     setIsLoading(true)
     try {
       await resetSession()
-      const state = await getOAuthState('oidc')
-      if (!state) {
-        toast.error(t('Failed to initialize OAuth'))
-        return
-      }
-
-      const url = buildOIDCOAuthUrl(
-        status.oidc_authorization_endpoint,
-        status.oidc_client_id,
-        state
-      )
+      const authorization = await createOAuthAuthorization('oidc', 'login')
+      const url =
+        authorization.authorizationUrl ??
+        buildOIDCOAuthUrl(
+          status.oidc_authorization_endpoint,
+          status.oidc_client_id,
+          authorization.state
+        )
       window.open(url, '_self')
     } catch {
       toast.error(t('Failed to start OIDC login'))
@@ -173,13 +158,10 @@ export function useOAuthLogin(status: SystemStatus | null) {
     setIsLoading(true)
     try {
       await resetSession()
-      const state = await getOAuthState('linuxdo')
-      if (!state) {
-        toast.error(t('Failed to initialize OAuth'))
-        return
-      }
-
-      const url = buildLinuxDOOAuthUrl(status.linuxdo_client_id, state)
+      const authorization = await createOAuthAuthorization('linuxdo', 'login')
+      const url =
+        authorization.authorizationUrl ??
+        buildLinuxDOOAuthUrl(status.linuxdo_client_id, authorization.state)
       window.open(url, '_self')
     } catch {
       toast.error(t('Failed to start LinuxDO login'))
@@ -188,8 +170,23 @@ export function useOAuthLogin(status: SystemStatus | null) {
     }
   }
 
-  const handleTelegramLogin = () => {
-    toast.info(t('Telegram login requires widget integration; coming soon'))
+  const handleTelegramLogin = async () => {
+    setIsLoading(true)
+    try {
+      const authorization = await createOAuthAuthorization('telegram', 'login')
+      if (!authorization.authorizationUrl) {
+        throw new Error(t('Failed to initialize OAuth'))
+      }
+      window.open(authorization.authorizationUrl, '_self')
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : t('Failed to start Telegram login')
+      )
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   const handleCustomOAuthLogin = async (provider: CustomOAuthProviderInfo) => {
@@ -198,23 +195,22 @@ export function useOAuthLogin(status: SystemStatus | null) {
     setIsLoading(true)
     try {
       await resetSession()
-      const state = await getOAuthState(provider.slug)
-      if (!state) {
-        toast.error(t('Failed to initialize OAuth'))
-        return
-      }
+      const authorization = await createOAuthAuthorization(
+        provider.slug,
+        'login'
+      )
 
       const redirectUri = `${window.location.origin}/oauth/${provider.slug}`
       const url = new URL(provider.authorization_endpoint)
       url.searchParams.set('client_id', provider.client_id)
       url.searchParams.set('redirect_uri', redirectUri)
       url.searchParams.set('response_type', 'code')
-      url.searchParams.set('state', state)
+      url.searchParams.set('state', authorization.state)
       if (provider.scopes) {
         url.searchParams.set('scope', provider.scopes)
       }
 
-      window.open(url.toString(), '_self')
+      window.open(authorization.authorizationUrl ?? url.toString(), '_self')
     } catch {
       toast.error(
         t('Failed to start {{provider}} login', { provider: provider.name })

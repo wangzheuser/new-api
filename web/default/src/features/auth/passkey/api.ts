@@ -17,7 +17,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
+import { authRequestOptions, authResult } from '@/lib/secure-verification'
 
+import type {
+  SecurityProof,
+  VerificationOperation,
+} from '../secure-verification/types'
 import type { ApiResponse, PasskeyOptionsPayload, PasskeyStatus } from './types'
 
 export async function getPasskeyStatus(): Promise<ApiResponse<PasskeyStatus>> {
@@ -25,27 +30,40 @@ export async function getPasskeyStatus(): Promise<ApiResponse<PasskeyStatus>> {
   return res.data
 }
 
-export async function beginPasskeyRegistration(): Promise<
-  ApiResponse<PasskeyOptionsPayload>
-> {
-  const res = await api.post<ApiResponse<PasskeyOptionsPayload>>(
-    '/api/user/passkey/register/begin'
+export async function beginPasskeyRegistration(
+  proofToken?: string,
+  signal?: AbortSignal
+): Promise<{ options: PasskeyOptionsPayload; flow_token: string }> {
+  return authResult(
+    api.post('/api/user/passkey/register/begin', undefined, {
+      ...authRequestOptions,
+      ...(proofToken ? { headers: { 'X-Security-Proof': proofToken } } : {}),
+      signal,
+    })
   )
-  return res.data
 }
 
 export async function finishPasskeyRegistration(
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  signal?: AbortSignal
 ): Promise<ApiResponse> {
   const res = await api.post<ApiResponse>(
     '/api/user/passkey/register/finish',
-    payload
+    payload,
+    { ...authRequestOptions, signal }
   )
   return res.data
 }
 
-export async function deletePasskey(): Promise<ApiResponse> {
-  const res = await api.delete<ApiResponse>('/api/user/passkey')
+export async function deletePasskey(
+  proofToken?: string,
+  signal?: AbortSignal
+): Promise<ApiResponse> {
+  const res = await api.delete<ApiResponse>('/api/user/passkey', {
+    ...authRequestOptions,
+    ...(proofToken ? { headers: { 'X-Security-Proof': proofToken } } : {}),
+    signal,
+  })
   return res.data
 }
 
@@ -68,21 +86,67 @@ export async function finishPasskeyLogin(
   return res.data
 }
 
-export async function beginPasskeyVerification(): Promise<
-  ApiResponse<PasskeyOptionsPayload>
-> {
-  const res = await api.post<ApiResponse<PasskeyOptionsPayload>>(
-    '/api/user/passkey/verify/begin'
+export async function beginPasskeyLoginVerification(
+  loginFlowToken: string,
+  signal?: AbortSignal
+): Promise<{
+  flow_token: string
+  options: PasskeyOptionsPayload
+}> {
+  return authResult(
+    api.post(
+      '/api/user/login/passkey/begin',
+      { flow_token: loginFlowToken },
+      { ...authRequestOptions, skipAuthRefresh: true, signal }
+    )
   )
-  return res.data
+}
+
+export async function finishPasskeyLoginVerification(
+  loginFlowToken: string,
+  passkeyFlowToken: string,
+  credential: Record<string, unknown>,
+  signal?: AbortSignal
+): Promise<import('@/stores/auth-store').AuthBundle> {
+  return authResult(
+    api.post(
+      '/api/user/login/passkey/finish',
+      {
+        flow_token: loginFlowToken,
+        passkey_flow_token: passkeyFlowToken,
+        credential,
+      },
+      { ...authRequestOptions, skipAuthRefresh: true, signal }
+    )
+  )
+}
+
+export async function beginPasskeyVerification(
+  operation: VerificationOperation,
+  signal?: AbortSignal
+): Promise<{
+  options: PasskeyOptionsPayload
+  flow_token: string
+}> {
+  return authResult(
+    api.post(
+      '/api/user/passkey/verify/begin',
+      { scope: operation.scope, context: operation.context },
+      { ...authRequestOptions, signal }
+    )
+  )
 }
 
 export async function finishPasskeyVerification(
-  payload: Record<string, unknown>
-): Promise<ApiResponse> {
-  const res = await api.post<ApiResponse>(
-    '/api/user/passkey/verify/finish',
-    payload
+  flowToken: string,
+  credential: Record<string, unknown>,
+  signal?: AbortSignal
+): Promise<SecurityProof> {
+  return authResult(
+    api.post(
+      '/api/user/passkey/verify/finish',
+      { flow_token: flowToken, credential },
+      { ...authRequestOptions, signal }
+    )
   )
-  return res.data
 }

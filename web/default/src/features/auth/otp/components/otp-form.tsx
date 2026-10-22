@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { Loader2 } from 'lucide-react'
+import { KeyRound, Loader2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
@@ -54,6 +54,15 @@ import {
   formatBackupCode,
   cleanBackupCode,
 } from '@/features/auth/lib/validation'
+import {
+  beginPasskeyLoginVerification,
+  finishPasskeyLoginVerification,
+} from '@/features/auth/passkey/api'
+import {
+  buildAssertionResult,
+  isPasskeySupported as detectPasskeySupport,
+  prepareCredentialRequestOptions,
+} from '@/lib/passkey'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -63,6 +72,8 @@ export function OtpForm({ className, ...props }: OtpFormProps) {
   const { t } = useTranslation()
   const [isLoading, setIsLoading] = useState(false)
   const [useBackupCode, setUseBackupCode] = useState(false)
+  const [passkeySupported, setPasskeySupported] = useState(false)
+  const [passkeyLoading, setPasskeyLoading] = useState(false)
   const completed = useRef(false)
   const redirected = useRef(false)
 
@@ -70,6 +81,17 @@ export function OtpForm({ className, ...props }: OtpFormProps) {
     (state) => state.auth.pendingLoginVerification
   )
   const { redirectToLogin, handleLoginSuccess } = useAuthRedirect()
+  const passkeyAvailable = Boolean(
+    pendingLogin?.challenge.methods.some(
+      (method) => method.method === 'passkey' && method.available
+    )
+  )
+
+  useEffect(() => {
+    if (passkeyAvailable) {
+      void detectPasskeySupport().then(setPasskeySupported)
+    }
+  }, [passkeyAvailable])
 
   useEffect(() => {
     if (!pendingLogin && !completed.current && !redirected.current) {
@@ -106,10 +128,7 @@ export function OtpForm({ className, ...props }: OtpFormProps) {
       // Remove all hyphens from backup code before sending to backend
       const code = useBackupCode ? cleanBackupCode(data.otp) : data.otp
       const pending = useAuthStore.getState().auth.pendingLoginVerification
-      if (
-        !pending ||
-        pending.challenge.expires_at * 1000 <= Date.now()
-      ) {
+      if (!pending || pending.challenge.expires_at * 1000 <= Date.now()) {
         toast.error(t('Session expired?'))
         redirectToLogin()
         return
@@ -145,6 +164,40 @@ export function OtpForm({ className, ...props }: OtpFormProps) {
     }
   }
 
+  async function handlePasskeyLogin() {
+    const pending = useAuthStore.getState().auth.pendingLoginVerification
+    if (!pending || !passkeySupported || passkeyLoading) return
+    setPasskeyLoading(true)
+    try {
+      const begin = await beginPasskeyLoginVerification(
+        pending.challenge.flow_token
+      )
+      const credential = (await navigator.credentials.get({
+        publicKey: prepareCredentialRequestOptions(begin.options),
+      })) as PublicKeyCredential | null
+      const assertion = buildAssertionResult(credential)
+      if (!assertion) throw new Error(t('Invalid Passkey response'))
+      const bundle = await finishPasskeyLoginVerification(
+        pending.challenge.flow_token,
+        begin.flow_token,
+        assertion
+      )
+      completed.current = true
+      toast.success(t('Signed in with Passkey'))
+      await handleLoginSuccess(bundle, pending.redirectTo)
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'NotAllowedError') {
+        toast.info(t('Passkey login was cancelled or timed out'))
+      } else {
+        toast.error(
+          error instanceof Error ? error.message : t('Passkey login failed')
+        )
+      }
+    } finally {
+      setPasskeyLoading(false)
+    }
+  }
+
   function handleToggleMode() {
     setUseBackupCode(!useBackupCode)
     form.setValue('otp', '')
@@ -165,6 +218,21 @@ export function OtpForm({ className, ...props }: OtpFormProps) {
         className={cn('grid gap-4', className)}
         {...props}
       >
+        {passkeyAvailable && passkeySupported && (
+          <Button
+            type='button'
+            variant='outline'
+            onClick={() => void handlePasskeyLogin()}
+            disabled={isLoading || passkeyLoading}
+          >
+            {passkeyLoading ? (
+              <Loader2 className='h-4 w-4 animate-spin' />
+            ) : (
+              <KeyRound className='h-4 w-4' />
+            )}
+            {t('Continue with Passkey')}
+          </Button>
+        )}
         <FormField
           control={form.control}
           name='otp'

@@ -25,8 +25,11 @@ import { Dialog } from '@/components/dialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  SecureVerificationDialog,
+  useSecureVerification,
+} from '@/features/auth/secure-verification'
 import { disable2FA } from '@/lib/api'
 
 // ============================================================================
@@ -45,46 +48,39 @@ export function TwoFADisableDialog({
   onSuccess,
 }: TwoFADisableDialogProps) {
   const { t } = useTranslation()
-  const [loading, setLoading] = useState(false)
-  const [code, setCode] = useState('')
+  const [loading] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
+  const security = useSecureVerification({
+    onSuccess: () => {
+      toast.success(t('Two-factor authentication disabled'))
+      onOpenChange(false)
+      onSuccess()
+      setConfirmed(false)
+    },
+  })
 
   const handleDisable = async () => {
-    if (!code) {
-      toast.error(t('Please enter your verification code or backup code'))
-      return
-    }
-
     if (!confirmed) {
       toast.error(t('Please confirm that you understand the consequences'))
       return
     }
 
-    try {
-      setLoading(true)
-      const response = await disable2FA(code)
-
-      if (response.success) {
-        toast.success(t('Two-factor authentication disabled'))
-        onOpenChange(false)
-        onSuccess()
-        // Reset
-        setCode('')
-        setConfirmed(false)
-      } else {
-        toast.error(response.message || t('Failed to disable 2FA'))
+    await security.startVerification(
+      (proofToken) => disable2FA(proofToken ?? ''),
+      {
+        operation: { scope: '2fa.disable' },
+        preferredMethod: '2fa',
+        title: t('Security verification'),
+        description: t(
+          'Confirm your identity before disabling two-factor authentication.'
+        ),
       }
-    } catch (_error) {
-      toast.error(t('Failed to disable 2FA'))
-    } finally {
-      setLoading(false)
-    }
+    )
   }
 
   const handleOpenChange = (open: boolean) => {
     if (!loading) {
       if (!open) {
-        setCode('')
         setConfirmed(false)
       }
       onOpenChange(open)
@@ -93,7 +89,7 @@ export function TwoFADisableDialog({
 
   return (
     <Dialog
-      open={open}
+      open={open && !security.open}
       onOpenChange={handleOpenChange}
       title={
         <>
@@ -120,7 +116,7 @@ export function TwoFADisableDialog({
           <Button
             variant='destructive'
             onClick={handleDisable}
-            disabled={loading || !code || !confirmed}
+            disabled={loading || !confirmed}
           >
             {loading && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
             {loading ? t('Disabling...') : t('Disable 2FA')}
@@ -135,20 +131,6 @@ export function TwoFADisableDialog({
             {t('Warning: Disabling 2FA will make your account less secure.')}
           </AlertDescription>
         </Alert>
-
-        <div className='space-y-2'>
-          <Label htmlFor='code'>{t('Verification Code')}</Label>
-          <Input
-            id='code'
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            placeholder={t('Enter code or backup code')}
-            disabled={loading}
-          />
-          <p className='text-muted-foreground text-xs'>
-            {t('Enter your authenticator code or a backup code')}
-          </p>
-        </div>
 
         <div className='flex items-start space-x-2'>
           <Checkbox
@@ -166,6 +148,19 @@ export function TwoFADisableDialog({
           </Label>
         </div>
       </div>
+      <SecureVerificationDialog
+        open={security.open}
+        onOpenChange={(next) => !next && security.cancel()}
+        methods={security.methods}
+        state={security.state}
+        onVerify={(method, value) => {
+          void security.executeVerification(method, value)
+        }}
+        onCancel={security.cancel}
+        onCodeChange={security.setCode}
+        onMethodChange={security.switchMethod}
+        onOAuthProviderChange={security.setOAuthProvider}
+      />
     </Dialog>
   )
 }

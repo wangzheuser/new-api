@@ -16,20 +16,37 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-export type VerificationMethod = '2fa' | 'passkey'
+export type VerificationMethod = '2fa' | 'passkey' | 'password' | 'oauth'
+
+export interface VerificationOperation {
+  scope: string
+  context?: Record<string, unknown>
+}
+
+export interface SecurityProof {
+  proof_token: string
+  expires_at: number
+  method: VerificationMethod
+  scope: string
+}
 
 export interface VerificationMethods {
   has2FA: boolean
   hasPasskey: boolean
   passkeySupported: boolean
+  hasPassword: boolean
+  passwordEncryptionEnabled: boolean
+  oauthProviders: Array<{ slug: string; name: string }>
 }
 
 export interface SecureVerificationState {
   method: VerificationMethod | null
   loading: boolean
   code: string
+  oauthProvider?: string
   title?: string
   description?: string
+  operation?: VerificationOperation
 }
 
 export interface UseSecureVerificationOptions {
@@ -43,4 +60,5 @@ export interface StartVerificationOptions {
   preferredMethod?: VerificationMethod
   title?: string
   description?: string
+  operation: VerificationOperation
 }

@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { ChannelInputPolicies } from '@/features/input-policies/channel-input-policies'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -113,6 +112,7 @@ import {
   SecureVerificationDialog,
   useSecureVerification,
 } from '@/features/auth/secure-verification'
+import { ChannelInputPolicies } from '@/features/input-policies/channel-input-policies'
 import { useSystemOptions } from '@/features/system-settings/hooks/use-system-options'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { useHiddenClickUnlock } from '@/hooks/use-hidden-click-unlock'
@@ -722,10 +722,7 @@ export function ChannelMutateDrawer({
         options.find(
           (item) => item.key === 'channel_auto_disable_setting.status_codes'
         )?.value || '408,500-599',
-      sampleSize: readInteger(
-        'channel_auto_disable_setting.sample_size',
-        20
-      ),
+      sampleSize: readInteger('channel_auto_disable_setting.sample_size', 20),
       minimumSampleSize: readInteger(
         'channel_auto_disable_setting.minimum_sample_size',
         3
@@ -1661,26 +1658,29 @@ export function ChannelMutateDrawer({
     }
   }
 
-  const fetchChannelKey = useCallback(async () => {
-    if (!channelId) {
-      throw new Error('Channel is not selected')
-    }
-
-    setIsChannelKeyLoading(true)
-    try {
-      const res = await getChannelKey(channelId)
-      if (!res.success) {
-        throw new Error(res.message || t('Failed to fetch channel key'))
+  const fetchChannelKey = useCallback(
+    async (proofToken?: string) => {
+      if (!channelId) {
+        throw new Error('Channel is not selected')
       }
 
-      const keyValue = res.data?.key ?? ''
-      setChannelKey(keyValue)
-      toast.success(t('Channel key unlocked'))
-      return res
-    } finally {
-      setIsChannelKeyLoading(false)
-    }
-  }, [channelId, t])
+      setIsChannelKeyLoading(true)
+      try {
+        const res = await getChannelKey(channelId, proofToken)
+        if (!res.success) {
+          throw new Error(res.message || t('Failed to fetch channel key'))
+        }
+
+        const keyValue = res.data?.key ?? ''
+        setChannelKey(keyValue)
+        toast.success(t('Channel key unlocked'))
+        return res
+      } finally {
+        setIsChannelKeyLoading(false)
+      }
+    },
+    [channelId, t]
+  )
 
   const handleRevealKey = useCallback(async () => {
     if (!channelId) return
@@ -1691,6 +1691,10 @@ export function ChannelMutateDrawer({
         title: 'Verify to view channel key',
         description:
           'Use Passkey or 2FA to confirm your identity before revealing this channel key.',
+        operation: {
+          scope: 'channel.key.read',
+          context: { channel_id: channelId },
+        },
       })
     } catch (error) {
       if (error instanceof Error) {
@@ -4307,7 +4311,12 @@ export function ChannelMutateDrawer({
                         <ChannelInputPolicies
                           key={`${channelId ?? 'new'}:${open}`}
                           value={currentSettings || '{}'}
-                          onChange={(value) => form.setValue('settings', value, { shouldDirty: true, shouldValidate: true })}
+                          onChange={(value) =>
+                            form.setValue('settings', value, {
+                              shouldDirty: true,
+                              shouldValidate: true,
+                            })
+                          }
                         />
                         {/* ── Routing & Overrides ── */}
                         <div className={sideDrawerSectionClassName()}>

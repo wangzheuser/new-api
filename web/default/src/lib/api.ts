@@ -30,6 +30,8 @@ declare module 'axios' {
     disableDuplicate?: boolean
     skipAuthRefresh?: boolean
     authRetry?: boolean
+    singleUseAuthorization?: boolean
+    acceptAuthRotation?: boolean
   }
 }
 
@@ -53,6 +55,37 @@ export const api = axios.create({
 
 export function applyAuthBundle(bundle: AuthBundle): void {
   useAuthStore.getState().auth.setBundle(bundle)
+}
+
+function applyAuthRotation(value: unknown): void {
+  if (!value || typeof value !== 'object') return
+  const rotation = value as {
+    access_token?: unknown
+    token_type?: unknown
+    access_expires_at?: unknown
+    session?: unknown
+  }
+  const auth = useAuthStore.getState().auth
+  if (
+    !auth.user ||
+    !auth.session ||
+    typeof rotation.access_token !== 'string' ||
+    typeof rotation.token_type !== 'string' ||
+    typeof rotation.access_expires_at !== 'number' ||
+    !rotation.session ||
+    typeof rotation.session !== 'object'
+  ) {
+    return
+  }
+  const session = rotation.session as typeof auth.session
+  if (session.sid !== auth.session.sid) return
+  auth.setBundle({
+    access_token: rotation.access_token,
+    token_type: rotation.token_type,
+    access_expires_at: rotation.access_expires_at,
+    session,
+    user: auth.user,
+  })
 }
 
 let refreshPromise: Promise<boolean> | null = null
@@ -116,6 +149,9 @@ api.get = ((url: string, config: ApiRequestConfig = {}) => {
 // Handle business logic errors and HTTP errors globally
 api.interceptors.response.use(
   (response) => {
+    if (response.config.acceptAuthRotation && response.data?.success === true) {
+      applyAuthRotation(response.data.data)
+    }
     const skipBusiness = response.config.skipBusinessError
 
     // Unified business response format: { success, message, data }
@@ -166,7 +202,7 @@ api.interceptors.response.use(
       const msg = responseData?.message || error.message || t('Request failed')
       toast.error(msg)
     }
-    return Promise.reject(error)
+    throw error
   }
 )
 
@@ -214,6 +250,9 @@ export function getCommonHeaders(): Record<string, string> {
 
 // Attach user ID header for all requests
 api.interceptors.request.use((config) => {
+  if (config.singleUseAuthorization || config.headers?.['X-Security-Proof']) {
+    config.skipAuthRefresh = true
+  }
   const uid = getUserId()
   if (uid) {
     // Custom header for user identification
@@ -298,25 +337,43 @@ export async function get2FAStatus() {
 }
 
 // Setup 2FA
-export async function setup2FA() {
-  const res = await api.post('/api/user/2fa/setup')
+export async function setup2FA(proofToken?: string) {
+  const res = await api.post('/api/user/2fa/setup', undefined, {
+    skipBusinessError: true,
+    skipErrorHandler: true,
+    ...(proofToken ? { headers: { 'X-Security-Proof': proofToken } } : {}),
+  })
   return res.data
 }
 
 // Enable 2FA with verification code
-export async function enable2FA(code: string) {
-  const res = await api.post('/api/user/2fa/enable', { code })
+export async function enable2FA(flowToken: string, code: string) {
+  const res = await api.post(
+    '/api/user/2fa/enable',
+    { flow_token: flowToken, code },
+    { acceptAuthRotation: true }
+  )
   return res.data
 }
 
 // Disable 2FA with verification code
-export async function disable2FA(code: string) {
-  const res = await api.post('/api/user/2fa/disable', { code })
+export async function disable2FA(proofToken: string) {
+  const res = await api.post('/api/user/2fa/disable', undefined, {
+    skipBusinessError: true,
+    skipErrorHandler: true,
+    acceptAuthRotation: true,
+    headers: { 'X-Security-Proof': proofToken },
+  })
   return res.data
 }
 
 // Regenerate 2FA backup codes
-export async function regenerate2FABackupCodes(code: string) {
-  const res = await api.post('/api/user/2fa/backup_codes', { code })
+export async function regenerate2FABackupCodes(proofToken: string) {
+  const res = await api.post('/api/user/2fa/backup_codes', undefined, {
+    skipBusinessError: true,
+    skipErrorHandler: true,
+    acceptAuthRotation: true,
+    headers: { 'X-Security-Proof': proofToken },
+  })
   return res.data
 }

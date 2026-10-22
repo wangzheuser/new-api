@@ -25,12 +25,12 @@ import { Dialog } from '@/components/dialog'
 import { PasswordInput } from '@/components/password-input'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
+import {
+  SecureVerificationDialog,
+  useSecureVerification,
+} from '@/features/auth/secure-verification'
 
-import { updateUserProfile } from '../../api'
-
-// ============================================================================
-// Change Password Dialog Component
-// ============================================================================
+import { changeAccountPassword } from '../../api'
 
 interface ChangePasswordDialogProps {
   open: boolean
@@ -38,11 +38,7 @@ interface ChangePasswordDialogProps {
   username: string
 }
 
-export function ChangePasswordDialog({
-  open,
-  onOpenChange,
-  username,
-}: ChangePasswordDialogProps) {
+export function ChangePasswordDialog(props: ChangePasswordDialogProps) {
   const { t } = useTranslation()
   const [loading, setLoading] = useState(false)
   const [formData, setFormData] = useState({
@@ -50,138 +46,161 @@ export function ChangePasswordDialog({
     newPassword: '',
     confirmPassword: '',
   })
+  const security = useSecureVerification({
+    onSuccess: () => {
+      toast.success(t('Password changed successfully'))
+      props.onOpenChange(false)
+      setFormData({
+        originalPassword: '',
+        newPassword: '',
+        confirmPassword: '',
+      })
+    },
+  })
 
-  const handleChange = (field: string, value: string) => {
-    setFormData((prev) => ({ ...prev, [field]: value }))
-  }
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-
-    // Validation
-    if (!formData.originalPassword) {
-      toast.error(t('Please enter your current password'))
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!formData.originalPassword || !formData.newPassword) {
+      toast.error(t('Please enter your current and new password'))
       return
     }
-
-    if (!formData.newPassword) {
-      toast.error(t('Please enter a new password'))
-      return
-    }
-
     if (formData.newPassword.length < 8) {
       toast.error(t('Password must be at least 8 characters'))
       return
     }
-
     if (formData.originalPassword === formData.newPassword) {
       toast.error(t('New password must be different from current password'))
       return
     }
-
     if (formData.newPassword !== formData.confirmPassword) {
       toast.error(t('Passwords do not match'))
       return
     }
-
+    setLoading(true)
     try {
-      setLoading(true)
-      const response = await updateUserProfile({
-        original_password: formData.originalPassword,
-        password: formData.newPassword,
-      })
-
-      if (response.success) {
-        toast.success(t('Password changed successfully'))
-        onOpenChange(false)
-        setFormData({
-          originalPassword: '',
-          newPassword: '',
-          confirmPassword: '',
-        })
-      } else {
-        toast.error(response.message || t('Failed to change password'))
-      }
-    } catch (_error) {
-      toast.error(t('Failed to change password'))
+      await security.startVerification(
+        (proofToken) =>
+          changeAccountPassword(
+            {
+              original_password: formData.originalPassword,
+              password: formData.newPassword,
+            },
+            proofToken ?? ''
+          ),
+        {
+          operation: { scope: 'account.password.change' },
+          title: t('Security verification'),
+          description: t(
+            'Confirm your identity before changing your password.'
+          ),
+        }
+      )
     } finally {
       setLoading(false)
     }
   }
 
-  const formId = 'change-password-form'
-
   return (
-    <Dialog
-      open={open}
-      onOpenChange={onOpenChange}
-      title={t('Change Password')}
-      description={
-        <>
-          {t('Update your password for account:')} <strong>{username}</strong>
-        </>
-      }
-      contentClassName='sm:max-w-md'
-      contentHeight='auto'
-      bodyClassName='space-y-4'
-      footer={
-        <>
-          <Button
-            type='button'
-            variant='outline'
-            onClick={() => onOpenChange(false)}
-            disabled={loading}
-          >
-            {t('Cancel')}
-          </Button>
-          <Button type='submit' form={formId} disabled={loading}>
-            {loading && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
-            {loading ? t('Changing...') : t('Change Password')}
-          </Button>
-        </>
-      }
-    >
-      <form id={formId} onSubmit={handleSubmit} className='space-y-4'>
-        <div className='space-y-2'>
-          <Label htmlFor='currentPassword'>{t('Current Password')}</Label>
-          <PasswordInput
-            id='currentPassword'
-            value={formData.originalPassword}
-            onChange={(e) => handleChange('originalPassword', e.target.value)}
-            disabled={loading}
-            required
-            autoComplete='current-password'
-          />
-        </div>
-
-        <div className='space-y-2'>
-          <Label htmlFor='newPassword'>{t('New Password')}</Label>
-          <PasswordInput
-            id='newPassword'
-            value={formData.newPassword}
-            onChange={(e) => handleChange('newPassword', e.target.value)}
-            disabled={loading}
-            required
-            minLength={8}
-            autoComplete='new-password'
-          />
-          <p className='text-muted-foreground text-xs'>
-            {t('Must be at least 8 characters')}
-          </p>
-        </div>
-
-        <div className='space-y-2'>
-          <Label htmlFor='confirmPassword'>{t('Confirm New Password')}</Label>
-          <PasswordInput
-            id='confirmPassword'
-            value={formData.confirmPassword}
-            onChange={(e) => handleChange('confirmPassword', e.target.value)}
-            disabled={loading}
-            required
-            autoComplete='new-password'
-          />
-        </div>
-      </form>
-    </Dialog>
+    <>
+      <Dialog
+        open={props.open && !security.open}
+        onOpenChange={props.onOpenChange}
+        title={t('Change Password')}
+        description={
+          <>
+            {t('Update your password for account:')}{' '}
+            <strong>{props.username}</strong>
+          </>
+        }
+        contentClassName='sm:max-w-md'
+        contentHeight='auto'
+        bodyClassName='space-y-4'
+        footer={
+          <>
+            <Button
+              type='button'
+              variant='outline'
+              onClick={() => props.onOpenChange(false)}
+              disabled={loading}
+            >
+              {t('Cancel')}
+            </Button>
+            <Button
+              type='submit'
+              form='change-password-form'
+              disabled={loading || security.isLoading}
+            >
+              {loading && <Loader2 className='size-4 animate-spin' />}
+              {t('Change Password')}
+            </Button>
+          </>
+        }
+      >
+        <form id='change-password-form' onSubmit={submit} className='space-y-4'>
+          <div className='space-y-2'>
+            <Label htmlFor='currentPassword'>{t('Current Password')}</Label>
+            <PasswordInput
+              id='currentPassword'
+              value={formData.originalPassword}
+              onChange={(event) =>
+                setFormData((prev) => ({
+                  ...prev,
+                  originalPassword: event.target.value,
+                }))
+              }
+              disabled={loading}
+              required
+              autoComplete='current-password'
+            />
+          </div>
+          <div className='space-y-2'>
+            <Label htmlFor='newPassword'>{t('New Password')}</Label>
+            <PasswordInput
+              id='newPassword'
+              value={formData.newPassword}
+              onChange={(event) =>
+                setFormData((prev) => ({
+                  ...prev,
+                  newPassword: event.target.value,
+                }))
+              }
+              disabled={loading}
+              required
+              minLength={8}
+              autoComplete='new-password'
+            />
+          </div>
+          <div className='space-y-2'>
+            <Label htmlFor='confirmPassword'>{t('Confirm New Password')}</Label>
+            <PasswordInput
+              id='confirmPassword'
+              value={formData.confirmPassword}
+              onChange={(event) =>
+                setFormData((prev) => ({
+                  ...prev,
+                  confirmPassword: event.target.value,
+                }))
+              }
+              disabled={loading}
+              required
+              autoComplete='new-password'
+            />
+          </div>
+        </form>
+      </Dialog>
+      <SecureVerificationDialog
+        open={security.open}
+        onOpenChange={(open) => !open && security.cancel()}
+        methods={security.methods}
+        state={security.state}
+        onVerify={(method, code) => {
+          void security.executeVerification(method, code)
+        }}
+        onCancel={security.cancel}
+        onCodeChange={security.setCode}
+        onMethodChange={security.switchMethod}
+        onOAuthProviderChange={security.setOAuthProvider}
+      />
+    </>
   )
 }

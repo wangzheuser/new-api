@@ -24,7 +24,6 @@ import { useTranslation } from 'react-i18next'
 import { AuthLayout } from '@/features/auth/auth-layout'
 import { redeemUserImpersonationTicket } from '@/features/users/api'
 import { applyAuthBundle } from '@/lib/api'
-import { useAuthStore } from '@/stores/auth-store'
 
 type ImpersonationPageState =
   | 'loading'
@@ -53,10 +52,6 @@ function ImpersonatePage() {
     )
     window.history.replaceState(null, '', '/impersonate')
 
-    if (useAuthStore.getState().auth.user) {
-      setState('existing-session')
-      return
-    }
     if (!ticket?.trim()) {
       setState('invalid')
       return

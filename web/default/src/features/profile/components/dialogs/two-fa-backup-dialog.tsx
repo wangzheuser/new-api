@@ -27,6 +27,10 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  SecureVerificationDialog,
+  useSecureVerification,
+} from '@/features/auth/secure-verification'
 import { regenerate2FABackupCodes } from '@/lib/api'
 
 // ============================================================================
@@ -45,31 +49,31 @@ export function TwoFABackupDialog({
   onSuccess,
 }: TwoFABackupDialogProps) {
   const { t } = useTranslation()
-  const [loading, setLoading] = useState(false)
+  const [loading] = useState(false)
   const [code, setCode] = useState('')
   const [backupCodes, setBackupCodes] = useState<string[]>([])
+  const security = useSecureVerification({
+    onSuccess: (result) => {
+      const data = result as { backup_codes?: string[] }
+      if (data.backup_codes) {
+        setBackupCodes(data.backup_codes)
+        toast.success(t('Backup codes regenerated successfully'))
+      }
+    },
+  })
 
   const handleRegenerate = async () => {
-    if (!code) {
-      toast.error(t('Please enter your verification code'))
-      return
-    }
-
-    try {
-      setLoading(true)
-      const response = await regenerate2FABackupCodes(code)
-
-      if (response.success && response.data?.backup_codes) {
-        setBackupCodes(response.data.backup_codes)
-        toast.success(t('Backup codes regenerated successfully'))
-      } else {
-        toast.error(response.message || t('Failed to regenerate backup codes'))
+    await security.startVerification(
+      (proofToken) => regenerate2FABackupCodes(proofToken ?? ''),
+      {
+        operation: { scope: '2fa.backup_codes.regenerate' },
+        preferredMethod: '2fa',
+        title: t('Security verification'),
+        description: t(
+          'Confirm your identity before regenerating backup codes.'
+        ),
       }
-    } catch (_error) {
-      toast.error(t('Failed to regenerate backup codes'))
-    } finally {
-      setLoading(false)
-    }
+    )
   }
 
   const handleDone = () => {
@@ -89,7 +93,7 @@ export function TwoFABackupDialog({
 
   return (
     <Dialog
-      open={open}
+      open={open && !security.open}
       onOpenChange={handleOpenChange}
       title={
         <>
@@ -107,7 +111,7 @@ export function TwoFABackupDialog({
       contentHeight='auto'
       bodyClassName='space-y-4'
       footer={
-        <>
+        <div className='flex gap-2'>
           {backupCodes.length === 0 ? (
             <>
               <Button
@@ -117,7 +121,10 @@ export function TwoFABackupDialog({
               >
                 {t('Cancel')}
               </Button>
-              <Button onClick={handleRegenerate} disabled={loading || !code}>
+              <Button
+                onClick={handleRegenerate}
+                disabled={loading || security.isLoading}
+              >
                 {loading && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
                 {loading ? t('Generating...') : t('Generate New Codes')}
               </Button>
@@ -125,7 +132,7 @@ export function TwoFABackupDialog({
           ) : (
             <Button onClick={handleDone}>{t('Done')}</Button>
           )}
-        </>
+        </div>
       }
     >
       <div className='space-y-4 py-4'>
@@ -163,9 +170,9 @@ export function TwoFABackupDialog({
 
             <div className='rounded-lg border p-4'>
               <div className='grid grid-cols-2 gap-2'>
-                {backupCodes.map((code, index) => (
+                {backupCodes.map((code) => (
                   <div
-                    key={index}
+                    key={code}
                     className='bg-muted rounded-md p-2 text-center font-mono text-sm'
                   >
                     {code}
@@ -188,6 +195,19 @@ export function TwoFABackupDialog({
           </>
         )}
       </div>
+      <SecureVerificationDialog
+        open={security.open}
+        onOpenChange={(next) => !next && security.cancel()}
+        methods={security.methods}
+        state={security.state}
+        onVerify={(method, value) => {
+          void security.executeVerification(method, value)
+        }}
+        onCancel={security.cancel}
+        onCodeChange={security.setCode}
+        onMethodChange={security.switchMethod}
+        onOAuthProviderChange={security.setOAuthProvider}
+      />
     </Dialog>
   )
 }

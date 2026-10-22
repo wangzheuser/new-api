@@ -40,6 +40,7 @@ interface SecureVerificationDialogProps {
   onCancel: () => void
   onCodeChange: (code: string) => void
   onMethodChange: (method: VerificationMethod) => void
+  onOAuthProviderChange?: (provider: string) => void
 }
 
 export function SecureVerificationDialog({
@@ -51,12 +52,15 @@ export function SecureVerificationDialog({
   onCancel,
   onCodeChange,
   onMethodChange,
+  onOAuthProviderChange,
 }: SecureVerificationDialogProps) {
   const { t } = useTranslation()
   const availableTabs: VerificationMethod[] = useMemo(() => {
     const tabs: VerificationMethod[] = []
     if (methods.has2FA) tabs.push('2fa')
     if (methods.hasPasskey && methods.passkeySupported) tabs.push('passkey')
+    if (methods.hasPassword) tabs.push('password')
+    if (methods.oauthProviders.length > 0) tabs.push('oauth')
     return tabs
   }, [methods])
 
@@ -77,13 +81,20 @@ export function SecureVerificationDialog({
 
   const handleVerify = () => {
     if (!activeMethod) return
-    const payload = activeMethod === '2fa' ? state.code : undefined
+    let payload: string | undefined
+    if (activeMethod === '2fa' || activeMethod === 'password') {
+      payload = state.code
+    } else if (activeMethod === 'oauth') {
+      payload = state.oauthProvider
+    }
     onVerify(activeMethod, payload)
   }
 
   const verifyDisabled =
     state.loading ||
-    (activeMethod === '2fa' && (!state.code.trim() || state.code.length < 6))
+    (activeMethod === '2fa' && (!state.code.trim() || state.code.length < 6)) ||
+    (activeMethod === 'password' && !state.code.trim()) ||
+    (activeMethod === 'oauth' && !state.oauthProvider)
 
   return (
     <Dialog
@@ -149,17 +160,26 @@ export function SecureVerificationDialog({
             {methods.hasPasskey && methods.passkeySupported && (
               <TabsTrigger value='passkey'>{t('Passkey')}</TabsTrigger>
             )}
+            {methods.hasPassword && (
+              <TabsTrigger value='password'>{t('Password')}</TabsTrigger>
+            )}
+            {methods.oauthProviders.length > 0 && (
+              <TabsTrigger value='oauth'>{t('Linked account')}</TabsTrigger>
+            )}
           </TabsList>
 
           <TabsContent value='2fa' className='space-y-3'>
             <p className='text-muted-foreground text-sm'>
               {t(
-                'Enter the 6-digit Time-based One-Time Password or 8-character backup code from your authenticator app.'
+                'Enter the 6-digit authenticator code or an unused backup code in XXXX-XXXX format.'
               )}
             </p>
             <Input
-              inputMode='numeric'
-              maxLength={8}
+              inputMode='text'
+              autoCapitalize='characters'
+              autoComplete='one-time-code'
+              spellCheck={false}
+              maxLength={9}
               value={state.code}
               onChange={(event) => onCodeChange(event.target.value)}
               placeholder={t('Enter verification code')}
@@ -195,6 +215,42 @@ export function SecureVerificationDialog({
                 {t('This device does not support Passkey verification.')}
               </p>
             )}
+          </TabsContent>
+          <TabsContent value='password' className='space-y-3'>
+            <p className='text-muted-foreground text-sm'>
+              {t('Enter your current account password to continue.')}
+            </p>
+            <Input
+              type='password'
+              autoComplete='current-password'
+              value={state.code}
+              onChange={(event) => onCodeChange(event.target.value)}
+              placeholder={t('Enter your password')}
+              disabled={state.loading}
+              autoFocus={activeMethod === 'password'}
+            />
+          </TabsContent>
+          <TabsContent value='oauth' className='space-y-3'>
+            <p className='text-muted-foreground text-sm'>
+              {t('Verify with a linked OAuth account.')}
+            </p>
+            <div className='grid gap-2'>
+              {methods.oauthProviders.map((provider) => (
+                <Button
+                  key={provider.slug}
+                  type='button'
+                  variant={
+                    state.oauthProvider === provider.slug
+                      ? 'default'
+                      : 'outline'
+                  }
+                  disabled={state.loading}
+                  onClick={() => onOAuthProviderChange?.(provider.slug)}
+                >
+                  {provider.name}
+                </Button>
+              ))}
+            </div>
           </TabsContent>
         </Tabs>
       )}

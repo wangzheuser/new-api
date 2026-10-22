@@ -29,6 +29,20 @@ export interface ApiResponse<T = unknown> {
   data?: T
 }
 
+export interface AccountSecurityResult {
+  notification_warning?: boolean
+  [key: string]: unknown
+}
+
+export interface EmailBindingFlow {
+  flow_token: string
+  email: string
+  current_email?: string
+  old_email_required: boolean
+  resend_at: number
+  expires_at: number
+}
+
 /**
  * User profile data
  */
@@ -183,6 +197,7 @@ export interface TwoFASetupData {
   secret: string
   qr_code_data: string
   backup_codes: string[]
+  flow_token: string
 }
 
 // ============================================================================

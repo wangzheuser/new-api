@@ -24,169 +24,162 @@ import {
 } from '@tanstack/react-router'
 import type { AxiosRequestConfig } from 'axios'
 import i18next from 'i18next'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 
 import { OAuthCallbackScreen } from '@/features/auth/components/oauth-callback-screen'
-import { OAUTH_BIND_STORAGE_KEY } from '@/features/auth/constants'
+import {
+  OAUTH_POPUP_CALLBACK_MESSAGE,
+  OAUTH_POPUP_RESULT_MESSAGE,
+} from '@/features/auth/constants'
 import { useAuthRedirect } from '@/features/auth/hooks/use-auth-redirect'
+import {
+  getOAuthSessionStorage,
+  resolveOAuthCallbackMode,
+} from '@/features/auth/lib/oauth-callback-mode'
 import { api } from '@/lib/api'
+import { AuthOperationError } from '@/lib/secure-verification'
 
 type OAuthRequestConfig = AxiosRequestConfig & {
   skipBusinessError?: boolean
+  skipAuthRefresh?: boolean
 }
 
 function OAuthCallback() {
   const navigate = useNavigate()
   const { handleLoginResult } = useAuthRedirect()
-  const handleLoginResultRef = useRef(handleLoginResult)
-  handleLoginResultRef.current = handleLoginResult
+  const handled = useRef(false)
   const { provider } = useParams({ from: '/oauth/$provider' }) as {
     provider: string
   }
   const search = useSearch({ from: '/oauth/$provider' }) as {
     code?: string
     state?: string
+    error?: string
+    error_description?: string
     redirect?: string
   }
-  const [mode, setMode] = useState<'login' | 'bind'>(() => {
-    if (typeof window === 'undefined') return 'login'
-    return window.opener ? 'bind' : 'login'
-  })
+  const state = search.state ?? ''
+  const mode =
+    typeof window === 'undefined'
+      ? 'login'
+      : resolveOAuthCallbackMode(provider, state, {
+          opener: window.opener,
+          storage: getOAuthSessionStorage(window),
+        })
 
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setMode(window.opener ? 'bind' : 'login')
-  }, [])
-
-  useEffect(() => {
-    ;(async () => {
-      const safeNavigate = (target: string) => {
-        navigate({ to: target as never, replace: true })
-        if (typeof window !== 'undefined') {
-          setTimeout(() => {
-            const normalizedTarget = target.startsWith('/')
-              ? target
-              : `/${target}`
-            const currentPath =
-              window.location.pathname + window.location.search
-            if (
-              currentPath !== normalizedTarget &&
-              currentPath !== `${normalizedTarget}/`
-            ) {
-              window.location.replace(target)
-            }
-          }, 100)
-        }
-      }
-
-      if (!search?.code) {
-        toast.error(i18next.t('Missing code'))
-        safeNavigate('/sign-in')
+    if (typeof window === 'undefined' || handled.current) return
+    handled.current = true
+    const code = search.code ?? ''
+    if (mode === 'bind' || mode === 'verify') {
+      if (!window.opener || window.opener.closed) {
+        toast.error(i18next.t('OAuth window is no longer available.'))
         return
       }
-      const isBindingFlow =
-        typeof window !== 'undefined' ? Boolean(window.opener) : mode === 'bind'
-      if (isBindingFlow && mode !== 'bind') {
-        setMode('bind')
-      } else if (!isBindingFlow && mode !== 'login') {
-        setMode('login')
-      }
-      const notifyBindingResult = (status: 'success' | 'error') => {
-        if (typeof window === 'undefined') return
-        try {
-          window.localStorage.setItem(
-            OAUTH_BIND_STORAGE_KEY,
-            JSON.stringify({
-              provider,
-              status,
-              timestamp: Date.now(),
-            })
-          )
-        } catch (_error) {
-          // ignore storage write failures
-          void _error
+      const handleResult = (event: MessageEvent<unknown>) => {
+        if (
+          event.origin !== window.location.origin ||
+          event.source !== window.opener
+        ) {
+          return
         }
-      }
-
-      const closeBindingWindow = () => {
-        if (typeof window === 'undefined') return
+        const result = event.data as {
+          type?: string
+          intent?: string
+          provider?: string
+          state?: string
+          success?: boolean
+          message?: string
+        } | null
+        if (
+          result?.type !== OAUTH_POPUP_RESULT_MESSAGE ||
+          result.intent !== mode ||
+          result.provider !== provider ||
+          result.state !== state
+        ) {
+          return
+        }
+        window.removeEventListener('message', handleResult)
+        window.clearTimeout(closeTimer)
+        if (!result.success) {
+          toast.error(result.message || i18next.t('OAuth failed'))
+          window.setTimeout(() => window.close(), 1500)
+          return
+        }
+        toast.success(i18next.t('Binding successful!'))
         window.close()
-        setTimeout(() => {
-          if (!window.closed) {
-            window.location.replace('/_authenticated/profile/')
-          }
-        }, 200)
       }
-
-      const handleBindingFailure = (message: string) => {
-        notifyBindingResult('error')
-        toast.error(message)
+      window.addEventListener('message', handleResult)
+      window.opener.postMessage(
+        {
+          type: OAUTH_POPUP_CALLBACK_MESSAGE,
+          intent: mode,
+          provider,
+          code,
+          state,
+          error: search.error,
+          errorDescription: search.error_description,
+        },
+        window.location.origin
+      )
+      const closeTimer = window.setTimeout(() => window.close(), 30_000)
+      return () => {
+        window.removeEventListener('message', handleResult)
+        window.clearTimeout(closeTimer)
       }
+    }
 
-      const handleLoginFailure = async (message: string) => {
-        toast.error(message)
-        safeNavigate('/sign-in')
-      }
-
+    if (!code && !search.error) {
+      toast.error(i18next.t('Missing code'))
+      void navigate({ to: '/sign-in', replace: true })
+      return
+    }
+    void (async () => {
       try {
-        const config: OAuthRequestConfig = {
-          params: { code: search.code, state: search.state },
+        const response = await api.get(`/api/oauth/${provider}`, {
+          params: {
+            code: code || undefined,
+            state,
+            error: search.error,
+            error_description: search.error_description,
+          },
           skipBusinessError: true,
-        }
-        const res = await api.get(`/api/oauth/${provider}`, config)
-        if (res?.data?.success) {
-          const { message } = res.data
-          // Check if this is a bind operation
-          if (message === 'bind') {
-            toast.success(i18next.t('Binding successful!'))
-            notifyBindingResult('success')
-            if (isBindingFlow) {
-              // Close the callback window if we opened a new tab for binding
-              closeBindingWindow()
-            } else {
-              safeNavigate('/_authenticated/profile/')
-            }
-            return
-          }
-          if (
-            await handleLoginResultRef.current(
-              res.data.data,
-              search.redirect
-            )
-          ) {
-            toast.success(i18next.t('Signed in successfully!'))
-          }
+          skipAuthRefresh: true,
+        } as OAuthRequestConfig)
+        if (response.data?.success) {
+          await handleLoginResult(response.data.data, search.redirect)
           return
         }
-        const message = res?.data?.message || 'OAuth failed'
-        if (isBindingFlow) {
-          handleBindingFailure(message)
-        } else {
-          await handleLoginFailure(message)
-        }
-        return
+        throw new AuthOperationError(
+          response.data?.message || i18next.t('OAuth failed'),
+          response.data?.code
+        )
       } catch (error) {
-        const message = ((error &&
-          typeof error === 'object' &&
-          'response' in error &&
-          (error as { response?: { data?: { message?: string } } }).response
-            ?.data?.message) ??
-          (error instanceof Error ? error.message : undefined) ??
-          'OAuth failed') as string
-
-        if (isBindingFlow) {
-          handleBindingFailure(message)
-          return
-        }
-        await handleLoginFailure(message)
-        return
+        toast.error(
+          error instanceof Error ? error.message : i18next.t('OAuth failed')
+        )
+        void navigate({ to: '/sign-in', replace: true })
       }
     })()
-  }, [mode, navigate, provider, search])
+  }, [
+    handleLoginResult,
+    mode,
+    navigate,
+    provider,
+    search.code,
+    search.error,
+    search.error_description,
+    search.redirect,
+    state,
+  ])
 
-  return <OAuthCallbackScreen provider={provider} mode={mode} />
+  return (
+    <OAuthCallbackScreen
+      provider={provider}
+      mode={mode === 'verify' ? 'bind' : mode}
+    />
+  )
 }
 
 export const Route = createFileRoute('/oauth/$provider')({

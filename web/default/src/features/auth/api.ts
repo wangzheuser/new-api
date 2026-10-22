@@ -17,8 +17,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
+import { AuthOperationError } from '@/lib/secure-verification'
 
+import {
+  clearPasswordEncryptionCache,
+  encryptPassword,
+} from './lib/password-encryption'
 import { getAffiliateCode, getRegistrationCode } from './lib/storage'
+import type { VerificationOperation } from './secure-verification/types'
 import type {
   LoginPayload,
   LoginResponse,
@@ -37,17 +43,30 @@ import type {
 // ----------------------------------------------------------------------------
 
 // User login with username and password
-export async function login(payload: LoginPayload) {
+export async function login(payload: LoginPayload): Promise<LoginResponse> {
   const turnstile = payload.turnstile ?? ''
-  const res = await api.post<LoginResponse>(
-    `/api/user/login?turnstile=${turnstile}`,
-    {
-      username: payload.username,
-      password: payload.password,
-    },
-    { skipAuthRefresh: true }
-  )
-  return res.data
+  try {
+    const passwordFields = payload.passwordEncryptionEnabled
+      ? await encryptPassword(payload.password)
+      : { password: payload.password }
+    const res = await api.post<LoginResponse>(
+      `/api/user/login?turnstile=${turnstile}`,
+      {
+        username: payload.username,
+        ...passwordFields,
+      },
+      { skipAuthRefresh: true }
+    )
+    if (payload.passwordEncryptionEnabled && !res.data?.success) {
+      clearPasswordEncryptionCache()
+    }
+    return res.data
+  } catch (error: unknown) {
+    if (payload.passwordEncryptionEnabled) {
+      clearPasswordEncryptionCache()
+    }
+    throw error
+  }
 }
 
 // Two-factor authentication login
@@ -119,6 +138,52 @@ export async function getOAuthState(provider: string): Promise<string> {
   return ''
 }
 
+/**
+ * Create a server-owned OAuth flow for login, binding, or verification.
+ */
+export async function createOAuthAuthorization(
+  provider: string,
+  intent: 'login' | 'bind' | 'verify',
+  operation?: VerificationOperation,
+  signal?: AbortSignal,
+  proofToken?: string
+): Promise<{ state: string; authorizationUrl?: string }> {
+  const res = await api.post(
+    '/api/oauth/state',
+    {
+      provider,
+      intent,
+      aff: intent === 'login' ? getAffiliateCode() || undefined : undefined,
+      registration_code:
+        intent === 'login' ? getRegistrationCode() || undefined : undefined,
+      scope: operation?.scope,
+      ...(operation?.context ? { context: operation.context } : {}),
+    },
+    {
+      skipAuthRefresh: intent === 'login',
+      skipErrorHandler: true,
+      skipBusinessError: true,
+      singleUseAuthorization: intent === 'bind' || intent === 'verify',
+      signal,
+      ...(proofToken ? { headers: { 'X-Security-Proof': proofToken } } : {}),
+    }
+  )
+  if (res.data?.success) {
+    const data = res.data.data
+    if (typeof data === 'string') return { state: data }
+    if (typeof data?.flow_token === 'string') {
+      return {
+        state: data.flow_token,
+        authorizationUrl: data.authorization_url,
+      }
+    }
+  }
+  throw new AuthOperationError(
+    res.data?.message || 'Failed to initialize OAuth',
+    res.data?.code
+  )
+}
+
 // WeChat login by authorization code
 export async function wechatLoginByCode(code: string): Promise<ApiResponse> {
   const res = await api.get('/api/oauth/wechat', {
@@ -157,12 +222,15 @@ export async function sendEmailVerification(
 
 // Bind email to OAuth account
 export async function bindEmail(
-  email: string,
-  code: string
+  flowToken: string,
+  newCode: string,
+  oldCode = '',
+  signal?: AbortSignal
 ): Promise<ApiResponse> {
-  const res = await api.post('/api/oauth/email/bind', {
-    email,
-    code,
-  })
+  const res = await api.post(
+    '/api/oauth/email/bind',
+    { flow_token: flowToken, new_code: newCode, old_code: oldCode },
+    { singleUseAuthorization: true, signal }
+  )
   return res.data
 }

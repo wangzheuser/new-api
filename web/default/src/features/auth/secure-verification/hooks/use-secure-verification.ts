@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import i18next from 'i18next'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
 import {
@@ -32,9 +32,10 @@ import type {
   UseSecureVerificationOptions,
   VerificationMethod,
   VerificationMethods,
+  VerificationOperation,
 } from '../types'
 
-type ApiCall = (() => Promise<unknown>) | null
+type ApiCall = ((proofToken?: string) => Promise<unknown>) | null
 
 interface InternalState extends SecureVerificationState {
   apiCall: ApiCall
@@ -44,12 +45,16 @@ const defaultMethods: VerificationMethods = {
   has2FA: false,
   hasPasskey: false,
   passkeySupported: false,
+  hasPassword: false,
+  passwordEncryptionEnabled: false,
+  oauthProviders: [],
 }
 
 const initialState: InternalState = {
   method: null,
   loading: false,
   code: '',
+  oauthProvider: undefined,
   title: undefined,
   description: undefined,
   apiCall: null,
@@ -63,31 +68,56 @@ export function useSecureVerification(
   const [methods, setMethods] = useState<VerificationMethods>(defaultMethods)
   const [state, setState] = useState<InternalState>(initialState)
   const [open, setOpen] = useState(false)
+  const controllerRef = useRef<AbortController | null>(null)
 
-  const fetchVerificationMethods = useCallback(async () => {
-    const result = await checkVerificationMethods()
-    setMethods(result)
-    return result
-  }, [])
+  useEffect(
+    () => () => {
+      controllerRef.current?.abort()
+    },
+    []
+  )
 
-  useEffect(() => {
-    fetchVerificationMethods()
-  }, [fetchVerificationMethods])
+  const fetchVerificationMethods = useCallback(
+    async (operation: VerificationOperation) => {
+      const result = await checkVerificationMethods(operation)
+      setMethods(result)
+      return result
+    },
+    []
+  )
 
   const reset = useCallback(() => {
+    controllerRef.current?.abort()
+    controllerRef.current = null
     setState(initialState)
     setOpen(false)
   }, [])
 
   const startVerification = useCallback(
     async (
-      apiCall: () => Promise<unknown>,
-      config: StartVerificationOptions = {}
+      apiCall: (proofToken?: string) => Promise<unknown>,
+      config: StartVerificationOptions
     ) => {
-      const { preferredMethod, title, description } = config
-      const availableMethods = await fetchVerificationMethods()
+      const { preferredMethod, title, description, operation } = config
+      let availableMethods: VerificationMethods
+      try {
+        availableMethods = await fetchVerificationMethods(operation)
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : i18next.t('Verification failed')
+        toast.error(message)
+        onError?.(error)
+        return false
+      }
 
-      if (!availableMethods.has2FA && !availableMethods.hasPasskey) {
+      if (
+        !availableMethods.has2FA &&
+        !availableMethods.hasPasskey &&
+        !availableMethods.hasPassword &&
+        availableMethods.oauthProviders.length === 0
+      ) {
         toast.error(
           i18next.t(
             'Please enable Two-factor Authentication or Passkey before proceeding'
@@ -107,15 +137,26 @@ export function useSecureVerification(
           defaultMethod = 'passkey'
         } else if (availableMethods.has2FA) {
           defaultMethod = '2fa'
+        } else if (availableMethods.hasPassword) {
+          defaultMethod = 'password'
+        } else if (availableMethods.oauthProviders.length > 0) {
+          defaultMethod = 'oauth'
         }
       }
 
+      controllerRef.current?.abort()
+      controllerRef.current = new AbortController()
       setState((prev) => ({
         ...prev,
         apiCall,
         method: defaultMethod,
         title,
         description,
+        operation,
+        oauthProvider:
+          defaultMethod === 'oauth'
+            ? availableMethods.oauthProviders[0]?.slug
+            : undefined,
       }))
       setOpen(true)
       return true
@@ -139,8 +180,17 @@ export function useSecureVerification(
       setState((prev) => ({ ...prev, loading: true }))
 
       try {
-        await verify(actualMethod, code ?? state.code)
-        const result = await state.apiCall()
+        if (!state.operation) {
+          throw new Error('Verification operation is not configured')
+        }
+        const proof = await verify(
+          actualMethod,
+          state.operation,
+          actualMethod === 'oauth' ? state.oauthProvider : (code ?? state.code),
+          controllerRef.current?.signal,
+          methods.passwordEncryptionEnabled
+        )
+        const result = await state.apiCall(proof.proof_token)
 
         if (successMessage) {
           toast.success(successMessage)
@@ -165,15 +215,32 @@ export function useSecureVerification(
         setState((prev) => ({ ...prev, loading: false }))
       }
     },
-    [state, successMessage, onSuccess, onError, autoReset, reset]
+    [
+      state,
+      methods.passwordEncryptionEnabled,
+      successMessage,
+      onSuccess,
+      onError,
+      autoReset,
+      reset,
+    ]
   )
 
   const setCode = useCallback((code: string) => {
     setState((prev) => ({ ...prev, code }))
   }, [])
 
+  const setOAuthProvider = useCallback((oauthProvider: string) => {
+    setState((prev) => ({ ...prev, oauthProvider }))
+  }, [])
+
   const switchMethod = useCallback((method: VerificationMethod) => {
-    setState((prev) => ({ ...prev, method, code: '' }))
+    setState((prev) => ({
+      ...prev,
+      method,
+      code: '',
+      oauthProvider: method === 'oauth' ? prev.oauthProvider : undefined,
+    }))
   }, [])
 
   const cancel = useCallback(() => {
@@ -182,8 +249,8 @@ export function useSecureVerification(
 
   const withVerification = useCallback(
     async (
-      apiCall: () => Promise<unknown>,
-      config: StartVerificationOptions = {}
+      apiCall: (proofToken?: string) => Promise<unknown>,
+      config: StartVerificationOptions
     ) => {
       try {
         return await apiCall()
@@ -206,6 +273,8 @@ export function useSecureVerification(
       if (method === 'passkey') {
         return methods.hasPasskey && methods.passkeySupported
       }
+      if (method === 'password') return methods.hasPassword
+      if (method === 'oauth') return methods.oauthProviders.length > 0
       return false
     },
     [methods]
@@ -214,6 +283,8 @@ export function useSecureVerification(
   const recommendedMethod = useMemo<VerificationMethod | null>(() => {
     if (methods.hasPasskey && methods.passkeySupported) return 'passkey'
     if (methods.has2FA) return '2fa'
+    if (methods.hasPassword) return 'password'
+    if (methods.oauthProviders.length > 0) return 'oauth'
     return null
   }, [methods])
 
@@ -227,12 +298,17 @@ export function useSecureVerification(
     cancel,
     reset,
     setCode,
+    setOAuthProvider,
     switchMethod,
     withVerification,
     fetchVerificationMethods,
     canUseMethod,
     recommendedMethod,
-    hasAnyMethod: methods.has2FA || methods.hasPasskey,
+    hasAnyMethod:
+      methods.has2FA ||
+      methods.hasPasskey ||
+      methods.hasPassword ||
+      methods.oauthProviders.length > 0,
     isLoading: state.loading,
     currentMethod: state.method,
     code: state.code,
