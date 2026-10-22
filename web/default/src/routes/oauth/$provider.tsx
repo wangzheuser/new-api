@@ -24,13 +24,13 @@ import {
 } from '@tanstack/react-router'
 import type { AxiosRequestConfig } from 'axios'
 import i18next from 'i18next'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
 import { OAuthCallbackScreen } from '@/features/auth/components/oauth-callback-screen'
 import { OAUTH_BIND_STORAGE_KEY } from '@/features/auth/constants'
-import { api, getSelf } from '@/lib/api'
-import { useAuthStore, type AuthUser } from '@/stores/auth-store'
+import { useAuthRedirect } from '@/features/auth/hooks/use-auth-redirect'
+import { api } from '@/lib/api'
 
 type OAuthRequestConfig = AxiosRequestConfig & {
   skipBusinessError?: boolean
@@ -38,6 +38,9 @@ type OAuthRequestConfig = AxiosRequestConfig & {
 
 function OAuthCallback() {
   const navigate = useNavigate()
+  const { handleLoginResult } = useAuthRedirect()
+  const handleLoginResultRef = useRef(handleLoginResult)
+  handleLoginResultRef.current = handleLoginResult
   const { provider } = useParams({ from: '/oauth/$provider' }) as {
     provider: string
   }
@@ -117,48 +120,12 @@ function OAuthCallback() {
         }, 200)
       }
 
-      const finalizeLogin = async (): Promise<boolean> => {
-        try {
-          const selfResponse = (await getSelf()) as {
-            success?: boolean
-            data?: AuthUser | null
-          }
-          if (selfResponse?.success && selfResponse.data) {
-            useAuthStore.getState().auth.setUser(selfResponse.data)
-            try {
-              if (
-                typeof window !== 'undefined' &&
-                selfResponse.data?.id != null
-              ) {
-                window.localStorage.setItem('uid', String(selfResponse.data.id))
-              }
-            } catch (_error) {
-              void _error
-            }
-            return true
-          }
-        } catch (_error) {
-          void _error
-        }
-        return false
-      }
-
-      const redirectAfterLogin = (target?: string) => {
-        const to = target || search?.redirect || '/dashboard'
-        safeNavigate(to)
-        toast.success(i18next.t('Signed in successfully!'))
-      }
-
       const handleBindingFailure = (message: string) => {
         notifyBindingResult('error')
         toast.error(message)
       }
 
       const handleLoginFailure = async (message: string) => {
-        if (await finalizeLogin()) {
-          redirectAfterLogin()
-          return
-        }
         toast.error(message)
         safeNavigate('/sign-in')
       }
@@ -171,7 +138,6 @@ function OAuthCallback() {
         const res = await api.get(`/api/oauth/${provider}`, config)
         if (res?.data?.success) {
           const { message } = res.data
-          const loginUser = (res.data?.data ?? null) as AuthUser | null
           // Check if this is a bind operation
           if (message === 'bind') {
             toast.success(i18next.t('Binding successful!'))
@@ -184,37 +150,17 @@ function OAuthCallback() {
             }
             return
           }
-          // Otherwise it's a login, use payload user if available
-          if (loginUser) {
-            useAuthStore.getState().auth.setUser(loginUser)
-            try {
-              if (typeof window !== 'undefined' && loginUser.id != null) {
-                window.localStorage.setItem('uid', String(loginUser.id))
-              }
-            } catch (_error) {
-              void _error
-            }
-            redirectAfterLogin()
-            return
+          if (
+            await handleLoginResultRef.current(
+              res.data.data,
+              search.redirect
+            )
+          ) {
+            toast.success(i18next.t('Signed in successfully!'))
           }
-          if (await finalizeLogin()) {
-            redirectAfterLogin()
-            return
-          }
-          toast.error(res?.data?.message || i18next.t('OAuth failed'))
-          safeNavigate('/sign-in')
           return
         }
         const message = res?.data?.message || 'OAuth failed'
-        if (!res?.data?.success && !isBindingFlow) {
-          // When logging in with an already bound GitHub account, backend may return this message
-          if (message === '该 GitHub 账户已被绑定') {
-            if (await finalizeLogin()) {
-              redirectAfterLogin()
-              return
-            }
-          }
-        }
         if (isBindingFlow) {
           handleBindingFailure(message)
         } else {

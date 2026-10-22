@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { z } from 'zod'
 
 import type { AdminPermissionMatrix } from '@/lib/admin-permissions'
+import type { AuthBundle } from '@/stores/auth-store'
 
 // ============================================================================
 // User Schema & Types
@@ -84,14 +85,7 @@ export interface UserImpersonationTicket {
   expires_at: number
 }
 
-export interface ImpersonatedSessionUser {
-  id: number
-  username: string
-  display_name: string
-  role: number
-  status: number
-  group: string
-}
+export type ImpersonatedSessionUser = AuthBundle
 
 export interface GetUsersParams {
   p?: number

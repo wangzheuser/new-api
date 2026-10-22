@@ -62,7 +62,10 @@ export async function login2fa(payload: TwoFAPayload) {
 
 // User logout
 export async function logout(): Promise<ApiResponse> {
-  const res = await api.get('/api/user/logout')
+  const res = await api.post('/api/user/auth/logout', undefined, {
+    skipAuthRefresh: true,
+    skipErrorHandler: true,
+  })
   return res.data
 }
 
@@ -92,18 +95,39 @@ export async function githubOAuthStart(clientId: string, state: string) {
 }
 
 // Get OAuth state for CSRF protection
-export async function getOAuthState(): Promise<string> {
-  const res = await api.post('/api/oauth/state', {
-    aff_code: getAffiliateCode(),
-    registration_code: getRegistrationCode(),
-  })
-  if (res.data?.success) return res.data.data
+export async function getOAuthState(provider: string): Promise<string> {
+  const res = await api.post(
+    '/api/oauth/state',
+    {
+      provider,
+      intent: 'login',
+      aff: getAffiliateCode() || undefined,
+      registration_code: getRegistrationCode() || undefined,
+    },
+    {
+      skipAuthRefresh: true,
+      skipErrorHandler: true,
+      skipBusinessError: true,
+    }
+  )
+  if (res.data?.success) {
+    if (typeof res.data.data === 'string') return res.data.data
+    if (typeof res.data.data?.flow_token === 'string') {
+      return res.data.data.flow_token
+    }
+  }
   return ''
 }
 
 // WeChat login by authorization code
 export async function wechatLoginByCode(code: string): Promise<ApiResponse> {
-  const res = await api.get('/api/oauth/wechat', { params: { code } })
+  const res = await api.get('/api/oauth/wechat', {
+    params: { code },
+    headers: getRegistrationCode()
+      ? { 'X-Registration-Code': getRegistrationCode() }
+      : undefined,
+    skipAuthRefresh: true,
+  })
   return res.data
 }
 

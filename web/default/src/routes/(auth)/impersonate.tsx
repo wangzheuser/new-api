@@ -22,8 +22,8 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { AuthLayout } from '@/features/auth/auth-layout'
-import { saveUserId } from '@/features/auth/lib/storage'
 import { redeemUserImpersonationTicket } from '@/features/users/api'
+import { applyAuthBundle } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth-store'
 
 type ImpersonationPageState =
@@ -76,8 +76,7 @@ function ImpersonatePage() {
           return
         }
 
-        saveUserId(result.data.id)
-        useAuthStore.getState().auth.setUser(result.data)
+        applyAuthBundle(result.data)
         window.location.replace('/dashboard')
       } catch {
         setState('server-error')

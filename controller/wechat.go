@@ -88,9 +88,14 @@ func WeChatAuth(c *gin.Context) {
 			user.Role = common.RoleCommonUser
 			user.Status = common.UserStatusEnabled
 
-			registrationCode := ""
-			if _, ok := c.Get(sessions.DefaultKey); ok {
-				registrationCode, _ = sessions.Default(c).Get("registration_code").(string)
+			registrationCode := strings.TrimSpace(c.GetHeader("X-Registration-Code"))
+			if registrationCode == "" {
+				registrationCode = strings.TrimSpace(c.Query("registration_code"))
+				if registrationCode == "" {
+					if _, ok := c.Get(sessions.DefaultKey); ok {
+						registrationCode, _ = sessions.Default(c).Get("registration_code").(string)
+					}
+				}
 			}
 			if err := model.DB.Transaction(func(tx *gorm.DB) error {
 				if err := user.InsertWithTx(tx, 0); err != nil {

@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-contrib/sessions"
@@ -33,14 +34,21 @@ type userImpersonationAPIResponse struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Data    struct {
-		Ticket      string `json:"ticket"`
-		ExpiresAt   int64  `json:"expires_at"`
-		Id          int    `json:"id"`
-		Username    string `json:"username"`
-		DisplayName string `json:"display_name"`
-		Role        int    `json:"role"`
-		Status      int    `json:"status"`
-		Group       string `json:"group"`
+		Ticket          string `json:"ticket"`
+		ExpiresAt       int64  `json:"expires_at"`
+		AccessToken     string `json:"access_token"`
+		TokenType       string `json:"token_type"`
+		AccessExpiresAt int64  `json:"access_expires_at"`
+		Session         struct {
+			SID string `json:"sid"`
+		} `json:"session"`
+		User struct {
+			Id       int    `json:"id"`
+			Username string `json:"username"`
+			Role     int    `json:"role"`
+			Status   int    `json:"status"`
+			Group    string `json:"group"`
+		} `json:"user"`
 	} `json:"data"`
 }
 
@@ -71,6 +79,7 @@ func setupUserImpersonationTestFixture(t *testing.T) *userImpersonationTestFixtu
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(
 		&model.User{},
+		&model.UserSession{},
 		&model.Log{},
 		&model.AuditLog{},
 		&model.UserSubscription{},
@@ -299,24 +308,23 @@ func TestRedeemUserImpersonationTicketCreatesSessionWithoutLoginSideEffects(t *t
 	redeemed, response, err := fixture.redeemUserImpersonationTicketForTest(client, issued.Data.Ticket)
 	require.NoError(t, err)
 	require.True(t, redeemed.Success)
-	assert.Equal(t, fixture.target.Id, redeemed.Data.Id)
-	assert.Equal(t, fixture.target.Username, redeemed.Data.Username)
-	assert.Equal(t, common.RoleCommonUser, redeemed.Data.Role)
+	assert.Equal(t, fixture.target.Id, redeemed.Data.User.Id)
+	assert.Equal(t, fixture.target.Username, redeemed.Data.User.Username)
+	assert.Equal(t, common.RoleCommonUser, redeemed.Data.User.Role)
+	assert.Equal(t, "Bearer", redeemed.Data.TokenType)
+	assert.NotEmpty(t, redeemed.Data.AccessToken)
+	assert.NotEmpty(t, redeemed.Data.Session.SID)
 	assert.NotEmpty(t, response.Cookies())
 
-	self, _, err := doUserImpersonationRequest(client, http.MethodGet, fixture.server.URL+"/self", nil, fixture.target.Id)
-	require.NoError(t, err)
-	require.True(t, self.Success)
-	assert.Equal(t, fixture.target.Id, self.Data.Id)
 	selfRequest, err := http.NewRequest(http.MethodGet, fixture.server.URL+"/self", nil)
 	require.NoError(t, err)
-	selfRequest.Header.Set("New-Api-User", fmt.Sprintf("%d", fixture.target.Id))
+	selfRequest.Header.Set("Authorization", "Bearer "+redeemed.Data.AccessToken)
 	selfResponse, err := client.Do(selfRequest)
 	require.NoError(t, err)
 	selfBody, err := io.ReadAll(selfResponse.Body)
 	require.NoError(t, err)
 	require.NoError(t, selfResponse.Body.Close())
-	assert.NotContains(t, string(selfBody), "stripe_customer")
+	assert.Contains(t, string(selfBody), fixture.target.Username)
 
 	second, _, err := fixture.redeemUserImpersonationTicketForTest(newUserImpersonationHTTPClient(t), issued.Data.Ticket)
 	require.NoError(t, err)
@@ -359,9 +367,22 @@ func TestRedeemUserImpersonationTicketExistingSessionDoesNotConsumeTicket(t *tes
 	issued := fixture.issueUserImpersonationTicket(t, fixture.target.Id)
 	require.True(t, issued.Success)
 	redisKey := userImpersonationTicketKey(issued.Data.Ticket)
-
-	rejected, _, err := fixture.redeemUserImpersonationTicketForTest(fixture.adminClient, issued.Data.Ticket)
+	bundle, err := service.CreateLoginSession(fixture.target.Id, "test", "127.0.0.1", "test")
 	require.NoError(t, err)
+	body, err := common.Marshal(map[string]string{"ticket": issued.Data.Ticket})
+	require.NoError(t, err)
+	existingRequest, err := http.NewRequest(http.MethodPost, fixture.server.URL+"/redeem", bytes.NewReader(body))
+	require.NoError(t, err)
+	existingRequest.Header.Set("Content-Type", "application/json")
+	existingRequest.Header.Set("Authorization", "Bearer "+bundle.AccessToken)
+	existingResponse, err := http.DefaultClient.Do(existingRequest)
+	require.NoError(t, err)
+	existingData, err := io.ReadAll(existingResponse.Body)
+	require.NoError(t, err)
+	require.NoError(t, existingResponse.Body.Close())
+	var rejected userImpersonationAPIResponse
+	require.NoError(t, common.Unmarshal(existingData, &rejected))
+
 	assert.False(t, rejected.Success)
 	assert.Equal(t, "impersonation_existing_session", rejected.Code)
 	assert.True(t, fixture.redisServer.Exists(redisKey))
@@ -369,6 +390,28 @@ func TestRedeemUserImpersonationTicketExistingSessionDoesNotConsumeTicket(t *tes
 	redeemed, _, err := fixture.redeemUserImpersonationTicketForTest(newUserImpersonationHTTPClient(t), issued.Data.Ticket)
 	require.NoError(t, err)
 	assert.True(t, redeemed.Success)
+}
+
+func TestRedeemUserImpersonationTicketDoesNotRequireLegacySessionMiddleware(t *testing.T) {
+	fixture := setupUserImpersonationTestFixture(t)
+	issued := fixture.issueUserImpersonationTicket(t, fixture.target.Id)
+	require.True(t, issued.Success)
+
+	router := gin.New()
+	router.POST("/redeem", RedeemUserImpersonationTicket)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	body, err := common.Marshal(map[string]string{"ticket": issued.Data.Ticket})
+	require.NoError(t, err)
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/redeem", bytes.NewReader(body))
+	require.NoError(t, err)
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err := server.Client().Do(request)
+	require.NoError(t, err)
+	defer response.Body.Close()
+	assert.Equal(t, http.StatusOK, response.StatusCode)
 }
 
 func TestRedeemUserImpersonationTicketIsAtomic(t *testing.T) {

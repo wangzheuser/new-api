@@ -12,8 +12,8 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 
-	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
 	"gorm.io/gorm"
@@ -114,8 +114,7 @@ func CreateUserImpersonationTicket(c *gin.Context) {
 // RedeemUserImpersonationTicket consumes a ticket and creates the target user's session without login side effects.
 func RedeemUserImpersonationTicket(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
-	session := sessions.Default(c)
-	if session.Get("id") != nil {
+	if hasActiveDashboardSession(c) {
 		respondUserImpersonationError(c, "impersonation_existing_session", i18n.MsgUserImpersonationExistingSession)
 		return
 	}
@@ -178,19 +177,19 @@ func RedeemUserImpersonationTicket(c *gin.Context) {
 		return
 	}
 
-	// Write only the identity fields used by the existing session authentication middleware.
-	session.Clear()
-	session.Set("id", targetUser.Id)
-	session.Set("username", targetUser.Username)
-	session.Set("role", targetUser.Role)
-	session.Set("status", targetUser.Status)
-	session.Set("group", targetUser.Group)
-	if err := session.Save(); err != nil {
+	bundle, err := service.CreateLoginSession(
+		targetUser.Id,
+		"impersonation",
+		c.ClientIP(),
+		c.Request.UserAgent(),
+	)
+	if err != nil {
 		respondUserImpersonationError(c, "impersonation_server_error", i18n.MsgUserSessionSaveFailed)
 		return
 	}
+	service.WriteRefreshCookie(c, bundle.RefreshToken)
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"target_user_id":  targetUser.Id,
 		"target_username": targetUser.Username,
 		"target_role":     targetUser.Role,
@@ -200,11 +199,40 @@ func RedeemUserImpersonationTicket(c *gin.Context) {
 		&model.AuditRequestInfo{Method: c.Request.Method, Route: c.FullPath(), Path: c.Request.URL.Path, Status: http.StatusOK, Success: true}, c)
 
 	common.ApiSuccess(c, gin.H{
-		"id":           targetUser.Id,
-		"username":     targetUser.Username,
-		"display_name": targetUser.DisplayName,
-		"role":         targetUser.Role,
-		"status":       targetUser.Status,
-		"group":        targetUser.Group,
+		"access_token":      bundle.AccessToken,
+		"token_type":        bundle.TokenType,
+		"access_expires_at": bundle.AccessExpiresAt,
+		"session":           bundle.Session,
+		"user":              buildSelfUserData(targetUser),
 	})
+}
+
+// hasActiveDashboardSession rejects redemption in a browser that already has
+// a live token session, without depending on the removed Gin session cookie.
+func hasActiveDashboardSession(c *gin.Context) bool {
+	if rawAccessToken, ok := dashboardBearer(c.GetHeader("Authorization")); ok {
+		identity, err := service.ParseAccessToken(rawAccessToken)
+		if err == nil {
+			if _, _, err := service.ValidateLoginSession(identity); err == nil {
+				return true
+			}
+		}
+	}
+
+	rawRefreshToken, err := c.Cookie(service.RefreshCookieName)
+	if err != nil || rawRefreshToken == "" {
+		return false
+	}
+	sessionID, ok := service.RefreshTokenSID(rawRefreshToken)
+	if !ok {
+		return false
+	}
+	session, err := model.GetUserSessionCached(sessionID)
+	if err != nil || session.Status != model.UserSessionStatusActive ||
+		session.RevokedAt != 0 || session.ExpiresAt <= time.Now().Unix() {
+		return false
+	}
+	user, err := model.GetUserCache(session.UserID)
+	return err == nil && user.Status == common.UserStatusEnabled &&
+		user.AuthVersion == session.UserAuthVersion
 }
