@@ -1179,6 +1179,12 @@ func (channel *Channel) ValidateSettings() error {
 			return err
 		}
 	}
+	if _, err := common.ParseProxyURLStrict(channelParams.Proxy); err != nil {
+		return fmt.Errorf("invalid channel proxy: %w", err)
+	}
+	if err := channelParams.ValidateHTTPTransport(); err != nil {
+		return err
+	}
 	if err := channelParams.ValidateSystemPrompts(); err != nil {
 		return err
 	}
@@ -1230,6 +1236,9 @@ func (channel *Channel) ValidateSettings() error {
 		}
 	}
 	if err := channelOtherSettings.ValidateInputPolicies(channel.OtherSettings); err != nil {
+		return err
+	}
+	if err := channelOtherSettings.ValidateToolLossPolicy(); err != nil {
 		return err
 	}
 	if channel.Type == constant.ChannelTypeAdvancedCustom {

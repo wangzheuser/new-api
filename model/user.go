@@ -970,16 +970,7 @@ func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
 }
 
 func (user *User) Edit(updatePassword bool) error {
-	var previousAuthVersion int64
-	if err := DB.Model(&User{}).Where("id = ?", user.Id).Select("auth_version").Find(&previousAuthVersion).Error; err != nil {
-		return err
-	}
-	authErr := RefreshUserAuthStateCache(user.Id)
-	cacheErr := updateUserCache(*user)
-	if authErr != nil {
-		return authErr
-	}
-	return cacheErr
+	return user.Update(updatePassword)
 }
 
 func (user *User) EditWithTx(tx *gorm.DB, updatePassword bool) error {

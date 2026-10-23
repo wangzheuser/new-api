@@ -23,6 +23,20 @@ func TestChannelValidateSettingsRejectsMySQLTextOverflow(t *testing.T) {
 	require.ErrorContains(t, channel.ValidateSettings(), "channel settings cannot exceed 64 KiB")
 }
 
+func TestChannelValidateSettingsRejectsInvalidTransportProxyAndToolLoss(t *testing.T) {
+	invalidTransport := &Channel{Type: constant.ChannelTypeOpenAI}
+	invalidTransport.SetSetting(dto.ChannelSettings{HTTPProtocol: "http2"})
+	require.ErrorContains(t, invalidTransport.ValidateSettings(), "http_protocol")
+
+	invalidProxy := &Channel{Type: constant.ChannelTypeOpenAI}
+	invalidProxy.SetSetting(dto.ChannelSettings{Proxy: "file:///tmp/proxy"})
+	require.ErrorContains(t, invalidProxy.ValidateSettings(), "proxy URL")
+
+	invalidToolLoss := &Channel{Type: constant.ChannelTypeOpenAI}
+	invalidToolLoss.SetOtherSettings(dto.ChannelOtherSettings{ToolLossPolicy: "drop"})
+	require.ErrorContains(t, invalidToolLoss.ValidateSettings(), "tool_loss_policy")
+}
+
 func TestChannelValidateSettingsProtocolPolicyScopeAndPassThrough(t *testing.T) {
 	policy := &dto.ChannelProtocolPolicy{
 		Native: map[constant.EndpointType]dto.ProtocolCapability{

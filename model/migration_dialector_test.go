@@ -57,6 +57,26 @@ type migrationDecimalV3 struct {
 	Price float64 `gorm:"type:decimal(12,6);not null;default:1.25"`
 }
 
+func TestIs64BitIntegerType(t *testing.T) {
+	tests := []struct {
+		name     string
+		dbType   common.DatabaseType
+		dataType string
+		want     bool
+	}{
+		{name: "mysql bigint", dbType: common.DatabaseTypeMySQL, dataType: "BIGINT", want: true},
+		{name: "mysql int", dbType: common.DatabaseTypeMySQL, dataType: "INT", want: false},
+		{name: "postgres int8", dbType: common.DatabaseTypePostgreSQL, dataType: "int8", want: true},
+		{name: "postgres integer", dbType: common.DatabaseTypePostgreSQL, dataType: "integer", want: false},
+		{name: "sqlite is not accepted by the guard", dbType: common.DatabaseTypeSQLite, dataType: "integer", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, is64BitIntegerType(tt.dbType, tt.dataType))
+		})
+	}
+}
+
 func TestMigrationSchemaStability(t *testing.T) {
 	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
 		t.Run(dialect, func(t *testing.T) {

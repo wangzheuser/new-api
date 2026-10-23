@@ -91,6 +91,31 @@ func TestUserUpdateDoesNotOverwriteConcurrentAccountingOrTokenChanges(t *testing
 	assert.Equal(t, "rotated-token", got.GetAccessToken())
 }
 
+func TestUserEditPersistsProfileChanges(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	user := User{
+		Id:          11,
+		Username:    "edit-user",
+		Password:    "password",
+		DisplayName: "before",
+		Remark:      "old",
+		Group:       "default",
+		Status:      common.UserStatusEnabled,
+		AuthVersion: 1,
+	}
+	require.NoError(t, DB.Create(&user).Error)
+
+	user.DisplayName = "after"
+	user.Remark = "new"
+	require.NoError(t, user.Edit(false))
+
+	var stored User
+	require.NoError(t, DB.First(&stored, user.Id).Error)
+	assert.Equal(t, "after", stored.DisplayName)
+	assert.Equal(t, "new", stored.Remark)
+}
+
 func TestUsageAccountingSupportsSignedDirectAndBatchDeltas(t *testing.T) {
 	setupUserUpdateTestState(t)
 	resetBatchUpdateTestState(t)

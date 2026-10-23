@@ -2175,118 +2175,156 @@ type channelTestTarget struct {
 	keyIndex *int
 }
 
-// performChannelTests runs the channel test loop synchronously, honoring ctx
-// cancellation so a system-task runner that loses its lease stops promptly. When
-// report is non-nil it is called after each probe with (processed, total) so
-// the system task can surface progress.
-func performChannelTests(ctx context.Context, targets []channelTestTarget, testUserID int, allowDisable bool, report func(processed, total int)) channelTestSummary {
-	summary := channelTestSummary{}
-	var disableThreshold = int64(common.ChannelDisableThreshold * 1000)
-	if disableThreshold == 0 {
-		disableThreshold = 10000000 // a impossible value
+// performOneChannelTest executes one channel or one multi-key recovery probe.
+func performOneChannelTest(ctx context.Context, target channelTestTarget, testUserID int, allowDisable bool, disableThreshold int64) channelTestSummary {
+	channel := target.channel
+	testedStatus := channel.Status
+	if target.keyIndex != nil {
+		testedStatus = common.ChannelStatusAutoDisabled
+	}
+	isChannelEnabled := testedStatus == common.ChannelStatusEnabled
+	tik := time.Now()
+	result := testChannel(ctx, channel, testUserID, channelTestOptions{
+		isStream: shouldUseStreamForAutomaticChannelTest(channel),
+		keyIndex: target.keyIndex,
+	})
+	milliseconds := time.Since(tik).Milliseconds()
+	if ctx != nil && ctx.Err() != nil {
+		return channelTestSummary{}
 	}
 
-	total := len(targets)
-	for index, target := range targets {
-		if ctx != nil && ctx.Err() != nil {
-			break
+	summary := channelTestSummary{Tested: 1}
+	shouldBanChannel := false
+	newAPIError := result.newAPIError
+	if newAPIError != nil {
+		shouldBanChannel = service.ShouldDisableChannel(newAPIError)
+		if channel.ChannelInfo.IsMultiKey {
+			decision := service.DecideMultiKeyFailure(channel, common.GetContextKeyString(result.context, constant.ContextKeyChannelHealthModel), newAPIError, time.Now())
+			shouldBanChannel = decision.Action != service.MultiKeyFailureNone
 		}
-		if report != nil {
-			report(index, total) // probes completed before this one
-		}
-		channel := target.channel
-		testedStatus := channel.Status
-		if target.keyIndex != nil {
-			testedStatus = common.ChannelStatusAutoDisabled
-		}
-		isChannelEnabled := testedStatus == common.ChannelStatusEnabled
-		tik := time.Now()
-		result := testChannel(ctx, channel, testUserID, channelTestOptions{
-			isStream: shouldUseStreamForAutomaticChannelTest(channel),
-			keyIndex: target.keyIndex,
-		})
-		tok := time.Now()
-		milliseconds := tok.Sub(tik).Milliseconds()
-		if ctx != nil && ctx.Err() != nil {
-			break
-		}
-
-		summary.Tested++
-
-		shouldBanChannel := false
-		newAPIError := result.newAPIError
-		// request error disables the channel
+	}
+	if common.AutomaticDisableChannelEnabled && !shouldBanChannel && milliseconds > disableThreshold {
+		err := fmt.Errorf("响应时间 %.2fs 超过阈值 %.2fs", float64(milliseconds)/1000.0, float64(disableThreshold)/1000.0)
+		newAPIError = types.NewOpenAIError(err, types.ErrorCodeChannelResponseTimeExceeded, http.StatusRequestTimeout)
+		shouldBanChannel = true
+	}
+	if newAPIError == nil {
+		summary.Succeeded++
+	} else {
+		summary.Failed++
+	}
+	if target.keyIndex != nil && (newAPIError != nil || result.localErr != nil) {
+		errorCode := types.ErrorCode("")
+		errorType := types.ErrorType("local_error")
+		statusCode := 0
 		if newAPIError != nil {
-			shouldBanChannel = service.ShouldDisableChannel(result.newAPIError)
-			if channel.ChannelInfo.IsMultiKey {
-				decision := service.DecideMultiKeyFailure(channel, common.GetContextKeyString(result.context, constant.ContextKeyChannelHealthModel), newAPIError, time.Now())
-				shouldBanChannel = decision.Action != service.MultiKeyFailureNone
-			}
+			errorCode = newAPIError.GetErrorCode()
+			errorType = newAPIError.GetErrorType()
+			statusCode = newAPIError.StatusCode
 		}
-
-		// 当错误检查通过，才检查响应时间
-		if common.AutomaticDisableChannelEnabled && !shouldBanChannel {
-			if milliseconds > disableThreshold {
-				err := fmt.Errorf("响应时间 %.2fs 超过阈值 %.2fs", float64(milliseconds)/1000.0, float64(disableThreshold)/1000.0)
-				newAPIError = types.NewOpenAIError(err, types.ErrorCodeChannelResponseTimeExceeded, http.StatusRequestTimeout)
-				shouldBanChannel = true
-			}
-		}
-
-		if newAPIError == nil {
-			summary.Succeeded++
-		} else {
-			summary.Failed++
-		}
-		if target.keyIndex != nil && (newAPIError != nil || result.localErr != nil) {
-			errorCode := types.ErrorCode("")
-			errorType := types.ErrorType("local_error")
-			statusCode := 0
-			if newAPIError != nil {
-				errorCode = newAPIError.GetErrorCode()
-				errorType = newAPIError.GetErrorType()
-				statusCode = newAPIError.StatusCode
-			}
-			common.SysLog(fmt.Sprintf("multi-key passive recovery failed: channel_id=%d, key_index=%d, error_code=%s, error_type=%s, status_code=%d", channel.Id, *target.keyIndex, errorCode, errorType, statusCode))
-		}
-
-		// disable channel
-		if allowDisable && isChannelEnabled && shouldBanChannel && channel.GetAutoBan() {
-			if channel.ChannelInfo.IsMultiKey {
-				service.HandleMultiKeyFailure(channel, common.GetContextKeyInt(result.context, constant.ContextKeyChannelMultiKeyIndex), common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), newAPIError, common.GetContextKeyString(result.context, constant.ContextKeyChannelHealthModel))
-			} else if service.ShouldDisableChannel(newAPIError) {
-				processChannelError(result.context, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, nil)
-			} else {
-				service.RecordChannelUpstreamErrorAsync(channel, newAPIError, "", common.GetContextKeyString(result.context, constant.ContextKeyChannelHealthModel))
-			}
-			recordRelayErrorLog(result.context, nil, newAPIError, "", nil, false)
-			summary.Disabled++
-		}
-
-		// enable channel
-		if result.localErr == nil && !isChannelEnabled && service.ShouldEnableChannel(newAPIError, testedStatus) {
-			if service.EnableChannel(channel.Id, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.Name) {
-				summary.Enabled++
-			}
-		}
-
-		channel.UpdateResponseTime(milliseconds)
-		if common.RequestInterval > 0 {
-			if ctx == nil {
-				time.Sleep(common.RequestInterval)
-			} else {
-				select {
-				case <-ctx.Done():
-					return summary
-				case <-time.After(common.RequestInterval):
-				}
-			}
-		}
+		common.SysLog(fmt.Sprintf("multi-key passive recovery failed: channel_id=%d, key_index=%d, error_code=%s, error_type=%s, status_code=%d", channel.Id, *target.keyIndex, errorCode, errorType, statusCode))
 	}
-	if report != nil && (ctx == nil || ctx.Err() == nil) {
-		report(total, total) // mark complete only when the full set was tested
+	if allowDisable && isChannelEnabled && shouldBanChannel && channel.GetAutoBan() {
+		if channel.ChannelInfo.IsMultiKey {
+			service.HandleMultiKeyFailure(channel, common.GetContextKeyInt(result.context, constant.ContextKeyChannelMultiKeyIndex), common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), newAPIError, common.GetContextKeyString(result.context, constant.ContextKeyChannelHealthModel))
+		} else if service.ShouldDisableChannel(newAPIError) {
+			processChannelError(result.context, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, nil)
+		} else {
+			service.RecordChannelUpstreamErrorAsync(channel, newAPIError, "", common.GetContextKeyString(result.context, constant.ContextKeyChannelHealthModel))
+		}
+		recordRelayErrorLog(result.context, nil, newAPIError, "", nil, false)
+		summary.Disabled++
+	}
+	if result.localErr == nil && !isChannelEnabled && service.ShouldEnableChannel(newAPIError, testedStatus) && service.EnableChannel(channel.Id, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.Name) {
+		summary.Enabled++
+	}
+	channel.UpdateResponseTime(milliseconds)
+	if common.RequestInterval > 0 {
+		if ctx == nil {
+			time.Sleep(common.RequestInterval)
+		} else {
+			select {
+			case <-ctx.Done():
+			case <-time.After(common.RequestInterval):
+			}
+		}
 	}
 	return summary
+}
+
+func runChannelTestTargetWorkers(ctx context.Context, targets []channelTestTarget, concurrency int, run func(context.Context, channelTestTarget) channelTestSummary, report func(int, int)) channelTestSummary {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	total := len(targets)
+	if report != nil {
+		report(0, total)
+	}
+	if total == 0 {
+		return channelTestSummary{}
+	}
+	jobs := make(chan channelTestTarget)
+	results := make(chan channelTestSummary)
+	var workers sync.WaitGroup
+	workerCount := min(concurrency, total)
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for target := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+				result := run(ctx, target)
+				if ctx.Err() != nil {
+					return
+				}
+				results <- result
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for _, target := range targets {
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- target:
+			}
+		}
+	}()
+	go func() {
+		workers.Wait()
+		close(results)
+	}()
+	summary := channelTestSummary{}
+	processed := 0
+	for result := range results {
+		summary.Tested += result.Tested
+		summary.Succeeded += result.Succeeded
+		summary.Failed += result.Failed
+		summary.Disabled += result.Disabled
+		summary.Enabled += result.Enabled
+		processed++
+		if report != nil && ctx.Err() == nil {
+			report(processed, total)
+		}
+	}
+	return summary
+}
+
+// performChannelTests runs channel probes with bounded concurrency and honors cancellation.
+func performChannelTests(ctx context.Context, targets []channelTestTarget, testUserID int, allowDisable bool, concurrency int, report func(processed, total int)) channelTestSummary {
+	disableThreshold := int64(common.ChannelDisableThreshold * 1000)
+	if disableThreshold == 0 {
+		disableThreshold = 10000000
+	}
+	return runChannelTestTargetWorkers(ctx, targets, concurrency, func(testCtx context.Context, target channelTestTarget) channelTestSummary {
+		return performOneChannelTest(testCtx, target, testUserID, allowDisable, disableThreshold)
+	}, report)
 }
 
 // runChannelTestTask runs one synchronous channel test cycle for the system task
@@ -2309,9 +2347,20 @@ func runChannelTestTask(ctx context.Context, mode string, notify bool, report fu
 	if strings.TrimSpace(mode) == "" {
 		mode = operation_setting.GetMonitorSetting().ChannelTestMode
 	}
-	targets := buildChannelTestTargets(channels, mode)
 	allowDisable := mode != operation_setting.ChannelTestModePassiveRecovery
-	summary := performChannelTests(ctx, targets, testUserID, allowDisable, report)
+	monitor := operation_setting.GetMonitorSetting()
+	var targets []channelTestTarget
+	if mode == operation_setting.ChannelTestModePassiveRecovery {
+		// Passive recovery expands multi-key channels into exact key targets.
+		targets = buildChannelTestTargets(channels, mode)
+	} else {
+		selected := selectChannelsForAutomaticTest(channels, mode)
+		targets = make([]channelTestTarget, 0, len(selected))
+		for _, channel := range selected {
+			targets = append(targets, channelTestTarget{channel: channel})
+		}
+	}
+	summary := performChannelTests(ctx, targets, testUserID, allowDisable, monitor.ChannelTestConcurrency, report)
 	if notify && (ctx == nil || ctx.Err() == nil) {
 		service.NotifyRootUser(dto.NotifyTypeChannelTest, "通道测试完成", "所有通道测试已完成")
 	}
@@ -2352,9 +2401,10 @@ func selectChannelsForAutomaticTest(channels []*model.Channel, mode string) []*m
 		if channel == nil || channel.Status == common.ChannelStatusManuallyDisabled {
 			continue
 		}
-		if mode == operation_setting.ChannelTestModeAutoBanOnly && channel.AutoBan != nil && channel.GetAutoBan() {
-			selected = append(selected, channel)
+		if mode == operation_setting.ChannelTestModeAutoBanOnly && (channel.AutoBan == nil || !channel.GetAutoBan()) {
+			continue
 		}
+		selected = append(selected, channel)
 	}
 	return selected
 }

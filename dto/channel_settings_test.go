@@ -7,7 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -64,6 +66,44 @@ func TestChannelSettingsValidateSystemPrompts(t *testing.T) {
 	require.Error(t, (ChannelSettings{ModelSystemPrompts: map[string]string{
 		"model-a": strings.Repeat("a", MaxModelSystemPromptBytes+1),
 	}}).ValidateSystemPrompts())
+}
+
+func TestChannelSettingsTransportAndToolLossRoundTrip(t *testing.T) {
+	settings := ChannelSettings{
+		HTTPProtocol:          "http1",
+		HTTP2ConnectionShards: 1,
+		TLSInsecureSkipVerify: true,
+	}
+	encoded, err := common.Marshal(settings)
+	require.NoError(t, err)
+	var decoded ChannelSettings
+	require.NoError(t, common.Unmarshal(encoded, &decoded))
+	assert.Equal(t, settings, decoded)
+	require.NoError(t, decoded.ValidateHTTPTransport())
+	var kitTransport kitdto.ChannelSettings
+	require.NoError(t, common.Unmarshal(encoded, &kitTransport))
+	assert.Equal(t, settings.HTTPProtocol, kitTransport.HTTPProtocol)
+	assert.Equal(t, settings.HTTP2ConnectionShards, kitTransport.HTTP2ConnectionShards)
+	assert.Equal(t, settings.TLSInsecureSkipVerify, kitTransport.TLSInsecureSkipVerify)
+
+	other := ChannelOtherSettings{OllamaOpenAIChat: true, ToolLossPolicy: "strict"}
+	encoded, err = common.Marshal(other)
+	require.NoError(t, err)
+	var decodedOther ChannelOtherSettings
+	require.NoError(t, common.Unmarshal(encoded, &decodedOther))
+	assert.Equal(t, other, decodedOther)
+	require.NoError(t, decodedOther.ValidateToolLossPolicy())
+
+	var kitSettings kitdto.ChannelOtherSettings
+	require.NoError(t, common.Unmarshal(encoded, &kitSettings))
+	assert.True(t, kitSettings.OllamaOpenAIChat)
+	assert.Equal(t, "strict", kitSettings.ToolLossPolicy)
+}
+
+func TestChannelSettingsRejectInvalidTransportAndToolLoss(t *testing.T) {
+	assert.Error(t, (&ChannelSettings{HTTPProtocol: "http2"}).ValidateHTTPTransport())
+	assert.Error(t, (&ChannelSettings{HTTPProtocol: "http1", HTTP2ConnectionShards: 2}).ValidateHTTPTransport())
+	assert.Error(t, (&ChannelOtherSettings{ToolLossPolicy: "drop"}).ValidateToolLossPolicy())
 }
 
 func TestChannelSettingsResolveSystemPromptForFallbackAttempt(t *testing.T) {

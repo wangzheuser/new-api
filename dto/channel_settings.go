@@ -84,6 +84,9 @@ type ChannelSettings struct {
 	ForceFormat               bool                            `json:"force_format,omitempty"`
 	ThinkingToContent         bool                            `json:"thinking_to_content,omitempty"`
 	Proxy                     string                          `json:"proxy"`
+	HTTPProtocol              string                          `json:"http_protocol,omitempty"`
+	HTTP2ConnectionShards     int                             `json:"http2_connection_shards,omitempty"`
+	TLSInsecureSkipVerify     bool                            `json:"tls_insecure_skip_verify,omitempty"`
 	PassThroughBodyEnabled    bool                            `json:"pass_through_body_enabled,omitempty"`
 	SystemPrompt              string                          `json:"system_prompt,omitempty"`
 	SystemPromptOverride      bool                            `json:"system_prompt_override,omitempty"`
@@ -92,6 +95,32 @@ type ChannelSettings struct {
 	ModelContextFallbacks     map[string]ModelContextFallback `json:"model_context_fallbacks,omitempty"`
 	ProtocolPolicy            *ChannelProtocolPolicy          `json:"protocol_policy,omitempty"`
 	ResponsesWebSocketEnabled bool                            `json:"responses_websocket_enabled,omitempty"`
+}
+
+const (
+	HTTPProtocolAuto         = "auto"
+	HTTPProtocolHTTP1        = "http1"
+	MaxHTTP2ConnectionShards = 8
+)
+
+// ValidateHTTPTransport validates save-time HTTP transport settings.
+func (s *ChannelSettings) ValidateHTTPTransport() error {
+	if s == nil {
+		return nil
+	}
+	protocol := strings.ToLower(strings.TrimSpace(s.HTTPProtocol))
+	switch protocol {
+	case "", HTTPProtocolAuto, HTTPProtocolHTTP1:
+	default:
+		return fmt.Errorf("invalid http_protocol: %s", s.HTTPProtocol)
+	}
+	if s.HTTP2ConnectionShards < 0 || s.HTTP2ConnectionShards > MaxHTTP2ConnectionShards {
+		return fmt.Errorf("invalid http2_connection_shards: %d", s.HTTP2ConnectionShards)
+	}
+	if protocol == HTTPProtocolHTTP1 && s.HTTP2ConnectionShards > 1 {
+		return fmt.Errorf("http2_connection_shards must be 1 when http_protocol is http1")
+	}
+	return nil
 }
 
 func (s ChannelSettings) BindsTaskPlugin(key string) bool {
@@ -462,6 +491,8 @@ type ChannelOtherSettings struct {
 	AdvancedCustom                        *AdvancedCustomConfig        `json:"advanced_custom,omitempty"`
 	AutoDisableOverride                   *ChannelAutoDisableOverride  `json:"auto_disable_override,omitempty"`
 	MultiKeyAutoDisableOverride           *MultiKeyAutoDisableOverride `json:"multi_key_auto_disable_override,omitempty"`
+	OllamaOpenAIChat                      bool                         `json:"ollama_openai_chat,omitempty"`
+	ToolLossPolicy                        string                       `json:"tool_loss_policy,omitempty"`
 }
 
 func (s *ChannelOtherSettings) IsOpenRouterEnterprise() bool {
@@ -469,6 +500,19 @@ func (s *ChannelOtherSettings) IsOpenRouterEnterprise() bool {
 		return false
 	}
 	return *s.OpenRouterEnterprise
+}
+
+// ValidateToolLossPolicy validates the channel-level request conversion policy.
+func (s *ChannelOtherSettings) ValidateToolLossPolicy() error {
+	if s == nil {
+		return nil
+	}
+	switch strings.TrimSpace(s.ToolLossPolicy) {
+	case "", string(types.ConversionLossPolicyAllow), string(types.ConversionLossPolicySafe), string(types.ConversionLossPolicyStrict):
+		return nil
+	default:
+		return fmt.Errorf("invalid tool_loss_policy: %s", s.ToolLossPolicy)
+	}
 }
 
 const (
