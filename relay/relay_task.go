@@ -632,10 +632,16 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 	if ti.Progress != "" {
 		task.Progress = ti.Progress
 	}
-	if strings.HasPrefix(ti.Url, "data:") {
-		// data: URI — kept in Data, not ResultURL
-	} else if ti.Url != "" {
-		task.PrivateData.ResultURL = ti.Url
+	task.Data = service.RedactVideoResponseBody(body)
+	resultURL := strings.TrimSpace(ti.Url)
+	if resultURL == "" {
+		resultURL = strings.TrimSpace(ti.RemoteUrl)
+	}
+	if strings.HasPrefix(resultURL, "data:") && len(resultURL) > 64<<20 {
+		resultURL = ""
+	}
+	if resultURL != "" {
+		task.PrivateData.ResultURL = resultURL
 	} else if task.Status == model.TaskStatusSuccess {
 		// No URL from adaptor — construct proxy URL using public task ID
 		task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)

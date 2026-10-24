@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
@@ -91,6 +92,14 @@ func VideoProxy(c *gin.Context) {
 		return
 	}
 
+	var channel *model.Channel
+	if !taskHasPluginExecution(task) {
+		channel, err = model.CacheGetChannel(task.ChannelId)
+		if err != nil {
+			logger.LogWarn(c.Request.Context(), common.LogText("Failed to get channel for legacy task %s: %s", taskID, err.Error()))
+		}
+	}
+
 	var descriptor *relaychannel.TaskContentRequest
 	if taskHasPluginExecution(task) {
 		artifacts, projectionErr := projectTaskArtifacts(task)
@@ -118,6 +127,13 @@ func VideoProxy(c *gin.Context) {
 			logger.LogWarn(c.Request.Context(), common.LogText("Failed to project plugin video for task %s", taskID))
 		}
 	}
+	if descriptor == nil && channel != nil {
+		descriptor, err = buildLegacyVideoContentRequest(task, channel)
+		if err != nil {
+			logger.LogWarn(c.Request.Context(), common.LogText("Failed to resolve legacy video content for task %s: %v", taskID, err))
+			descriptor = nil
+		}
+	}
 	if descriptor == nil {
 		resultURL := task.GetResultURL()
 		if isTaskMediaFallbackLoop(resultURL, task.TaskID) {
@@ -136,6 +152,206 @@ func VideoProxy(c *gin.Context) {
 	if err := proxyTaskMedia(c, task, descriptor); err != nil {
 		writeTaskMediaProxyError(c, err)
 	}
+}
+
+func buildLegacyVideoContentRequest(task *model.Task, channel *model.Channel) (*relaychannel.TaskContentRequest, error) {
+	if task == nil || channel == nil || taskHasPluginExecution(task) {
+		return nil, nil
+	}
+
+	baseURL := channel.GetBaseURL()
+	if baseURL == "" {
+		baseURL = constant.GetChannelBaseURL(channel.Type)
+	}
+	key := legacyTaskChannelKey(task, channel)
+
+	switch channel.Type {
+	case constant.ChannelTypeOpenAI, constant.ChannelTypeSora:
+		return &relaychannel.TaskContentRequest{
+			URL:     strings.TrimRight(baseURL, "/") + "/v1/videos/" + task.GetUpstreamTaskID() + "/content",
+			Method:  http.MethodGet,
+			Headers: map[string]string{"Authorization": "Bearer " + channel.Key},
+		}, nil
+	case constant.ChannelTypeGemini, constant.ChannelTypeVertexAi:
+		resultURL := strings.TrimSpace(task.GetResultURL())
+		if resultURL != "" && !isTaskMediaFallbackLoop(resultURL, task.TaskID) {
+			return legacyVideoRequest(resultURL, channel.Type, key), nil
+		}
+		if resultURL := extractLegacyVideoURL(task.Data, channel.Type); resultURL != "" {
+			return legacyVideoRequest(resultURL, channel.Type, key), nil
+		}
+
+		adaptor, err := initTaskAdaptor(task)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := adaptor.FetchTask(baseURL, key, task, channel.GetSetting().Proxy)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		taskInfo, err := adaptor.ParseTaskResult(task, resp, body)
+		if err != nil {
+			return nil, err
+		}
+		if taskInfo != nil {
+			resultURL := strings.TrimSpace(taskInfo.Url)
+			if resultURL == "" {
+				resultURL = strings.TrimSpace(taskInfo.RemoteUrl)
+			}
+			if resultURL != "" {
+				return legacyVideoRequest(resultURL, channel.Type, key), nil
+			}
+		}
+		if resultURL := extractLegacyVideoURL(body, channel.Type); resultURL != "" {
+			return legacyVideoRequest(resultURL, channel.Type, key), nil
+		}
+		return nil, fmt.Errorf("video content URL not found")
+	default:
+		return nil, nil
+	}
+}
+
+func legacyTaskChannelKey(task *model.Task, channel *model.Channel) string {
+	if task != nil {
+		if key := strings.TrimSpace(task.PrivateData.Key); key != "" {
+			return key
+		}
+	}
+	if channel != nil {
+		for _, key := range channel.GetKeys() {
+			if key = strings.TrimSpace(key); key != "" {
+				return key
+			}
+		}
+		return strings.TrimSpace(channel.Key)
+	}
+	return ""
+}
+
+func legacyVideoRequest(rawURL string, channelType int, key string) *relaychannel.TaskContentRequest {
+	request := &relaychannel.TaskContentRequest{
+		URL:            rawURL,
+		Method:         http.MethodGet,
+		Credentialless: true,
+	}
+	if channelType == constant.ChannelTypeGemini && key != "" && !strings.HasPrefix(rawURL, "data:") {
+		request.Headers = map[string]string{"x-goog-api-key": key}
+		request.Credentialless = false
+	}
+	return request
+}
+
+func extractLegacyVideoURL(data []byte, channelType int) string {
+	if len(data) == 0 {
+		return ""
+	}
+	var payload map[string]any
+	if err := common.Unmarshal(data, &payload); err != nil {
+		return ""
+	}
+	if response, ok := payload["response"].(map[string]any); ok {
+		if url := extractLegacyVideoURLFromMap(response, channelType); url != "" {
+			return url
+		}
+	}
+	return extractLegacyVideoURLFromMap(payload, channelType)
+}
+
+func extractLegacyVideoURLFromMap(payload map[string]any, channelType int) string {
+	if payload == nil {
+		return ""
+	}
+	if channelType == constant.ChannelTypeVertexAi {
+		if videos, ok := payload["videos"].([]any); ok {
+			for _, item := range videos {
+				video, ok := item.(map[string]any)
+				if !ok {
+					continue
+				}
+				if url := extractVertexVideoValue(video); url != "" {
+					return url
+				}
+			}
+		}
+		if url := extractVertexVideoValue(payload); url != "" {
+			return url
+		}
+	}
+	if gvr, ok := payload["generateVideoResponse"].(map[string]any); ok {
+		if videos, ok := gvr["generatedVideos"].([]any); ok {
+			for _, item := range videos {
+				if video, ok := item.(map[string]any); ok {
+					if nested, ok := video["video"].(map[string]any); ok {
+						if uri, _ := nested["uri"].(string); strings.TrimSpace(uri) != "" {
+							return strings.TrimSpace(uri)
+						}
+					}
+				}
+			}
+		}
+		if samples, ok := gvr["generatedSamples"].([]any); ok {
+			for _, item := range samples {
+				if sample, ok := item.(map[string]any); ok {
+					if video, ok := sample["video"].(map[string]any); ok {
+						if uri, _ := video["uri"].(string); strings.TrimSpace(uri) != "" {
+							return strings.TrimSpace(uri)
+						}
+					}
+				}
+			}
+		}
+	}
+	if videos, ok := payload["videos"].([]any); ok {
+		for _, item := range videos {
+			if video, ok := item.(map[string]any); ok {
+				if uri, _ := video["uri"].(string); strings.TrimSpace(uri) != "" {
+					return strings.TrimSpace(uri)
+				}
+			}
+		}
+	}
+	if uri, _ := payload["uri"].(string); strings.TrimSpace(uri) != "" {
+		return strings.TrimSpace(uri)
+	}
+	return ""
+}
+
+func extractVertexVideoValue(video map[string]any) string {
+	if value, _ := video["bytesBase64Encoded"].(string); strings.TrimSpace(value) != "" {
+		mime, _ := video["mimeType"].(string)
+		encoding, _ := video["encoding"].(string)
+		return legacyVideoDataURL(mime, encoding, value)
+	}
+	if value, _ := video["video"].(string); strings.TrimSpace(value) != "" {
+		value = strings.TrimSpace(value)
+		if strings.HasPrefix(value, "data:") || strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+			return value
+		}
+		encoding, _ := video["encoding"].(string)
+		return legacyVideoDataURL("", encoding, value)
+	}
+	return ""
+}
+
+func legacyVideoDataURL(mimeType, encoding, value string) string {
+	mimeType = strings.TrimSpace(mimeType)
+	if mimeType == "" {
+		encoding = strings.TrimSpace(encoding)
+		if encoding == "" {
+			encoding = "mp4"
+		}
+		if strings.Contains(encoding, "/") {
+			mimeType = encoding
+		} else {
+			mimeType = "video/" + encoding
+		}
+	}
+	return "data:" + mimeType + ";base64," + value
 }
 
 func proxyTaskMedia(c *gin.Context, task *model.Task, descriptor *relaychannel.TaskContentRequest) error {

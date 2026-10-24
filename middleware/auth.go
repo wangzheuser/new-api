@@ -523,6 +523,12 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 			return
 		}
 
+		if err := model.ReconcileDueUserSubscriptions(token.UserId); err != nil {
+			common.SysLog(common.LogText("TokenAuthReadOnly ReconcileDueUserSubscriptions error for user %d: %v", token.UserId, err))
+			common.ApiErrorStatus(c, http.StatusInternalServerError, errors.New(common.TranslateMessage(c, i18n.MsgDatabaseError)))
+			c.Abort()
+			return
+		}
 		userCache, err := model.GetUserCache(token.UserId)
 		if err != nil {
 			common.SysLog(common.LogText("TokenAuthReadOnly GetUserCache error for user %d: %v", token.UserId, err))
@@ -536,6 +542,7 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 			return
 		}
 
+		userCache.WriteContext(c)
 		c.Set("id", token.UserId)
 		c.Set("token_id", token.Id)
 		c.Set("token_key", token.Key)
@@ -622,6 +629,12 @@ func TokenAuth() func(c *gin.Context) {
 			logger.LogDebug(c, "Client IP %s passed the token IP restrictions check", clientIp)
 		}
 
+		if err := model.ReconcileDueUserSubscriptions(token.UserId); err != nil {
+			common.SysLog(common.LogText("TokenAuth ReconcileDueUserSubscriptions error for user %d: %v", token.UserId, err))
+			abortWithOpenAiMessage(c, http.StatusInternalServerError,
+				common.TranslateMessage(c, i18n.MsgDatabaseError))
+			return
+		}
 		userCache, err := model.GetUserCache(token.UserId)
 		if err != nil {
 			common.SysLog(common.LogText("TokenAuth GetUserCache error for user %d: %v", token.UserId, err))
@@ -640,10 +653,28 @@ func TokenAuth() func(c *gin.Context) {
 		userGroup := userCache.Group
 		tokenGroup := token.Group
 		if tokenGroup != "" {
-			// check common.UserUsableGroups[userGroup]
-			if _, ok := service.GetUserUsableGroups(userGroup)[tokenGroup]; !ok {
-				abortWithAuthPolicyRejection(c, "auth_group_not_allowed", fmt.Sprintf("无权访问 %s 分组", tokenGroup))
-				return
+			if tokenGroup == "auto" {
+				autoGroups, groupErr := service.GetUserEffectiveAutoGroups(token.UserId, userGroup)
+				if groupErr != nil {
+					common.SysLog(common.LogText("TokenAuth effective auto groups error for user %d: %v", token.UserId, groupErr))
+					abortWithOpenAiMessage(c, http.StatusInternalServerError, common.TranslateMessage(c, i18n.MsgDatabaseError))
+					return
+				}
+				if len(autoGroups) == 0 {
+					abortWithAuthPolicyRejection(c, "auth_group_not_allowed", "无权访问 auto 分组")
+					return
+				}
+			} else {
+				allowed, groupErr := service.GroupInUserEffectiveGroups(token.UserId, userGroup, tokenGroup)
+				if groupErr != nil {
+					common.SysLog(common.LogText("TokenAuth effective group error for user %d: %v", token.UserId, groupErr))
+					abortWithOpenAiMessage(c, http.StatusInternalServerError, common.TranslateMessage(c, i18n.MsgDatabaseError))
+					return
+				}
+				if !allowed {
+					abortWithAuthPolicyRejection(c, "auth_group_not_allowed", fmt.Sprintf("无权访问 %s 分组", tokenGroup))
+					return
+				}
 			}
 			// check group in common.GroupRatio
 			if !ratio_setting.ContainsGroupRatio(tokenGroup) {

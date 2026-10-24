@@ -79,7 +79,10 @@ func buildMaskedTokenResponses(tokens []*model.Token) []*tokenResponse {
 	return maskedTokens
 }
 
-func getTokenRequestUserGroup(c *gin.Context) (string, error) {
+func getTokenRequestUserGroup(c *gin.Context, userId ...int) (string, error) {
+	if len(userId) > 0 && userId[0] > 0 {
+		return model.GetUserGroup(userId[0], false)
+	}
 	if userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup); userGroup != "" {
 		return userGroup, nil
 	}
@@ -89,7 +92,7 @@ func getTokenRequestUserGroup(c *gin.Context) (string, error) {
 	return model.GetUserGroup(c.GetInt("id"), false)
 }
 
-func setTokenAutoGroups(c *gin.Context, token *model.Token, groups []string) bool {
+func setTokenAutoGroups(c *gin.Context, userId int, token *model.Token, groups []string) bool {
 	if len(groups) == 0 {
 		if err := token.SetAutoGroups(nil); err != nil {
 			common.ApiError(c, err)
@@ -104,7 +107,7 @@ func setTokenAutoGroups(c *gin.Context, token *model.Token, groups []string) boo
 		return false
 	}
 
-	userGroup, err := getTokenRequestUserGroup(c)
+	userGroup, err := getTokenRequestUserGroup(c, userId)
 	if err != nil {
 		common.ApiError(c, err)
 		return false
@@ -116,7 +119,12 @@ func setTokenAutoGroups(c *gin.Context, token *model.Token, groups []string) boo
 			return false
 		}
 		seen[group] = struct{}{}
-		if !service.IsUserSelectableGroup(userGroup, group) {
+		allowed, groupErr := service.IsUserSelectableEffectiveGroup(userId, userGroup, group)
+		if groupErr != nil {
+			common.ApiError(c, groupErr)
+			return false
+		}
+		if !allowed {
 			common.ApiErrorT(c, "Auto group {{group}} is unavailable or unauthorized", map[string]any{"group": group})
 			return false
 		}
@@ -188,13 +196,23 @@ func GetToken(c *gin.Context) {
 }
 
 func GetTokenAutoGroups(c *gin.Context) {
-	userGroup, err := getTokenRequestUserGroup(c)
+	userId, err := resolveManagedUserID(c)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	userGroup, err := getTokenRequestUserGroup(c, userId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	groups, err := service.GetUserEffectiveAutoGroups(userId, userGroup)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	common.ApiSuccess(c, gin.H{
-		"groups":    service.GetUserAutoGroup(userGroup),
+		"groups":    groups,
 		"max_count": setting.GetMaxTokenAutoGroups(),
 	})
 }
@@ -220,10 +238,6 @@ func GetTokenKey(c *gin.Context) {
 	common.SetContextKey(c, constant.ContextKeyTokenAuditSucceeded, true)
 	common.ApiSuccess(c, gin.H{
 		"key": token.GetFullKey(),
-	})
-	recordDelegatedTokenAudit(c, userId, "token.key_view", map[string]interface{}{
-		"id":   token.Id,
-		"name": token.Name,
 	})
 	recordDelegatedTokenAudit(c, userId, "token.key_view", map[string]interface{}{
 		"id":   token.Id,
@@ -383,7 +397,7 @@ func AddToken(c *gin.Context) {
 		return
 	}
 	if token.Group == "auto" {
-		if !setTokenAutoGroups(c, &token, request.AutoGroups.Groups) {
+		if !setTokenAutoGroups(c, userId, &token, request.AutoGroups.Groups) {
 			return
 		}
 	} else {
@@ -527,7 +541,7 @@ func UpdateToken(c *gin.Context) {
 			cleanToken.CrossGroupRetry = false
 			_ = cleanToken.SetAutoGroups(nil)
 		} else if request.AutoGroups.Set {
-			if !setTokenAutoGroups(c, cleanToken, request.AutoGroups.Groups) {
+			if !setTokenAutoGroups(c, userId, cleanToken, request.AutoGroups.Groups) {
 				return
 			}
 		}

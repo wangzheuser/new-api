@@ -48,7 +48,11 @@ jobs:
         run: |
           cd web
           bun install --frozen-lockfile
+          cd default
           DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$(git describe --tags) bun run build
+          cd ..
+          rm -rf dist
+          cp -R default/dist dist
           cd ..
 
       # - name: Build Go binary (macos/Linux)

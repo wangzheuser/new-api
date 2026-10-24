@@ -107,7 +107,14 @@ func Distribute() func(c *gin.Context) {
 					return
 				}
 				if playgroundRequest.Group != "" {
-					if !service.GroupInUserUsableGroups(usingGroup, playgroundRequest.Group) && playgroundRequest.Group != usingGroup {
+					userId := common.GetContextKeyInt(c, constant.ContextKeyUserId)
+					userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+					allowed, groupErr := service.GroupInUserEffectiveGroups(userId, userGroup, playgroundRequest.Group)
+					if groupErr != nil {
+						abortWithOpenAiMessage(c, http.StatusInternalServerError, i18n.T(c, i18n.MsgDatabaseError))
+						return
+					}
+					if !allowed && playgroundRequest.Group != usingGroup {
 						abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorGroupAccessDenied))
 						return
 					}

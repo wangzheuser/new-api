@@ -53,6 +53,15 @@ func IsUserSelectableGroup(userGroup, groupName string) bool {
 	return GroupInUserUsableGroups(userGroup, groupName) && ratio_setting.ContainsGroupRatio(groupName)
 }
 
+// IsUserSelectableEffectiveGroup reports whether a user may select a concrete
+// group, including active manual and subscription grants.
+func IsUserSelectableEffectiveGroup(userId int, userGroup, groupName string) (bool, error) {
+	if groupName == "" || groupName == "auto" || !ratio_setting.ContainsGroupRatio(groupName) {
+		return false, nil
+	}
+	return GroupInUserEffectiveGroups(userId, userGroup, groupName)
+}
+
 // GetUserEffectiveGroups returns configured groups plus active manual and subscription grants.
 func GetUserEffectiveGroups(userId int, userGroup string) (map[string]string, error) {
 	groups := GetUserUsableGroups(userGroup)
@@ -123,6 +132,28 @@ func GetUserAutoGroup(userGroup string) []string {
 	return autoGroups
 }
 
+// GetUserEffectiveAutoGroups returns auto groups available through configured
+// groups or active user grants.
+func GetUserEffectiveAutoGroups(userId int, userGroup string) ([]string, error) {
+	groups, err := GetUserEffectiveGroups(userId, userGroup)
+	if err != nil {
+		return nil, err
+	}
+	autoGroups := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, group := range setting.GetAutoGroups() {
+		if _, exists := seen[group]; exists {
+			continue
+		}
+		if _, ok := groups[group]; !ok || !ratio_setting.ContainsGroupRatio(group) {
+			continue
+		}
+		seen[group] = struct{}{}
+		autoGroups = append(autoGroups, group)
+	}
+	return autoGroups, nil
+}
+
 func FilterUserTokenAutoGroups(userGroup string, groups []string) []string {
 	maxCount := setting.GetMaxTokenAutoGroups()
 	filtered := make([]string, 0, min(len(groups), maxCount))
@@ -143,16 +174,48 @@ func FilterUserTokenAutoGroups(userGroup string, groups []string) []string {
 	return filtered
 }
 
+func FilterUserTokenAutoGroupsForUser(userId int, userGroup string, groups []string) ([]string, error) {
+	effectiveGroups, err := GetUserEffectiveGroups(userId, userGroup)
+	if err != nil {
+		return nil, err
+	}
+	maxCount := setting.GetMaxTokenAutoGroups()
+	filtered := make([]string, 0, min(len(groups), maxCount))
+	seen := make(map[string]struct{})
+	for _, group := range groups {
+		if group == "" || group == "auto" || !ratio_setting.ContainsGroupRatio(group) {
+			continue
+		}
+		if _, ok := effectiveGroups[group]; !ok {
+			continue
+		}
+		if _, ok := seen[group]; ok {
+			continue
+		}
+		seen[group] = struct{}{}
+		filtered = append(filtered, group)
+		if len(filtered) == maxCount {
+			break
+		}
+	}
+	return filtered, nil
+}
+
 func GetRequestAutoGroups(c *gin.Context, userGroup string) []string {
+	groups, _ := GetRequestAutoGroupsForUser(c, c.GetInt("id"), userGroup)
+	return groups
+}
+
+func GetRequestAutoGroupsForUser(c *gin.Context, userId int, userGroup string) ([]string, error) {
 	value, ok := common.GetContextKey(c, constant.ContextKeyTokenAutoGroups)
 	if !ok {
-		return GetUserAutoGroup(userGroup)
+		return GetUserEffectiveAutoGroups(userId, userGroup)
 	}
 	groups, ok := value.([]string)
 	if !ok {
-		return []string{}
+		return []string{}, nil
 	}
-	return FilterUserTokenAutoGroups(userGroup, groups)
+	return FilterUserTokenAutoGroupsForUser(userId, userGroup, groups)
 }
 
 // GetGroupsEnabledModels returns enabled models in group order without duplicates.
@@ -169,21 +232,6 @@ func GetGroupsEnabledModels(groups []string) []string {
 		}
 	}
 	return models
-}
-
-// GetUserEffectiveAutoGroups returns auto groups available through configuration or subscriptions.
-func GetUserEffectiveAutoGroups(userId int, userGroup string) ([]string, error) {
-	groups, err := GetUserEffectiveGroups(userId, userGroup)
-	if err != nil {
-		return nil, err
-	}
-	autoGroups := make([]string, 0)
-	for _, group := range setting.GetAutoGroups() {
-		if _, ok := groups[group]; ok {
-			autoGroups = append(autoGroups, group)
-		}
-	}
-	return autoGroups, nil
 }
 
 // GetUserGroupRatio 获取用户使用某个分组的倍率

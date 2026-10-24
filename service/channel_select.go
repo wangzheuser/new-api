@@ -167,19 +167,13 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 	}
 
 	if param.TokenGroup == "auto" {
-		autoGroups := GetRequestAutoGroups(param.Ctx, userGroup)
+		userId := common.GetContextKeyInt(param.Ctx, constant.ContextKeyUserId)
+		autoGroups, autoErr := GetRequestAutoGroupsForUser(param.Ctx, userId, userGroup)
+		if autoErr != nil {
+			return nil, selectGroup, autoErr
+		}
 		if len(autoGroups) == 0 {
 			return nil, selectGroup, errors.New("auto groups is not enabled")
-		}
-		userId := common.GetContextKeyInt(param.Ctx, constant.ContextKeyUserId)
-		// Token-scoped auto groups are authoritative when present; still enforce
-		// the user's effective-group permissions before selecting a channel.
-		if _, hasTokenGroups := common.GetContextKey(param.Ctx, constant.ContextKeyTokenAutoGroups); !hasTokenGroups {
-			var groupErr error
-			autoGroups, groupErr = GetUserEffectiveAutoGroups(userId, userGroup)
-			if groupErr != nil {
-				return nil, selectGroup, groupErr
-			}
 		}
 
 		// startGroupIndex: the group index to start searching from
@@ -296,7 +290,15 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 			if usable {
 				if usingGroup == "auto" {
 					userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
-					for _, group := range GetRequestAutoGroups(c, userGroup) {
+					userId := common.GetContextKeyInt(c, constant.ContextKeyUserId)
+					autoGroups, autoErr := GetRequestAutoGroupsForUser(c, userId, userGroup)
+					if autoErr != nil {
+						return nil, "", &ChannelSelectError{
+							StatusCode: http.StatusInternalServerError,
+							Message:    autoErr.Error(),
+						}
+					}
+					for _, group := range autoGroups {
 						if model.IsChannelEnabledForGroupModel(group, modelName, preferred.Id) {
 							selectGroup, channel = group, preferred
 							common.SetContextKey(c, constant.ContextKeyAutoGroup, group)

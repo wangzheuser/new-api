@@ -51,3 +51,82 @@ func TestAuthPolicyRejection(t *testing.T) {
 		})
 	}
 }
+
+func TestTokenAuthAllowsActiveEntitlementGroup(t *testing.T) {
+	db := setupAuthoritativeAuthTestDB(t)
+	user := model.User{
+		Id:       9350,
+		Username: "policy-entitlement",
+		Password: "fixture",
+		Status:   common.UserStatusEnabled,
+		Role:     common.RoleCommonUser,
+		Group:    "default",
+		AffCode:  "policy-entitlement",
+	}
+	require.NoError(t, db.Create(&user).Error)
+	require.NoError(t, db.Create(&model.UserGroupGrant{
+		UserId:    user.Id,
+		GroupName: "vip",
+		ExpiresAt: 0,
+	}).Error)
+	require.NoError(t, db.Create(&model.Token{
+		Id:             9450,
+		UserId:         user.Id,
+		Key:            "fixtureentitlementkey",
+		Status:         common.TokenStatusEnabled,
+		ExpiredTime:    -1,
+		UnlimitedQuota: true,
+		Group:          "vip",
+	}).Error)
+
+	called := false
+	router := gin.New()
+	router.POST("/v1/messages", TokenAuth(), func(c *gin.Context) {
+		called = true
+		c.Status(http.StatusNoContent)
+	})
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	request.Header.Set("Authorization", "Bearer sk-fixtureentitlementkey")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	assert.Equal(t, http.StatusNoContent, recorder.Code, recorder.Body.String())
+	assert.True(t, called)
+}
+
+func TestTokenAuthAllowsAutoGroupWithoutStaticAutoEntry(t *testing.T) {
+	db := setupAuthoritativeAuthTestDB(t)
+	user := model.User{
+		Id:       9351,
+		Username: "policy-auto",
+		Password: "fixture",
+		Status:   common.UserStatusEnabled,
+		Role:     common.RoleCommonUser,
+		Group:    "default",
+		AffCode:  "policy-auto",
+	}
+	require.NoError(t, db.Create(&user).Error)
+	require.NoError(t, db.Create(&model.Token{
+		Id:             9451,
+		UserId:         user.Id,
+		Key:            "fixtureautokey",
+		Status:         common.TokenStatusEnabled,
+		ExpiredTime:    -1,
+		UnlimitedQuota: true,
+		Group:          "auto",
+	}).Error)
+
+	called := false
+	router := gin.New()
+	router.POST("/v1/messages", TokenAuth(), func(c *gin.Context) {
+		called = true
+		c.Status(http.StatusNoContent)
+	})
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	request.Header.Set("Authorization", "Bearer sk-fixtureautokey")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	assert.Equal(t, http.StatusNoContent, recorder.Code, recorder.Body.String())
+	assert.True(t, called)
+}

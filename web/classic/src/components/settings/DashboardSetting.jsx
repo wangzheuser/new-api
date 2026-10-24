@@ -17,9 +17,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useEffect, useState, useMemo } from 'react';
-import { Card, Spin, Button, Modal } from '@douyinfe/semi-ui';
-import { API, showError, showSuccess, toBoolean } from '../../helpers';
+import React, { useEffect, useState } from 'react';
+import { Card, Spin } from '@douyinfe/semi-ui';
+import { API, showError, toBoolean } from '../../helpers';
 import SettingsAPIInfo from '../../pages/Setting/Dashboard/SettingsAPIInfo';
 import SettingsAnnouncements from '../../pages/Setting/Dashboard/SettingsAnnouncements';
 import SettingsFAQ from '../../pages/Setting/Dashboard/SettingsFAQ';
@@ -51,8 +51,6 @@ const DashboardSetting = () => {
   });
 
   let [loading, setLoading] = useState(false);
-  const [showMigrateModal, setShowMigrateModal] = useState(false); // 下个版本会删除
-
   const getOptions = async () => {
     const res = await API.get('/api/option/');
     const { success, message, data } = res.data;
@@ -88,59 +86,9 @@ const DashboardSetting = () => {
     onRefresh();
   }, []);
 
-  // 用于迁移检测的旧键，下个版本会删除
-  const hasLegacyData = useMemo(() => {
-    const legacyKeys = [
-      'ApiInfo',
-      'Announcements',
-      'FAQ',
-      'UptimeKumaUrl',
-      'UptimeKumaSlug',
-    ];
-    return legacyKeys.some((k) => inputs[k]);
-  }, [inputs]);
-
-  useEffect(() => {
-    if (hasLegacyData) {
-      setShowMigrateModal(true);
-    }
-  }, [hasLegacyData]);
-
-  const handleMigrate = async () => {
-    try {
-      setLoading(true);
-      await API.post('/api/option/migrate_console_setting');
-      showSuccess('旧配置迁移完成');
-      await onRefresh();
-      setShowMigrateModal(false);
-    } catch (err) {
-      console.error(err);
-      showError('迁移失败: ' + (err.message || '未知错误'));
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
     <>
       <Spin spinning={loading} size='large'>
-        {/* 用于迁移检测的旧键模态框，下个版本会删除 */}
-        <Modal
-          title='配置迁移确认'
-          visible={showMigrateModal}
-          onOk={handleMigrate}
-          onCancel={() => setShowMigrateModal(false)}
-          confirmLoading={loading}
-          okText='确认迁移'
-          cancelText='取消'
-        >
-          <p>检测到旧版本的配置数据，是否要迁移到新的配置格式？</p>
-          <p style={{ color: '#f57c00', marginTop: '10px' }}>
-            <strong>注意：</strong>
-            迁移过程中会自动处理数据格式转换，迁移完成后旧配置将被清除，请在迁移前在数据库中备份好旧配置。
-          </p>
-        </Modal>
-
         {/* 数据看板设置 */}
         <Card style={{ marginTop: '10px' }}>
           <SettingsDataDashboard options={inputs} refresh={onRefresh} />

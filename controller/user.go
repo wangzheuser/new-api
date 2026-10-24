@@ -684,7 +684,11 @@ func GetUserModels(c *gin.Context) {
 		}
 	case group == "auto":
 		if _, ok := groups[group]; ok {
-			groupsToQuery = service.GetUserAutoGroup(user.Group)
+			groupsToQuery, err = service.GetUserEffectiveAutoGroups(user.Id, user.Group)
+			if err != nil {
+				common.ApiError(c, err)
+				return
+			}
 		}
 	default:
 		if _, ok := groups[group]; ok {

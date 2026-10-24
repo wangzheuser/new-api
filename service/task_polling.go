@@ -56,14 +56,15 @@ type BatchTaskPollingAdaptor interface {
 }
 
 const (
-	pollClassOK           = "ok"
-	pollClassOtherClient  = "other_client"
-	pollClassNotFound     = "not_found"
-	pollClassAuth         = "auth"
-	pollClassTransient    = "transient"
-	pollClassUnrecognized = "unrecognized"
-	pollClassHookError    = "hook_error"
-	pollClassTransport    = "transport_error"
+	pollClassOK                  = "ok"
+	pollClassOtherClient         = "other_client"
+	pollClassNotFound            = "not_found"
+	pollClassAuth                = "auth"
+	pollClassTransient           = "transient"
+	pollClassUnrecognized        = "unrecognized"
+	pollClassHookError           = "hook_error"
+	pollClassTransport           = "transport_error"
+	maxPersistedTaskDataURLBytes = 64 << 20
 )
 
 type BatchTaskResult struct {
@@ -573,7 +574,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		return recordPollFailure(ctx, adaptor, task, snap.Status, pollClassUnrecognized, resp.StatusCode, unrecognizedPollDetail(taskResult.Reason, responseBody))
 	}
 
-	task.Data = redactVideoResponseBody(responseBody)
+	task.Data = RedactVideoResponseBody(responseBody)
 	if len(taskResult.PluginState) > 0 {
 		task.PrivateData.PluginState = taskResult.PluginState
 	}
@@ -600,12 +601,17 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		if task.FinishTime == 0 {
 			task.FinishTime = now
 		}
-		if strings.HasPrefix(taskResult.Url, "data:") {
-			// data: URI (e.g. Vertex base64 encoded video) — keep in Data, not in ResultURL
-			task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)
-		} else if taskResult.Url != "" {
-			// Direct upstream URL (e.g. Kling, Ali, Doubao, etc.)
-			task.PrivateData.ResultURL = taskResult.Url
+		resultURL := strings.TrimSpace(taskResult.Url)
+		if resultURL == "" {
+			resultURL = strings.TrimSpace(taskResult.RemoteUrl)
+		}
+		if strings.HasPrefix(resultURL, "data:") && len(resultURL) > maxPersistedTaskDataURLBytes {
+			resultURL = ""
+		}
+		if resultURL != "" {
+			// Keep both direct URLs and inline data URLs private. The public task
+			// DTO always exposes the local content endpoint instead.
+			task.PrivateData.ResultURL = resultURL
 		} else {
 			// No URL from adaptor — construct proxy URL using public task ID
 			task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)
@@ -662,7 +668,9 @@ func finalizeTerminalTask(ctx context.Context, adaptor TaskPollingAdaptor, task 
 	}
 }
 
-func redactVideoResponseBody(body []byte) []byte {
+// RedactVideoResponseBody preserves provider response structure while removing
+// large inline credentials/media from the public task snapshot.
+func RedactVideoResponseBody(body []byte) []byte {
 	var m map[string]any
 	if err := common.Unmarshal(body, &m); err != nil {
 		return body
@@ -686,6 +694,10 @@ func redactVideoResponseBody(body []byte) []byte {
 		return body
 	}
 	return b
+}
+
+func redactVideoResponseBody(body []byte) []byte {
+	return RedactVideoResponseBody(body)
 }
 
 func truncateBase64(s string) string {

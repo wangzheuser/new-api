@@ -351,6 +351,24 @@ func TestLegacyVideoArtifactContentUsesGetResultURL(t *testing.T) {
 	assert.Equal(t, "bytes 0-3/4", recorder.Header().Get("Content-Range"))
 }
 
+func TestBuildLegacyVideoContentRequestRestoresOpenAIVideoRoute(t *testing.T) {
+	baseURL := "https://video.example"
+	task := &model.Task{TaskID: "task_legacy", PrivateData: model.TaskPrivateData{UpstreamTaskID: "upstream-1"}}
+	channel := &model.Channel{Type: constant.ChannelTypeOpenAI, Key: "provider-key", BaseURL: &baseURL}
+
+	request, err := buildLegacyVideoContentRequest(task, channel)
+	require.NoError(t, err)
+	require.NotNil(t, request)
+	assert.Equal(t, "https://video.example/v1/videos/upstream-1/content", request.URL)
+	assert.Equal(t, "Bearer provider-key", request.Headers["Authorization"])
+	assert.False(t, request.Credentialless)
+}
+
+func TestExtractLegacyVertexVideoDataURL(t *testing.T) {
+	body := []byte(`{"response":{"videos":[{"bytesBase64Encoded":"AQI=","mimeType":"video/mp4"}]}}`)
+	assert.Equal(t, "data:video/mp4;base64,AQI=", extractLegacyVideoURL(body, constant.ChannelTypeVertexAi))
+}
+
 func TestDisabledArtifactStorePreservesPluginUpstreamContent(t *testing.T) {
 	task := setupGenericTaskTest(t)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

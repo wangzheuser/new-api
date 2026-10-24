@@ -181,6 +181,10 @@ func projectTaskArtifacts(task *model.Task) ([]relaychannel.TaskArtifact, error)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", errTaskArtifactPlugin, err)
 	}
+	resultURL := strings.TrimSpace(task.GetResultURL())
+	if len(artifacts) == 0 && resultURL != "" && !isTaskMediaFallbackLoop(resultURL, task.TaskID) {
+		artifacts = []relaychannel.TaskArtifact{{Key: "video", Type: "video"}}
+	}
 	return validateProjectedTaskArtifacts(artifacts)
 }
 
@@ -215,6 +219,13 @@ func validateProjectedTaskArtifacts(artifacts []relaychannel.TaskArtifact) ([]re
 
 func initTaskArtifactAdaptor(task *model.Task) (relaychannel.TaskAdaptor, error) {
 	if task == nil || !taskHasPluginExecution(task) {
+		return nil, errTaskArtifactPluginUnavailable
+	}
+	return initTaskAdaptor(task)
+}
+
+func initTaskAdaptor(task *model.Task) (relaychannel.TaskAdaptor, error) {
+	if task == nil {
 		return nil, errTaskArtifactPluginUnavailable
 	}
 	channelModel, err := model.CacheGetChannel(task.ChannelId)
@@ -371,6 +382,17 @@ func TaskArtifactContent(c *gin.Context) {
 	}
 	if !found {
 		writeTaskArtifactError(c, http.StatusNotFound, "artifact_not_found", "Task or artifact not found")
+		return
+	}
+	resultURL := strings.TrimSpace(task.GetResultURL())
+	if resultURL != "" && !isTaskMediaFallbackLoop(resultURL, task.TaskID) {
+		descriptor := &relaychannel.TaskContentRequest{
+			URL:    resultURL,
+			Method: c.Request.Method,
+		}
+		if err := proxyTaskMedia(c, task, descriptor); err != nil {
+			writeTaskMediaProxyError(c, err)
+		}
 		return
 	}
 	artifactStore := service.GetTaskArtifactStore()

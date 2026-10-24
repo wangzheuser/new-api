@@ -969,6 +969,55 @@ func TestUpdateVideoSingleTaskPollClassification(t *testing.T) {
 	}
 }
 
+func TestUpdateVideoSingleTaskPersistsRemoteAndInlineResultURLs(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		info *relaycommon.TaskInfo
+		want string
+	}{
+		{
+			name: "remote url",
+			info: &relaycommon.TaskInfo{
+				Status:    model.TaskStatusSuccess,
+				RemoteUrl: "https://media.example/video.mp4",
+			},
+			want: "https://media.example/video.mp4",
+		},
+		{
+			name: "inline data url",
+			info: &relaycommon.TaskInfo{
+				Status: model.TaskStatusSuccess,
+				Url:    "data:video/mp4;base64,AQI=",
+			},
+			want: "data:video/mp4;base64,AQI=",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			truncate(t)
+			const userID, tokenID, channelID = 511, 511, 511
+			seedUser(t, userID, 10_000)
+			seedToken(t, tokenID, userID, "sk-poll-url", 7_000)
+			ch := &model.Channel{Id: channelID, Type: constant.ChannelTypeKling, Name: "poll-url", Key: "sk-test", Status: common.ChannelStatusEnabled}
+			task := makeTask(userID, channelID, 4_000, tokenID, BillingSourceWallet, 0)
+			task.TaskID = "task_poll_url"
+			task.PrivateData.UpstreamTaskID = "upstream_poll_url"
+			require.NoError(t, model.DB.Create(task).Error)
+
+			adaptor := &scriptedPollingAdaptor{
+				statusCode: http.StatusOK,
+				parse:      testCase.info,
+			}
+			require.NoError(t, updateVideoSingleTask(context.Background(), adaptor, ch, task.GetUpstreamTaskID(), map[string]*model.Task{
+				task.GetUpstreamTaskID(): task,
+			}))
+
+			var persisted model.Task
+			require.NoError(t, model.DB.First(&persisted, task.ID).Error)
+			assert.Equal(t, testCase.want, persisted.GetResultURL())
+		})
+	}
+}
+
 func TestUpdateBatchTasksPollClassification(t *testing.T) {
 	testCases := []struct {
 		name         string

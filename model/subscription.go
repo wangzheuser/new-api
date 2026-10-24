@@ -1801,6 +1801,12 @@ func ReconcileDueUserSubscriptions(userId int) error {
 		Limit(1).
 		Find(&subscription)
 	if query.Error != nil {
+		// Test fixtures and pre-subscription installations may not have this
+		// table yet; treat that state as no due work.
+		message := strings.ToLower(query.Error.Error())
+		if strings.Contains(message, "no such table") || strings.Contains(message, "doesn't exist") || strings.Contains(message, "does not exist") {
+			return nil
+		}
 		return query.Error
 	}
 	if query.RowsAffected == 0 {
