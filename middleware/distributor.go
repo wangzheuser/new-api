@@ -100,7 +100,6 @@ func Distribute() func(c *gin.Context) {
 				return
 			}
 			if shouldSelectChannel && strings.HasPrefix(c.Request.URL.Path, "/pg/chat/completions") {
-				usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
 				playgroundRequest := &dto.PlayGroundRequest{}
 				if err = common.UnmarshalBodyReusable(c, playgroundRequest); err != nil {
 					abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidPlayground, map[string]any{"Error": err.Error()}))
@@ -109,12 +108,20 @@ func Distribute() func(c *gin.Context) {
 				if playgroundRequest.Group != "" {
 					userId := common.GetContextKeyInt(c, constant.ContextKeyUserId)
 					userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
-					allowed, groupErr := service.GroupInUserEffectiveGroups(userId, userGroup, playgroundRequest.Group)
+					var allowed bool
+					var groupErr error
+					if playgroundRequest.Group == "auto" {
+						var autoGroups []string
+						autoGroups, groupErr = service.GetUserEffectiveAutoGroups(userId, userGroup)
+						allowed = len(autoGroups) > 0
+					} else {
+						allowed, groupErr = service.IsUserSelectableEffectiveGroup(userId, userGroup, playgroundRequest.Group)
+					}
 					if groupErr != nil {
 						abortWithOpenAiMessage(c, http.StatusInternalServerError, i18n.T(c, i18n.MsgDatabaseError))
 						return
 					}
-					if !allowed && playgroundRequest.Group != usingGroup {
+					if !allowed {
 						abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorGroupAccessDenied))
 						return
 					}

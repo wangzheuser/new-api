@@ -100,6 +100,9 @@ func GetUserBaseGroupsForEffectiveGroup(groupName string) ([]string, error) {
 
 // GroupInUserEffectiveGroups reports whether a user can use the specified group now.
 func GroupInUserEffectiveGroups(userId int, userGroup, groupName string) (bool, error) {
+	if groupName == "" || groupName == "auto" || !ratio_setting.ContainsGroupRatio(groupName) {
+		return false, nil
+	}
 	if _, ok := GetUserUsableGroups(userGroup)[groupName]; ok {
 		return true, nil
 	}
@@ -108,7 +111,7 @@ func GroupInUserEffectiveGroups(userId int, userGroup, groupName string) (bool, 
 		return false, err
 	}
 	for _, group := range groups {
-		if group == groupName {
+		if strings.TrimSpace(group) == groupName && ratio_setting.ContainsGroupRatio(groupName) {
 			return true, nil
 		}
 	}

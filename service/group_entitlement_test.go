@@ -53,6 +53,33 @@ func TestGroupInUserEffectiveGroupsRejectsCancelledEntitlement(t *testing.T) {
 	assert.False(t, allowed)
 }
 
+func TestUserEffectiveGroupsRejectsRetiredEntitlementGroup(t *testing.T) {
+	truncate(t)
+	previousRatios := ratio_setting.GroupRatio2JSONString()
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousRatios))
+	})
+	now := time.Now().Unix()
+	require.NoError(t, model.DB.Create(&model.UserSubscription{
+		Id:               7312,
+		UserId:           7313,
+		PlanId:           1,
+		Status:           "active",
+		StartTime:        now - 60,
+		EndTime:          now + 3600,
+		EntitlementGroup: "retired-group",
+	}).Error)
+
+	groups, err := GetUserEffectiveGroups(7313, "default")
+	require.NoError(t, err)
+	assert.Contains(t, groups, "retired-group")
+
+	allowed, err := GroupInUserEffectiveGroups(7313, "default", "retired-group")
+	require.NoError(t, err)
+	assert.False(t, allowed)
+}
+
 // TestGetUserBaseGroupsForEffectiveGroupUsesSpecialRules verifies inherited additions and removals.
 func TestGetUserBaseGroupsForEffectiveGroupUsesSpecialRules(t *testing.T) {
 	truncate(t)

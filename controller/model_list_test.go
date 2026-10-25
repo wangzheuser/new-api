@@ -265,6 +265,76 @@ func TestGetUserModelsExpandsAutoGroupsInConfiguredOrder(t *testing.T) {
 	assert.Equal(t, "zz-default-model", models[2])
 }
 
+func TestGetUserModelsExpandsEffectiveAutoGroupsWithoutStaticAutoEntry(t *testing.T) {
+	originalAutoGroups := setting.AutoGroups2JsonString()
+	originalUsableGroups := setting.UserUsableGroups2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, setting.UpdateAutoGroupsByJsonString(originalAutoGroups))
+		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(originalUsableGroups))
+	})
+
+	require.NoError(t, setting.UpdateAutoGroupsByJsonString(`["vip"]`))
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Default"}`))
+
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.Create(&model.User{
+		Id:       1004,
+		Username: "playground-entitlement-auto-user",
+		Password: "password",
+		Group:    "default",
+		Status:   common.UserStatusEnabled,
+	}).Error)
+	require.NoError(t, db.Create(&model.UserGroupGrant{
+		UserId:    1004,
+		GroupName: "vip",
+	}).Error)
+	require.NoError(t, db.Create(&model.Ability{
+		Group: "vip", Model: "zz-entitlement-auto-model", ChannelId: 1, Enabled: true,
+	}).Error)
+
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/user/models?group=auto", nil)
+	context.Set("id", 1004)
+
+	GetUserModels(context)
+
+	assert.Equal(t, []string{"zz-entitlement-auto-model"}, decodeUserModelsResponse(t, recorder))
+}
+
+func TestGetUserModelsFiltersRetiredEntitlementGroups(t *testing.T) {
+	originalRatios := ratio_setting.GroupRatio2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalRatios))
+	})
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
+
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.Create(&model.User{
+		Id:       1005,
+		Username: "retired-entitlement-model-user",
+		Password: "password",
+		Group:    "default",
+		Status:   common.UserStatusEnabled,
+	}).Error)
+	require.NoError(t, db.Create(&model.UserGroupGrant{
+		UserId:    1005,
+		GroupName: "retired-group",
+	}).Error)
+	require.NoError(t, db.Create(&model.Ability{
+		Group: "retired-group", Model: "zz-retired-model", ChannelId: 1, Enabled: true,
+	}).Error)
+
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/user/models", nil)
+	context.Set("id", 1005)
+
+	GetUserModels(context)
+
+	assert.Empty(t, decodeUserModelsResponse(t, recorder))
+}
+
 func TestListModelsIncludesTieredBillingModel(t *testing.T) {
 	withSelfUseModeDisabled(t)
 	withTieredBillingConfig(t, map[string]string{

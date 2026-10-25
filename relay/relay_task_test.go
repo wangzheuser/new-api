@@ -48,6 +48,19 @@ func setupRelayChannelDB(t *testing.T) *gorm.DB {
 	return database
 }
 
+func TestInitTaskPersistsSelectedVideoChannelKey(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		UserId:        1,
+		UsingGroup:    "default",
+		ChannelMeta:   &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenAI, ChannelId: 2, ApiKey: "selected-key"},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{},
+	}
+
+	task := model.InitTask(constant.TaskPlatform("openai"), info)
+
+	require.Equal(t, "selected-key", task.PrivateData.Key)
+}
+
 func TestApplyChannelPinPreservesOriginTasksAndRetryMode(t *testing.T) {
 	database := setupRelayChannelDB(t)
 	channel := &model.Channel{Name: "origin-channel", Key: "sk-test", Status: common.ChannelStatusEnabled, Type: constant.ChannelTypeDoubaoVideo}

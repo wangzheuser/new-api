@@ -364,6 +364,23 @@ func TestBuildLegacyVideoContentRequestRestoresOpenAIVideoRoute(t *testing.T) {
 	assert.False(t, request.Credentialless)
 }
 
+func TestBuildLegacyVideoContentRequestUsesSelectedChannelKey(t *testing.T) {
+	baseURL := "https://video.example"
+	task := &model.Task{
+		TaskID: "task_legacy_selected_key",
+		PrivateData: model.TaskPrivateData{
+			UpstreamTaskID: "upstream-2",
+			Key:            "key-b",
+		},
+	}
+	channel := &model.Channel{Type: constant.ChannelTypeOpenAI, Key: "key-a\nkey-b", BaseURL: &baseURL}
+
+	request, err := buildLegacyVideoContentRequest(task, channel)
+	require.NoError(t, err)
+	require.NotNil(t, request)
+	assert.Equal(t, "Bearer key-b", request.Headers["Authorization"])
+}
+
 func TestExtractLegacyVertexVideoDataURL(t *testing.T) {
 	body := []byte(`{"response":{"videos":[{"bytesBase64Encoded":"AQI=","mimeType":"video/mp4"}]}}`)
 	assert.Equal(t, "data:video/mp4;base64,AQI=", extractLegacyVideoURL(body, constant.ChannelTypeVertexAi))

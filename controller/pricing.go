@@ -26,7 +26,7 @@ func filterPricingByUsableGroups(pricing []model.Pricing, usableGroup map[string
 			continue
 		}
 		for _, group := range item.EnableGroup {
-			if _, ok := usableGroup[group]; ok {
+			if _, ok := usableGroup[group]; ok && ratio_setting.ContainsGroupRatio(group) {
 				filtered = append(filtered, item)
 				break
 			}

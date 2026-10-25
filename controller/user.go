@@ -19,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/QuantumNous/new-api/constant"
 
@@ -680,18 +681,18 @@ func GetUserModels(c *gin.Context) {
 	switch {
 	case group == "":
 		for g := range groups {
-			groupsToQuery = append(groupsToQuery, g)
-		}
-	case group == "auto":
-		if _, ok := groups[group]; ok {
-			groupsToQuery, err = service.GetUserEffectiveAutoGroups(user.Id, user.Group)
-			if err != nil {
-				common.ApiError(c, err)
-				return
+			if ratio_setting.ContainsGroupRatio(g) {
+				groupsToQuery = append(groupsToQuery, g)
 			}
 		}
+	case group == "auto":
+		groupsToQuery, err = service.GetUserEffectiveAutoGroups(user.Id, user.Group)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
 	default:
-		if _, ok := groups[group]; ok {
+		if _, ok := groups[group]; ok && ratio_setting.ContainsGroupRatio(group) {
 			groupsToQuery = []string{group}
 		}
 	}

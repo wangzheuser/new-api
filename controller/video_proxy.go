@@ -170,7 +170,7 @@ func buildLegacyVideoContentRequest(task *model.Task, channel *model.Channel) (*
 		return &relaychannel.TaskContentRequest{
 			URL:     strings.TrimRight(baseURL, "/") + "/v1/videos/" + task.GetUpstreamTaskID() + "/content",
 			Method:  http.MethodGet,
-			Headers: map[string]string{"Authorization": "Bearer " + channel.Key},
+			Headers: map[string]string{"Authorization": "Bearer " + key},
 		}, nil
 	case constant.ChannelTypeGemini, constant.ChannelTypeVertexAi:
 		resultURL := strings.TrimSpace(task.GetResultURL())

@@ -252,7 +252,9 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 	if relayInfo != nil && relayInfo.ChannelMeta != nil {
 		// A New API channel may rotate between several gateway tokens, so the
 		// task keeps the key that submitted it and polls with the same identity.
-		if relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeGemini ||
+		if relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeOpenAI ||
+			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeSora ||
+			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeGemini ||
 			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeVertexAi ||
 			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeNewAPI {
 			privateData.Key = relayInfo.ChannelMeta.ApiKey
