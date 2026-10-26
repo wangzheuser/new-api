@@ -625,6 +625,28 @@ func TestAcceptedSubmitStreamNeverRetries(t *testing.T) {
 	assert.Equal(t, service.PolicyDecision{Action: "stop", Reason: "task_accepted", Source: "system"}, decideTaskRetry(c, &dto.TaskError{StatusCode: 502, LocalError: true, NoRetry: true}, 3))
 }
 
+func TestTaskSubmissionAPIErrorPreservesUpstreamCause(t *testing.T) {
+	upstream := types.NewOpenAIError(
+		errors.New("quota exceeded"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusTooManyRequests,
+		types.ErrOptionWithUpstreamStatusCode(http.StatusTooManyRequests),
+		types.ErrOptionWithUpstreamRetryAfter("120"),
+	)
+	taskErr := service.TaskErrorWrapper(upstream, "upstream", http.StatusTooManyRequests)
+	got := taskSubmissionAPIError(taskErr)
+	require.Same(t, upstream, got)
+	status, real := got.GetUpstreamStatusCode()
+	assert.True(t, real)
+	assert.Equal(t, http.StatusTooManyRequests, status)
+	assert.Equal(t, "120", got.GetUpstreamRetryAfter())
+
+	local := service.TaskErrorWrapperLocal(errors.New("dial failed"), "do_request_failed", http.StatusBadGateway)
+	localAPIError := taskSubmissionAPIError(local)
+	_, real = localAPIError.GetUpstreamStatusCode()
+	assert.False(t, real)
+}
+
 // Local task rejections carry a message but no cause; the response and the
 // decision record must still be produced.
 func TestRespondTaskSubmissionErrorWithoutCause(t *testing.T) {

@@ -17,6 +17,7 @@ import (
 	appconstant "github.com/QuantumNous/new-api/constant"
 	appdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	appmodel "github.com/QuantumNous/new-api/model"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
@@ -231,6 +232,7 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 	var info *relaycommon.RelayInfo
 	billingPrepared := false
 	quotaConsumed := false
+	defer service.FinishChannelKeyProbe(c, false)
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			apiErr = types.NewError(fmt.Errorf("responses websocket call panic: %v", recovered), types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
@@ -324,7 +326,43 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 				info.LastError = apiErr
 				decision := service.DecideRelayRetry(c, apiErr, common.RetryTimes-retry.GetRetry())
 				service.RecordPolicyFailure(c, channel.Id, apiErr, decision)
-				service.ProcessChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, info.ApiKey, channel.GetAutoBan()), apiErr, info)
+				usingKey := common.GetContextKeyString(c, appconstant.ContextKeyChannelKey)
+				if _, real := apiErr.GetUpstreamStatusCode(); real && channel.ChannelInfo.IsMultiKey {
+					retry.ExcludeChannelKey(channel.Id, usingKey)
+				}
+				keyAction, keyHandled := service.HandleMultiKeyFailure(
+					channel,
+					common.GetContextKeyInt(c, appconstant.ContextKeyChannelMultiKeyIndex),
+					usingKey,
+					apiErr,
+					common.GetContextKeyString(c, appconstant.ContextKeyChannelHealthModel),
+				)
+				if keyHandled {
+					channelScoped := service.IsMultiKeyFailureChannelScoped(
+						channel,
+						common.GetContextKeyString(c, appconstant.ContextKeyChannelHealthModel),
+						apiErr,
+					)
+					retry.ExcludeChannelKey(channel.Id, usingKey)
+					if channelScoped {
+						if retry.ExcludedChannelIDs == nil {
+							retry.ExcludedChannelIDs = make(map[int]struct{})
+						}
+						retry.ExcludedChannelIDs[channel.Id] = struct{}{}
+					} else {
+						retry.PreferredChannelID = channel.Id
+					}
+					logger.LogInfo(c, fmt.Sprintf("responses websocket multi-key failure handled: channel_id=%d, key_index=%d, action=%s", channel.Id, common.GetContextKeyInt(c, appconstant.ContextKeyChannelMultiKeyIndex), keyAction))
+				} else {
+					service.RecordChannelUpstreamErrorAsync(
+						channel,
+						apiErr,
+						usingKey,
+						common.GetContextKeyString(c, appconstant.ContextKeyChannelHealthModel),
+					)
+					service.ProcessChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, usingKey, channel.GetAutoBan()), apiErr, info)
+				}
+				service.FinishChannelKeyProbe(c, false)
 				if decision.Action == "retry" {
 					continue
 				}
@@ -337,6 +375,13 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 				state.closeAfter = true
 				return types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
 			}
+			service.FinishChannelKeyProbe(c, true)
+			service.RecordChannelUpstreamResponseAsync(
+				channel,
+				http.StatusOK,
+				common.GetContextKeyString(c, appconstant.ContextKeyChannelKey),
+				common.GetContextKeyString(c, appconstant.ContextKeyChannelHealthModel),
+			)
 			s.lockedModel, s.lockedChannelID, s.lockedGroup = modelName, channel.Id, info.UsingGroup
 			s.lockedKey, s.lockedKeyIndex = info.ApiKey, info.ChannelMultiKeyIndex
 			matchedRoute, _ := channel.GetOtherSettings().AdvancedCustom.MatchPathForModel(c.Request.URL.Path, modelName)
@@ -565,11 +610,18 @@ func (s *responsesWSSession) restoreConnectionContext(c *gin.Context, model stri
 	if err != nil || channel == nil || channel.Status != common.ChannelStatusEnabled || !channel.GetSetting().ResponsesWebSocketEnabled {
 		return types.NewErrorWithStatusCode(errors.New("Responses WebSocket is disabled for this channel"), types.ErrorCode(appdto.FilterResponsesWebSocket), http.StatusForbidden, types.ErrOptionWithSkipRetry())
 	}
+	if service.IsChannelRoutingBlocked(channel, model) {
+		return types.NewErrorWithStatusCode(errors.New("channel is temporarily disabled"), types.ErrorCodeBadResponseStatusCode, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+	}
 	keyEnabled := channel.Key == s.lockedKey
 	if channel.ChannelInfo.IsMultiKey {
 		keys := channel.GetKeys()
 		status := channel.ChannelInfo.MultiKeyStatusList[s.lockedKeyIndex]
 		keyEnabled = s.lockedKeyIndex >= 0 && s.lockedKeyIndex < len(keys) && keys[s.lockedKeyIndex] == s.lockedKey && (status == 0 || status == common.ChannelStatusEnabled)
+		if keyEnabled {
+			_, keyCooling := service.LoadMultiKeyTemporaryDisableInfo(channel)[s.lockedKeyIndex]
+			keyEnabled = !keyCooling
+		}
 	}
 	if !keyEnabled {
 		return types.NewErrorWithStatusCode(errors.New("the upstream connection credential is no longer enabled"), types.ErrorCodeAccessDenied, http.StatusForbidden, types.ErrOptionWithSkipRetry())

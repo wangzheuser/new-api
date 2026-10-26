@@ -57,10 +57,19 @@ func HandleMultiKeyFailure(channel *model.Channel, keyIndex int, usingKey string
 	}
 	// A request must not resurrect a deleted channel or overwrite a later manual decision.
 	if model.DB == nil {
+		if decision.Scope == multiKeyScopeChannel {
+			RecordChannelScopedFailureAsync(channel, err)
+		}
 		return action, true
 	}
 	latest, loadErr := model.GetChannelById(channel.Id, true)
-	if loadErr != nil || latest == nil || !latest.ChannelInfo.IsMultiKey || latest.Status == common.ChannelStatusManuallyDisabled {
+	if loadErr != nil || latest == nil {
+		if decision.Scope == multiKeyScopeChannel {
+			RecordChannelScopedFailureAsync(channel, err)
+		}
+		return action, true
+	}
+	if !latest.ChannelInfo.IsMultiKey || latest.Status == common.ChannelStatusManuallyDisabled {
 		return action, true
 	}
 	keys := latest.GetKeys()
@@ -73,6 +82,9 @@ func HandleMultiKeyFailure(channel *model.Channel, keyIndex int, usingKey string
 	}
 	if usingKey == "" || keyIndex < 0 || keyIndex >= len(keys) || keys[keyIndex] != usingKey {
 		common.SysLog(fmt.Sprintf("skip stale multi-key failure update: channel_id=%d, key_index=%d", channel.Id, keyIndex))
+		if decision.Scope == multiKeyScopeChannel {
+			RecordChannelScopedFailureAsync(channel, err)
+		}
 		return action, true
 	}
 

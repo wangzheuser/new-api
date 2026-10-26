@@ -799,6 +799,9 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		if err != nil {
 			return nil, types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 		}
+		if service.IsChannelRoutingBlocked(channel, modelName) {
+			return nil, types.NewError(errors.New("channel is temporarily disabled"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		}
 		service.RequestPolicy(c).BeginAttempt(channel, info.UsingGroup)
 		return channel, nil
 	}
@@ -815,6 +818,9 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 			AutoBan: &autoBanInt,
 		}
 		if snapshot, ok := common.GetContextKeyType[*model.Channel](c, constant.ContextKeyChannelSnapshot); ok && snapshot != nil && model.DB == nil {
+			if service.IsChannelRoutingBlocked(snapshot, modelName) {
+				return nil, types.NewError(errors.New("channel is temporarily disabled"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+			}
 			service.RequestPolicy(c).BeginAttempt(snapshot, info.UsingGroup)
 			return snapshot, nil
 		}
@@ -826,10 +832,16 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 				// request when the backing DB is already closing (tests and shutdown
 				// races); do not turn a selected channel into a routing failure.
 				if snapshot, ok := common.GetContextKeyType[*model.Channel](c, constant.ContextKeyChannelSnapshot); ok && snapshot != nil {
+					if service.IsChannelRoutingBlocked(snapshot, modelName) {
+						return nil, types.NewError(errors.New("channel is temporarily disabled"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+					}
 					service.RequestPolicy(c).BeginAttempt(snapshot, info.UsingGroup)
 					return snapshot, nil
 				}
 				return nil, types.NewError(loadErr, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+			}
+			if selected != nil && service.IsChannelRoutingBlocked(selected, modelName) {
+				return nil, types.NewError(errors.New("channel is temporarily disabled"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 			}
 			if selected != nil && selected.ChannelInfo.IsMultiKey {
 				if retryParam.GetRetry() > 0 {
@@ -844,12 +856,35 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		service.RequestPolicy(c).BeginAttempt(channel, info.UsingGroup)
 		return channel, nil
 	}
-	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
-	if err != nil {
-		return nil, types.NewError(errors.New(i18n.T(c, i18n.MsgRelayRetryGetChannelFailed, map[string]any{"Group": selectGroup, "Model": info.OriginModelName, "Error": err.Error()})), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+	var channel *model.Channel
+	var selectGroup string
+	preferredChannelID := retryParam.PreferredChannelID
+	retryParam.PreferredChannelID = 0
+	if preferredChannelID > 0 {
+		preferred, preferredErr := model.CacheGetChannel(preferredChannelID)
+		if preferredErr == nil && preferred != nil && !service.IsChannelRoutingBlocked(preferred, modelName) {
+			channel = preferred
+			selectGroup = relayRetryGroup(info)
+		}
 	}
 	if channel == nil {
-		return nil, types.NewError(errors.New(i18n.T(c, i18n.MsgRelayRetryNoAvailableChannel, map[string]any{"Group": selectGroup, "Model": info.OriginModelName})), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		for {
+			var err error
+			channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(retryParam)
+			if err != nil {
+				return nil, types.NewError(errors.New(i18n.T(c, i18n.MsgRelayRetryGetChannelFailed, map[string]any{"Group": selectGroup, "Model": info.OriginModelName, "Error": err.Error()})), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+			}
+			if channel == nil {
+				return nil, types.NewError(errors.New(i18n.T(c, i18n.MsgRelayRetryNoAvailableChannel, map[string]any{"Group": selectGroup, "Model": info.OriginModelName})), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+			}
+			if !service.IsChannelRoutingBlocked(channel, modelName) {
+				break
+			}
+			if retryParam.ExcludedChannelIDs == nil {
+				retryParam.ExcludedChannelIDs = make(map[int]struct{})
+			}
+			retryParam.ExcludedChannelIDs[channel.Id] = struct{}{}
+		}
 	}
 
 	info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
@@ -857,6 +892,16 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	service.RequestPolicy(c).BeginAttempt(channel, selectGroup)
 	newAPIError := middleware.SetupContextForSelectedChannelWithKeyExclusions(c, channel, modelName, retryParam.ExcludedChannelKeys(channel.Id))
 	if newAPIError != nil {
+		if preferredChannelID > 0 && newAPIError.GetErrorCode() == types.ErrorCodeChannelNoAvailableKey {
+			if _, pinned := c.Get("specific_channel_id"); pinned {
+				return nil, newAPIError
+			}
+			if retryParam.ExcludedChannelIDs == nil {
+				retryParam.ExcludedChannelIDs = make(map[int]struct{})
+			}
+			retryParam.ExcludedChannelIDs[channel.Id] = struct{}{}
+			return getChannel(c, info, retryParam)
+		}
 		return nil, newAPIError
 	}
 	if modalityErr := helper.ValidateRequestInputModalities(c, modelName, info.Request); modalityErr != nil {
@@ -1104,6 +1149,14 @@ func executeTaskSubmissionWith(
 				break
 			}
 		}
+		if service.IsChannelRoutingBlocked(channel, relayInfo.GetRoutingModelName()) {
+			taskErr = service.TaskErrorWrapperLocal(
+				errors.New("channel is temporarily disabled"),
+				"channel_temporarily_disabled",
+				http.StatusServiceUnavailable,
+			)
+			break
+		}
 		diagnostics.attempt(retryParam.GetRetry()+1, channel, relayInfo.LockedChannel != nil)
 
 		service.AppendUsedChannel(c, channel.Id)
@@ -1136,11 +1189,45 @@ func executeTaskSubmissionWith(
 		decision := decideTaskRetry(c, taskErr, common.RetryTimes-retryParam.GetRetry())
 		service.RecordPolicyFailure(c, channel.Id, taskAPIError, decision)
 		if !taskErr.LocalError {
-			processChannelError(c,
-				*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey,
-					common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()),
+			usingKey := common.GetContextKeyString(c, constant.ContextKeyChannelKey)
+			if _, real := taskAPIError.GetUpstreamStatusCode(); real && channel.ChannelInfo.IsMultiKey {
+				retryParam.ExcludeChannelKey(channel.Id, usingKey)
+			}
+			keyAction, keyHandled := service.HandleMultiKeyFailure(
+				channel,
+				common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex),
+				usingKey,
 				taskAPIError,
-				relayInfo)
+				common.GetContextKeyString(c, constant.ContextKeyChannelHealthModel),
+			)
+			if keyHandled {
+				channelScoped := service.IsMultiKeyFailureChannelScoped(
+					channel,
+					common.GetContextKeyString(c, constant.ContextKeyChannelHealthModel),
+					taskAPIError,
+				)
+				retryParam.ExcludeChannelKey(channel.Id, usingKey)
+				if channelScoped {
+					if retryParam.ExcludedChannelIDs == nil {
+						retryParam.ExcludedChannelIDs = make(map[int]struct{})
+					}
+					retryParam.ExcludedChannelIDs[channel.Id] = struct{}{}
+				} else {
+					retryParam.PreferredChannelID = channel.Id
+				}
+				logger.LogInfo(c, fmt.Sprintf("task multi-key failure handled: channel_id=%d, key_index=%d, action=%s", channel.Id, common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex), keyAction))
+			} else {
+				service.RecordChannelUpstreamErrorAsync(
+					channel,
+					taskAPIError,
+					usingKey,
+					common.GetContextKeyString(c, constant.ContextKeyChannelHealthModel),
+				)
+				processChannelError(c,
+					*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, usingKey, channel.GetAutoBan()),
+					taskAPIError,
+					relayInfo)
+			}
 		}
 
 		willRetry := decision.Action == "retry"
@@ -1356,6 +1443,12 @@ func respondTaskError(c *gin.Context, taskErr *taskdto.TaskError) {
 // taskSubmissionAPIError adapts a task error for the shared relay error paths.
 // TaskError.Error is nil for many local rejections, so fall back to the message.
 func taskSubmissionAPIError(taskErr *taskdto.TaskError) *types.NewAPIError {
+	if taskErr == nil {
+		return nil
+	}
+	if taskErr.UpstreamError != nil {
+		return taskErr.UpstreamError
+	}
 	err := taskErr.Error
 	if err == nil {
 		err = errors.New(taskErr.Message)

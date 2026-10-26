@@ -595,7 +595,21 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 				http.StatusTooManyRequests,
 				types.ErrOptionWithUpstreamStatusCode(http.StatusTooManyRequests),
 			)
-			service.RecordChannelUpstreamErrorAsync(channel, apiErr, "", "")
+			usingKey := common.GetContextKeyString(c, constant.ContextKeyChannelKey)
+			if channel.ChannelInfo.IsMultiKey {
+				_, handled := service.HandleMultiKeyFailure(
+					channel,
+					common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex),
+					usingKey,
+					apiErr,
+					common.GetContextKeyString(c, constant.ContextKeyChannelHealthModel),
+				)
+				if !handled {
+					service.RecordChannelUpstreamErrorAsync(channel, apiErr, usingKey, "")
+				}
+			} else {
+				service.RecordChannelUpstreamErrorAsync(channel, apiErr, usingKey, "")
+			}
 		}
 	}
 	if midjResponse.Code != 1 && midjResponse.Code != 21 && midjResponse.Code != 22 {

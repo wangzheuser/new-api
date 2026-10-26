@@ -201,3 +201,48 @@ func TestCacheGetRandomSatisfiedChannelWithRouteReturnsNoneWhenAllChannelsAreTem
 	assert.Nil(t, selected)
 	assert.Nil(t, plan)
 }
+
+func TestSelectChannelForRequestSkipsTemporarilyDisabledChannel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupChannelSelectProtocolTestDB(t)
+	blocked := createProtocolSelectionChannel(t, db, "blocked", 10, constant.EndpointTypeOpenAIResponse)
+	available := createProtocolSelectionChannel(t, db, "available", 1, constant.EndpointTypeOpenAIResponse)
+
+	server, err := miniredis.Run()
+	require.NoError(t, err)
+	t.Cleanup(server.Close)
+	previousClient := common.RDB
+	previousRedisEnabled := common.RedisEnabled
+	previousAutoDisableEnabled := common.AutomaticDisableChannelEnabled
+	common.RDB = redis.NewClient(&redis.Options{Addr: server.Addr()})
+	common.RedisEnabled = true
+	common.AutomaticDisableChannelEnabled = true
+	t.Cleanup(func() {
+		_ = common.RDB.Close()
+		common.RDB = previousClient
+		common.RedisEnabled = previousRedisEnabled
+		common.AutomaticDisableChannelEnabled = previousAutoDisableEnabled
+	})
+	require.NoError(t, common.RedisSet(channelAutoDisableBlockedKey(blocked.Id), `{}`, time.Minute))
+
+	for _, memoryCacheEnabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("memory_cache_%t", memoryCacheEnabled), func(t *testing.T) {
+			common.MemoryCacheEnabled = memoryCacheEnabled
+			if memoryCacheEnabled {
+				model.InitChannelCache()
+			}
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			selected, _, selectErr := SelectChannelForRequest(ctx, "MODEL_X", &RetryParam{
+				Ctx:         ctx,
+				TokenGroup:  "vip",
+				ModelName:   "MODEL_X",
+				RequestPath: "/v1/responses",
+				Retry:       common.GetPointer(0),
+			})
+			require.Nil(t, selectErr)
+			require.NotNil(t, selected)
+			assert.Equal(t, available.Id, selected.Id)
+		})
+	}
+}

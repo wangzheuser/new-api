@@ -271,6 +271,9 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 		if channel.Status != common.ChannelStatusEnabled {
 			return nil, "", pinnedChannelUnavailable(pin, http.StatusForbidden, i18n.MsgDistributorChannelDisabled)
 		}
+		if IsChannelRoutingBlocked(channel, modelName) {
+			return nil, "", pinnedChannelUnavailable(pin, http.StatusServiceUnavailable, i18n.MsgDistributorChannelDisabled)
+		}
 		if ok, kind := model.ChannelSatisfiesFilters(channel, modelName, constraints.Filters); !ok {
 			return nil, "", &ChannelSelectError{StatusCode: http.StatusBadRequest, Code: types.ErrorCode(kind), MessageID: i18n.MsgDistributorNoAvailableChannel, Params: map[string]any{"Group": common.GetContextKeyString(c, constant.ContextKeyUsingGroup), "Model": modelName}, FilterKind: kind, Channel: channel}
 		}
@@ -283,7 +286,8 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 	if retry.GetRetry() == 0 {
 		if preferredID, found := GetPreferredChannelByAffinity(c, modelName, usingGroup); found {
 			preferred, err := model.CacheGetChannel(preferredID)
-			usable := err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled
+			usable := err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
+				!IsChannelRoutingBlocked(preferred, modelName)
 			if usable {
 				usable, _ = model.ChannelSatisfiesFilters(preferred, modelName, constraints.Filters)
 			}
@@ -322,17 +326,26 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 		}
 	}
 	if channel == nil {
-		var err error
-		channel, selectGroup, err = CacheGetRandomSatisfiedChannel(retry)
-		if err != nil {
-			showGroup := usingGroup
-			if usingGroup == "auto" {
-				showGroup = fmt.Sprintf("auto(%s)", selectGroup)
+		for {
+			var err error
+			channel, selectGroup, err = CacheGetRandomSatisfiedChannel(retry)
+			if err != nil {
+				showGroup := usingGroup
+				if usingGroup == "auto" {
+					showGroup = fmt.Sprintf("auto(%s)", selectGroup)
+				}
+				return nil, selectGroup, &ChannelSelectError{StatusCode: http.StatusServiceUnavailable, Code: types.ErrorCodeModelNotFound, MessageID: i18n.MsgDistributorGetChannelFailed, Params: map[string]any{"Group": showGroup, "Model": modelName, "Error": err.Error()}}
 			}
-			return nil, selectGroup, &ChannelSelectError{StatusCode: http.StatusServiceUnavailable, Code: types.ErrorCodeModelNotFound, MessageID: i18n.MsgDistributorGetChannelFailed, Params: map[string]any{"Group": showGroup, "Model": modelName, "Error": err.Error()}}
-		}
-		if channel == nil {
-			return nil, selectGroup, &ChannelSelectError{StatusCode: http.StatusServiceUnavailable, Code: types.ErrorCodeModelNotFound, MessageID: i18n.MsgDistributorNoAvailableChannel, Params: map[string]any{"Group": usingGroup, "Model": modelName}, NoAvailableChannel: true}
+			if channel == nil {
+				return nil, selectGroup, &ChannelSelectError{StatusCode: http.StatusServiceUnavailable, Code: types.ErrorCodeModelNotFound, MessageID: i18n.MsgDistributorNoAvailableChannel, Params: map[string]any{"Group": usingGroup, "Model": modelName}, NoAvailableChannel: true}
+			}
+			if !IsChannelRoutingBlocked(channel, modelName) {
+				break
+			}
+			if retry.ExcludedChannelIDs == nil {
+				retry.ExcludedChannelIDs = make(map[int]struct{})
+			}
+			retry.ExcludedChannelIDs[channel.Id] = struct{}{}
 		}
 	}
 	if ok, kind := model.ChannelSatisfiesFilters(channel, modelName, constraints.Filters); !ok {
