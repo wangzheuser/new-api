@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -72,4 +73,22 @@ func TestLegacyClaudeHeaderOnlyRetry(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestShouldRetryConfigured504BeforeStreamPayload(t *testing.T) {
+	previous := operation_setting.AutomaticRetryStatusCodeRanges
+	operation_setting.AutomaticRetryStatusCodeRanges = []operation_setting.StatusCodeRange{{Start: 500, End: 599}}
+	t.Cleanup(func() {
+		operation_setting.AutomaticRetryStatusCodeRanges = previous
+	})
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	status := relaycommon.NewStreamStatus()
+	status.MarkAppHTTPCommitted()
+	status.SetRetryCommitPolicy(relaycommon.StreamRetryCommitPolicyPayload)
+	info := &relaycommon.RelayInfo{IsStream: true, StreamStatus: status}
+	err := types.NewOpenAIError(errors.New("stream ended abnormally: timeout"), types.ErrorCodeBadResponse, http.StatusGatewayTimeout)
+
+	assert.True(t, shouldRetry(ctx, info, err, 1))
 }

@@ -451,6 +451,26 @@ func TestChannelAffinityHitCodexTemplatePassHeadersEffective(t *testing.T) {
 	require.False(t, exists)
 }
 
+func TestBuiltInCliAffinityRulesPreferRetryFailover(t *testing.T) {
+	setting := operation_setting.GetChannelAffinitySetting()
+	require.NotNil(t, setting)
+
+	rules := map[string]operation_setting.ChannelAffinityRule{}
+	for _, rule := range setting.Rules {
+		rules[rule.Name] = rule
+	}
+
+	for _, name := range []string{"codex cli trace", "claude cli trace"} {
+		rule, ok := rules[name]
+		require.True(t, ok, "missing built-in rule %q", name)
+		assert.Equal(t, "prefer", rule.SessionMode, name)
+		assert.False(t, rule.SkipRetryOnFailure, name)
+		mode, source := EffectiveSessionMode(setting, rule)
+		assert.Equal(t, "prefer", mode, name)
+		assert.Equal(t, "session_rule", source, name)
+	}
+}
+
 func TestMidjourneyPolicyAcceptance(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
