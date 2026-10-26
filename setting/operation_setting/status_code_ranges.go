@@ -28,6 +28,8 @@ var AutomaticRetryStatusCodeRanges = []StatusCodeRange{
 	{Start: 525, End: 599},
 }
 
+// Task submissions keep these statuses non-retryable because the upstream may
+// have accepted the task even when its response timed out.
 var alwaysSkipRetryStatusCodes = map[int]struct{}{
 	504: {},
 	524: {},
@@ -79,9 +81,6 @@ func IsAlwaysSkipRetryCode(errorCode types.ErrorCode) bool {
 }
 
 func ShouldRetryByStatusCode(code int) bool {
-	if IsAlwaysSkipRetryStatusCode(code) {
-		return false
-	}
 	return shouldMatchStatusCodeRanges(AutomaticRetryStatusCodeRanges, code)
 }
 

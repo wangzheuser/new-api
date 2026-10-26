@@ -49,6 +49,25 @@ func TestStreamStatusErrorKeepsRetryForPlannedRouteBeforeBusinessPayload(t *test
 	assert.False(t, types.IsSkipRetryError(relayErr), "planned routes retry until a business event is committed")
 }
 
+func TestStreamStatusErrorKeepsRetryForTimeoutBeforeBusinessPayload(t *testing.T) {
+	t.Parallel()
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	ctx.Writer.WriteHeader(http.StatusOK)
+	status := relaycommon.NewStreamStatus()
+	status.MarkAppHTTPCommitted()
+	status.SetRetryCommitPolicy(relaycommon.StreamRetryCommitPolicyPayload)
+	status.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
+	info := &relaycommon.RelayInfo{IsStream: true, StreamStatus: status}
+
+	relayErr := StreamStatusError(ctx, info)
+
+	require.NotNil(t, relayErr)
+	assert.Equal(t, http.StatusGatewayTimeout, relayErr.StatusCode)
+	assert.False(t, types.IsSkipRetryError(relayErr), "a timeout before business payload is safe to retry")
+}
+
 func TestStreamStatusErrorStopsRetryAfterBusinessPayload(t *testing.T) {
 	t.Parallel()
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
