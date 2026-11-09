@@ -88,6 +88,7 @@ export const channelSchema = z.object({
       model: z.string().optional(),
       status_code: z.number().optional(),
       reason: z.string().optional(),
+      mechanism: z.string().optional(),
     })
     .optional(),
 })

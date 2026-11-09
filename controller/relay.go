@@ -824,7 +824,7 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 			service.RequestPolicy(c).BeginAttempt(snapshot, info.UsingGroup)
 			return snapshot, nil
 		}
-		// Reload middleware-selected multi-key channels so failure handling sees key state.
+		// Reload the selected channel so health handling sees its settings and key state.
 		if channel.Id > 0 {
 			selected, loadErr := model.GetChannelById(channel.Id, true)
 			if loadErr != nil {
@@ -843,8 +843,8 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 			if selected != nil && service.IsChannelRoutingBlocked(selected, modelName) {
 				return nil, types.NewError(errors.New("channel is temporarily disabled"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 			}
-			if selected != nil && selected.ChannelInfo.IsMultiKey {
-				if retryParam.GetRetry() > 0 {
+			if selected != nil {
+				if selected.ChannelInfo.IsMultiKey && retryParam.GetRetry() > 0 {
 					if setupErr := middleware.SetupContextForSelectedChannelWithKeyExclusions(c, selected, modelName, retryParam.ExcludedChannelKeys(channel.Id)); setupErr != nil {
 						return nil, setupErr
 					}

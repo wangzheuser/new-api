@@ -78,6 +78,7 @@ import {
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
 import type { Channel } from '../types'
 import { ChannelRowActionsLayoutContext } from './channel-row-actions-context'
+import { ChannelTemporaryDisableDetails } from './channel-temporary-disable-details'
 import { useChannels } from './channels-provider'
 import { DataTableRowActions } from './data-table-row-actions'
 import { DataTableTagRowActions } from './data-table-tag-row-actions'
@@ -883,31 +884,7 @@ export function useChannelsColumns(
                   </TooltipTrigger>
                   <TooltipContent side='top' className='max-w-sm'>
                     <div className='space-y-1.5 text-xs'>
-                      <div>
-                        {t('Disabled until:')}{' '}
-                        {formatTimestampToDate(temporaryDisable.disabled_until)}
-                      </div>
-                      <div>
-                        {t('Recent upstream sample size:')}{' '}
-                        {temporaryDisable.sample_size}
-                      </div>
-                      <div>
-                        {t('Minimum health sample size:')}{' '}
-                        {temporaryDisable.minimum_sample_size}
-                      </div>
-                      <div>
-                        {t('Upstream responses:')} {temporaryDisable.requests}
-                      </div>
-                      <div>
-                        {t('Matching errors:')} {temporaryDisable.errors}
-                      </div>
-                      <div>
-                        {t('Error rate:')}{' '}
-                        {temporaryDisable.error_rate_percent.toFixed(1)}%
-                      </div>
-                      <div>
-                        {t('Status codes:')} {temporaryDisable.status_codes}
-                      </div>
+                      <ChannelTemporaryDisableDetails info={temporaryDisable} />
                       <Button
                         type='button'
                         variant='outline'

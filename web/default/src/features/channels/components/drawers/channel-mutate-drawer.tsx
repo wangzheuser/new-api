@@ -4626,6 +4626,11 @@ export function ChannelMutateDrawer({
                                         }
                                       />
                                     </FormControl>
+                                    <FormDescription>
+                                      {t(
+                                        'Quota and rate-limit errors use this as the base cooldown. Repeated failures and upstream recovery hints may extend it.'
+                                      )}
+                                    </FormDescription>
                                     <FormMessage />
                                   </FormItem>
                                 )}
