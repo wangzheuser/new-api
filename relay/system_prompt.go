@@ -194,7 +194,7 @@ func ApplySystemPromptForRequest(c *gin.Context, info *relaycommon.RelayInfo, re
 	}
 	bypassReason := ""
 	switch {
-	case model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled:
+	case (model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled) && textRouteAllowsPassThrough(info):
 		bypassReason = "pass_through"
 	case strings.TrimSpace(systemPrompt) == "":
 		bypassReason = "not_matched"

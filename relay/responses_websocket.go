@@ -702,6 +702,11 @@ func buildResponsesWSCreatePayload(c *gin.Context, info *relaycommon.RelayInfo, 
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
 	}
+	if info.ValidateInputPolicyBody != nil {
+		if err := info.ValidateInputPolicyBody(jsonData); err != nil {
+			return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+	}
 	event, err := buildResponsesWSCreateEvent(jsonData, generate, streamID)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())

@@ -1,12 +1,18 @@
 package channel
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptrace"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -16,11 +22,13 @@ import (
 	"github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"golang.org/x/net/proxy"
 )
 
 // ApplyUpstreamBodyMetadata restores metadata that net/http cannot infer from
@@ -406,7 +414,22 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		targetHeader.Set(key, value)
 	}
 	targetHeader.Set("Content-Type", c.Request.Header.Get("Content-Type"))
-	targetConn, resp, err := websocket.DefaultDialer.DialContext(c.Request.Context(), fullRequestURL, targetHeader)
+	dialer, err := channelWebSocketDialer(info.ChannelSetting)
+	if err != nil {
+		return nil, err
+	}
+	var stopCancellation func() bool
+	dialContext := httptrace.WithClientTrace(c.Request.Context(), &httptrace.ClientTrace{
+		GotConn: func(connection httptrace.GotConnInfo) {
+			if connection.Conn != nil {
+				stopCancellation = context.AfterFunc(c.Request.Context(), func() { _ = connection.Conn.Close() })
+			}
+		},
+	})
+	targetConn, resp, err := dialer.DialContext(dialContext, fullRequestURL, targetHeader)
+	if stopCancellation != nil {
+		stopCancellation()
+	}
 	if err != nil {
 		options := []types.NewAPIErrorOptions{types.ErrOptionWithHideErrMsg("upstream websocket handshake failed")}
 		if resp != nil {
@@ -420,6 +443,95 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		return nil, types.NewError(fmt.Errorf("dial failed to %s: %w", common.SanitizeURLForLog(fullRequestURL), err), types.ErrorCodeDoRequestFailed, options...)
 	}
 	return targetConn, nil
+}
+
+// channelWebSocketDialer keeps proxy and TLS policy local to this channel connection.
+func channelWebSocketDialer(settings dto.ChannelSettings) (*websocket.Dialer, error) {
+	dialer := *websocket.DefaultDialer
+	if common2.TLSInsecureSkipVerify || settings.TLSInsecureSkipVerify {
+		if dialer.TLSClientConfig == nil {
+			dialer.TLSClientConfig = common2.InsecureTLSConfig.Clone()
+		} else {
+			dialer.TLSClientConfig = dialer.TLSClientConfig.Clone()
+			dialer.TLSClientConfig.InsecureSkipVerify = true
+		}
+	}
+	proxyURL, _, err := common2.ParseProxyURLRuntime(settings.Proxy)
+	if err != nil {
+		return nil, err
+	}
+	if proxyURL == nil {
+		return &dialer, nil
+	}
+
+	// An explicit channel proxy must never fall back to environment routing.
+	dialer.Proxy = nil
+	dialer.NetDialTLSContext = nil
+	forward := &net.Dialer{}
+	if proxyURL.Scheme == "socks5" || proxyURL.Scheme == "socks5h" {
+		proxyURL.Scheme = "socks5"
+		proxyDialer, err := proxy.FromURL(proxyURL, forward)
+		if err != nil {
+			return nil, err
+		}
+		contextDialer, ok := proxyDialer.(proxy.ContextDialer)
+		if !ok {
+			return nil, errors.New("channel SOCKS proxy does not support request cancellation")
+		}
+		dialer.NetDialContext = contextDialer.DialContext
+		return &dialer, nil
+	}
+
+	proxyAddress := proxyURL.Host
+	if proxyURL.Port() == "" {
+		port := "80"
+		if proxyURL.Scheme == "https" {
+			port = "443"
+		}
+		proxyAddress = net.JoinHostPort(proxyURL.Hostname(), port)
+	}
+	dialer.NetDialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		var conn net.Conn
+		var err error
+		if proxyURL.Scheme == "https" {
+			config := &tls.Config{}
+			if dialer.TLSClientConfig != nil {
+				config = dialer.TLSClientConfig.Clone()
+			}
+			config.ServerName = proxyURL.Hostname()
+			tlsDialer := tls.Dialer{NetDialer: forward, Config: config}
+			conn, err = tlsDialer.DialContext(ctx, network, proxyAddress)
+		} else {
+			conn, err = forward.DialContext(ctx, network, proxyAddress)
+		}
+		if err != nil {
+			return nil, err
+		}
+		stopCancellation := context.AfterFunc(ctx, func() { _ = conn.Close() })
+		connect := &http.Request{Method: http.MethodConnect, URL: &url.URL{Opaque: address}, Host: address, Header: make(http.Header)}
+		if user := proxyURL.User; user != nil {
+			password, _ := user.Password()
+			credentials := base64.StdEncoding.EncodeToString([]byte(user.Username() + ":" + password))
+			connect.Header.Set("Proxy-Authorization", "Basic "+credentials)
+		}
+		if err = connect.Write(conn); err == nil {
+			var response *http.Response
+			response, err = http.ReadResponse(bufio.NewReader(conn), connect)
+			if err == nil && response.StatusCode != http.StatusOK {
+				err = fmt.Errorf("channel proxy CONNECT rejected with status %d", response.StatusCode)
+			}
+		}
+		stopped := stopCancellation()
+		if err != nil || !stopped || ctx.Err() != nil {
+			_ = conn.Close()
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, err
+		}
+		return conn, nil
+	}
+	return &dialer, nil
 }
 
 // toWebSocketURL maps HTTP endpoints to WebSocket schemes for realtime upstreams.
@@ -446,15 +558,9 @@ func keepUpstreamRedirectResponse(_ *http.Request, _ []*http.Request) error {
 
 func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
 	common.WrapConversationUpstreamRequest(info, req)
-	var client *http.Client
-	var err error
-	if info.ChannelSetting.Proxy != "" {
-		client, err = service.NewProxyHttpClient(info.ChannelSetting.Proxy)
-		if err != nil {
-			return nil, fmt.Errorf("new proxy http client failed: %w", err)
-		}
-	} else {
-		client = service.GetHttpClient()
+	client, err := service.GetHttpClientWithProxySettings(info.ChannelSetting.Proxy, info.ChannelSetting)
+	if err != nil {
+		return nil, fmt.Errorf("channel http client failed: %w", err)
 	}
 	// Provider redirects are returned as upstream responses, without applying
 	// the generic fetch redirect validator.

@@ -65,8 +65,27 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		}
 	}
 
+	passThroughRequest := (model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled) && textRouteAllowsPassThrough(info)
+	if policyErr := prepareTextInputPolicies(c, info, request, passThroughRequest); policyErr != nil {
+		return policyErr
+	}
+	if isUnconvertedProtocolRoute(info) || isConvertedProtocolRoute(info) {
+		var usage *dto.Usage
+		var routeErr *types.NewAPIError
+		if isConvertedProtocolRoute(info) {
+			usage, routeErr = executeConvertedTextRoute(c, info, adaptor, request)
+		} else {
+			usage, routeErr = executeNativeTextRoute(c, info, adaptor, request, passThroughRequest)
+		}
+		if routeErr != nil {
+			return routeErr
+		}
+		service.PostTextConsumeQuota(c, info, usage, nil)
+		return nil
+	}
+
 	var requestBody io.Reader
-	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
+	if passThroughRequest {
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())

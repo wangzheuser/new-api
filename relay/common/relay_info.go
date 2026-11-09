@@ -584,6 +584,9 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 
 // resetAttemptState clears response and billing facts produced by the previous relay attempt.
 func (info *RelayInfo) resetAttemptState(c *gin.Context) {
+	info.FinalRequestRelayFormat = ""
+	info.RequestConversionChain = nil
+	info.InitRequestConversionChain()
 	// Prompt diagnostics describe only this attempt, including retries that bypass injection.
 	common.SetContextKey(c, constant.ContextKeySystemPromptApplied, false)
 	common.SetContextKey(c, constant.ContextKeySystemPromptOverride, false)

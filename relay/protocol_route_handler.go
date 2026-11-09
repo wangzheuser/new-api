@@ -184,7 +184,6 @@ func executeNativeTextRoute(c *gin.Context, info *relaycommon.RelayInfo, adaptor
 			return nil, types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
 		}
 		body = common.NewReplayableBodyReader(storage)
-		defer storage.Close()
 		if c.Request.ContentLength > 0 {
 			info.UpstreamRequestBodySize = c.Request.ContentLength
 		}

@@ -72,13 +72,45 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}
 	adaptor.Init(info)
+	passThroughGlobal := model_setting.GetGlobalSettings().PassThroughRequestEnabled
+	passThroughRequest := (passThroughGlobal || info.ChannelSetting.PassThroughBodyEnabled) && textRouteAllowsPassThrough(info)
 	if info.RelayMode == relayconstant.RelayModeChatCompletions {
 		if promptErr := ApplySystemPromptForRequest(c, info, request); promptErr != nil {
 			return promptErr
 		}
+		if policyErr := prepareTextInputPolicies(c, info, request, passThroughRequest); policyErr != nil {
+			return policyErr
+		}
 	}
 
-	passThroughGlobal := model_setting.GetGlobalSettings().PassThroughRequestEnabled
+	if isUnconvertedProtocolRoute(info) || isConvertedProtocolRoute(info) {
+		var usage *dto.Usage
+		var routeErr *types.NewAPIError
+		if isConvertedProtocolRoute(info) {
+			usage, routeErr = executeConvertedTextRoute(c, info, adaptor, request)
+		} else {
+			nativeRequest := any(request)
+			if !passThroughRequest {
+				nativeRequest, err = adaptor.ConvertOpenAIRequest(c, info, request)
+				if err != nil {
+					return newConvertRequestFailedError(c, info, err)
+				}
+			}
+			usage, routeErr = executeNativeTextRoute(c, info, adaptor, nativeRequest, passThroughRequest)
+		}
+		if routeErr != nil {
+			return routeErr
+		}
+		containAudioTokens := usage.CompletionTokenDetails.AudioTokens > 0 || usage.PromptTokensDetails.AudioTokens > 0
+		containsAudioRatios := ratio_setting.ContainsAudioRatio(info.OriginModelName) || ratio_setting.ContainsAudioCompletionRatio(info.OriginModelName)
+		if containAudioTokens && containsAudioRatios {
+			service.PostAudioConsumeQuota(c, info, usage, nil)
+		} else {
+			service.PostTextConsumeQuota(c, info, usage, nil)
+		}
+		return nil
+	}
+
 	if info.RelayMode == relayconstant.RelayModeChatCompletions &&
 		!passThroughGlobal &&
 		!info.ChannelSetting.PassThroughBodyEnabled &&
@@ -101,7 +133,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 
 	var requestBody io.Reader
 
-	if passThroughGlobal || info.ChannelSetting.PassThroughBodyEnabled {
+	if passThroughRequest {
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())

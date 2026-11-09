@@ -46,7 +46,33 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		)
 	}
 
-	adaptor, requestBody, closer, apiErr := PrepareResponsesRequest(c, info, responsesReq)
+	adaptor, request, passThrough, apiErr := prepareResponsesAttempt(c, info, responsesReq)
+	if apiErr != nil {
+		return apiErr
+	}
+	if isUnconvertedProtocolRoute(info) || isConvertedProtocolRoute(info) {
+		var usage *dto.Usage
+		var routeErr *types.NewAPIError
+		if isConvertedProtocolRoute(info) {
+			usage, routeErr = executeConvertedTextRoute(c, info, adaptor, request)
+		} else {
+			nativeRequest := any(request)
+			if !passThrough {
+				var err error
+				nativeRequest, err = adaptor.ConvertOpenAIResponsesRequest(c, info, *request)
+				if err != nil {
+					return newConvertRequestFailedError(c, info, err)
+				}
+			}
+			usage, routeErr = executeNativeTextRoute(c, info, adaptor, nativeRequest, passThrough)
+		}
+		if routeErr != nil {
+			return routeErr
+		}
+		ConsumeResponsesQuota(c, info, usage)
+		return nil
+	}
+	requestBody, closer, apiErr := serializeResponsesRequest(c, info, adaptor, request, passThrough)
 	if apiErr != nil {
 		return apiErr
 	}

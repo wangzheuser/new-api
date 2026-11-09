@@ -88,7 +88,7 @@ func uploadDifyFile(c *gin.Context, info *relaycommon.RelayInfo, user string, me
 		writer.Close()
 
 		// Create HTTP request
-		req, err := http.NewRequest("POST", uploadUrl, body)
+		req, err := http.NewRequestWithContext(c.Request.Context(), "POST", uploadUrl, body)
 		if err != nil {
 			common.SysLog(common.LogText("failed to create request: %s", err.Error()))
 			return nil
@@ -98,7 +98,11 @@ func uploadDifyFile(c *gin.Context, info *relaycommon.RelayInfo, user string, me
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", info.ApiKey))
 
 		// Send request
-		client := service.GetHttpClient()
+		client, err := service.GetHttpClientWithProxySettings(info.ChannelSetting.Proxy, info.ChannelSetting)
+		if err != nil {
+			common.SysLog(common.LogText("failed to send request: %s", err.Error()))
+			return nil
+		}
 		resp, err := client.Do(req)
 		if err != nil {
 			common.SysLog(common.LogText("failed to send request: %s", err.Error()))
