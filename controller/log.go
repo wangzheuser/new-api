@@ -27,13 +27,14 @@ func GetAllLogs(c *gin.Context) {
 	group := c.Query("group")
 	requestId := c.Query("request_id")
 	upstreamRequestId := c.Query("upstream_request_id")
+	retryOnly, _ := strconv.ParseBool(c.Query("retry_only"))
 	latestPerRequest := true
 	if value, exists := c.GetQuery("latest_per_request"); exists {
 		if parsed, parseErr := strconv.ParseBool(value); parseErr == nil {
 			latestPerRequest = parsed
 		}
 	}
-	logs, total, err := model.GetAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, group, requestId, upstreamRequestId, latestPerRequest)
+	logs, total, err := model.GetAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, group, requestId, upstreamRequestId, latestPerRequest, retryOnly)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -154,7 +155,8 @@ func GetLogsStat(c *gin.Context) {
 	group := c.Query("group")
 	requestId := c.Query("request_id")
 	upstreamRequestId := c.Query("upstream_request_id")
-	stat, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group, requestId, upstreamRequestId, true)
+	retryOnly, _ := strconv.ParseBool(c.Query("retry_only"))
+	stat, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group, requestId, upstreamRequestId, true, retryOnly)
 	if err != nil {
 		common.ApiError(c, err)
 		return

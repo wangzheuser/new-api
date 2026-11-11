@@ -29,6 +29,24 @@ func applyExplicitLogTextFilter(tx *gorm.DB, column string, value string) (*gorm
 	return tx.Where(column+" = ?", value), nil
 }
 
+func applyRetryOnlyLogFilter(tx *gorm.DB, column string) *gorm.DB {
+	position := "instr"
+	switch common.LogDatabaseType() {
+	case common.DatabaseTypePostgreSQL:
+		position = "strpos"
+	case common.DatabaseTypeClickHouse:
+		position = "position"
+	}
+	// Channel IDs are serialized as a compact array; only a comma before its closing bracket counts.
+	// shortcut: this scans the filtered log range; use a persisted retry marker if log volume makes it slow.
+	const channelArrayPrefix = `"use_channel":[`
+	start := fmt.Sprintf("%s(%s, '%s')", position, column, channelArrayPrefix)
+	channels := fmt.Sprintf("substr(%s, %s + %d)", column, start, len(channelArrayPrefix))
+	comma := fmt.Sprintf("%s(%s, ',')", position, channels)
+	end := fmt.Sprintf("%s(%s, ']')", position, channels)
+	return tx.Where(start + " > 0 AND " + comma + " > 0 AND " + comma + " < " + end)
+}
+
 // keepLatestRequestLogs keeps only the globally final, non-intermediate log for each non-empty request ID.
 func keepLatestRequestLogs(tx *gorm.DB) *gorm.DB {
 	tx = tx.Where("(logs.is_intermediate = ? OR logs.is_intermediate IS NULL)", false)
@@ -575,8 +593,12 @@ func countLogsUpToLimit(tx *gorm.DB) (int64, error) {
 
 func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string, optional ...any) (logs []*Log, total int64, err error) {
 	latestPerRequest := false
+	retryOnly := false
 	if len(optional) > 0 {
 		latestPerRequest, _ = optional[0].(bool)
+	}
+	if len(optional) > 1 {
+		retryOnly, _ = optional[1].(bool)
 	}
 	tx := LOG_DB.Model(&Log{})
 	if startTimestamp != 0 {
@@ -590,6 +612,9 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 	}
 	if latestPerRequest {
 		tx = keepLatestRequestLogs(tx)
+	}
+	if retryOnly {
+		tx = applyRetryOnlyLogFilter(tx, "logs.other")
 	}
 	if logType != LogTypeUnknown {
 		tx = tx.Where("logs.type = ?", logType)
@@ -742,11 +767,12 @@ type Stat struct {
 }
 
 // SumUsedQuota returns usage rates and optionally the administrator-only range breakdown.
-func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string, requestId string, upstreamRequestId string, includeTokenBreakdown bool) (stat Stat, err error) {
-	rangeColumns := "COALESCE(sum(quota), 0) quota"
+func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string, requestId string, upstreamRequestId string, includeTokenBreakdown bool, optional ...bool) (stat Stat, err error) {
+	retryOnly := len(optional) > 0 && optional[0]
+	rangeColumns := "COALESCE(sum(logs.quota), 0) quota"
 	if includeTokenBreakdown {
 		// 管理员明细随现有范围扫描一次聚合，避免额外查询和 JSON 解析。
-		rangeColumns += ", count(*) request_count, COALESCE(sum(CASE WHEN input_tokens = 0 AND cache_creation_tokens = 0 AND cache_read_tokens = 0 THEN prompt_tokens ELSE input_tokens END), 0) input_tokens, COALESCE(sum(completion_tokens), 0) output_tokens, COALESCE(sum(cache_creation_tokens), 0) cache_creation_tokens, COALESCE(sum(cache_read_tokens), 0) cache_read_tokens"
+		rangeColumns += ", count(*) request_count, COALESCE(sum(CASE WHEN logs.input_tokens = 0 AND logs.cache_creation_tokens = 0 AND logs.cache_read_tokens = 0 THEN logs.prompt_tokens ELSE logs.input_tokens END), 0) input_tokens, COALESCE(sum(logs.completion_tokens), 0) output_tokens, COALESCE(sum(logs.cache_creation_tokens), 0) cache_creation_tokens, COALESCE(sum(logs.cache_read_tokens), 0) cache_read_tokens"
 	}
 	tx := LOG_DB.Table("logs").Select(rangeColumns)
 
@@ -790,6 +816,10 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	if group != "" {
 		tx = tx.Where(logGroupCol+" = ?", group)
 		rpmTpmQuery = rpmTpmQuery.Where(logGroupCol+" = ?", group)
+	}
+	if retryOnly {
+		tx = applyRetryOnlyLogFilter(tx, "other")
+		rpmTpmQuery = applyRetryOnlyLogFilter(rpmTpmQuery, "other")
 	}
 
 	tx = tx.Where("type = ?", LogTypeConsume)

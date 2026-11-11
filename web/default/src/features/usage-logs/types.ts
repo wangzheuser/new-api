@@ -54,6 +54,7 @@ export interface CommonLogFilters extends CommonFilters {
   requestId?: string
   upstreamRequestId?: string
   latestPerRequest?: boolean
+  retryOnly?: boolean
 }
 
 /**
@@ -371,6 +372,7 @@ export interface GetLogsParams {
   request_id?: string
   upstream_request_id?: string
   latest_per_request?: boolean
+  retry_only?: boolean
 }
 
 export interface GetLogsResponse {
@@ -395,6 +397,7 @@ export interface GetLogStatsParams {
   group?: string
   request_id?: string
   upstream_request_id?: string
+  retry_only?: boolean
 }
 
 export interface GetLogStatsResponse {

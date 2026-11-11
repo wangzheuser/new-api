@@ -89,6 +89,8 @@ function buildSearchSourceKey(values: {
   requestId?: unknown
   upstreamRequestId?: unknown
   latestPerRequest?: unknown
+  retryOnly?: unknown
+  isAdmin?: boolean
   type?: unknown
 }) {
   return [
@@ -102,6 +104,8 @@ function buildSearchSourceKey(values: {
     values.requestId,
     values.upstreamRequestId,
     values.latestPerRequest,
+    values.retryOnly,
+    values.isAdmin,
     Array.isArray(values.type) ? values.type.join(',') : values.type,
   ]
     .map((value) => String(value ?? ''))
@@ -136,6 +140,8 @@ export function CommonLogsFilterBar<TData>(
       requestId: searchParams.requestId,
       upstreamRequestId: searchParams.upstreamRequestId,
       latestPerRequest: searchParams.latestPerRequest,
+      retryOnly: searchParams.retryOnly,
+      isAdmin,
       type: searchParams.type,
     }
     const filters: CommonLogFilters = {
@@ -151,6 +157,7 @@ export function CommonLogsFilterBar<TData>(
       requestId: searchParams.requestId || undefined,
       upstreamRequestId: searchParams.upstreamRequestId || undefined,
       latestPerRequest: searchParams.latestPerRequest !== false,
+      retryOnly: isAdmin && searchParams.retryOnly === true,
     }
     return {
       sourceKey: buildSearchSourceKey(sourceValues),
@@ -168,7 +175,9 @@ export function CommonLogsFilterBar<TData>(
     searchParams.requestId,
     searchParams.upstreamRequestId,
     searchParams.latestPerRequest,
+    searchParams.retryOnly,
     searchParams.type,
+    isAdmin,
   ])
   const [draft, setDraft] = useState<CommonLogDraft>(() => searchState)
   const activeDraft =
@@ -195,7 +204,10 @@ export function CommonLogsFilterBar<TData>(
   )
 
   const handleApply = useCallback(() => {
-    const filterParams = buildSearchParams(filters, 'common')
+    const filterParams = buildSearchParams(
+      { ...filters, retryOnly: isAdmin && filters.retryOnly },
+      'common'
+    )
     navigate({
       to: '/usage-logs/$section',
       params: { section: 'common' },
@@ -207,7 +219,7 @@ export function CommonLogsFilterBar<TData>(
     })
     queryClient.invalidateQueries({ queryKey: ['logs'] })
     queryClient.invalidateQueries({ queryKey: ['usage-logs-stats'] })
-  }, [filters, logType, navigate, queryClient])
+  }, [filters, isAdmin, logType, navigate, queryClient])
 
   const handleReset = useCallback(() => {
     const { start, end } = getDefaultTimeRange()
@@ -223,7 +235,7 @@ export function CommonLogsFilterBar<TData>(
       latestPerRequest: true,
     }
     setDraft({
-      sourceKey: buildSearchSourceKey(resetSearch),
+      sourceKey: buildSearchSourceKey({ ...resetSearch, isAdmin }),
       filters: resetFilters,
       logType: LOG_TYPE_ALL_VALUE,
     })
@@ -238,7 +250,7 @@ export function CommonLogsFilterBar<TData>(
     })
     queryClient.invalidateQueries({ queryKey: ['logs'] })
     queryClient.invalidateQueries({ queryKey: ['usage-logs-stats'] })
-  }, [navigate, queryClient])
+  }, [isAdmin, navigate, queryClient])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -253,7 +265,7 @@ export function CommonLogsFilterBar<TData>(
     !!filters.channel ||
     !!filters.requestId ||
     !!filters.upstreamRequestId ||
-    (isAdmin && filters.latestPerRequest === false)
+    (isAdmin && (filters.latestPerRequest === false || !!filters.retryOnly))
 
   const hasTypeFilter = logType !== LOG_TYPE_ALL_VALUE
   const hasAdditionalFilters =
@@ -266,6 +278,7 @@ export function CommonLogsFilterBar<TData>(
     filters.requestId,
     filters.upstreamRequestId,
     isAdmin && filters.latestPerRequest === false,
+    isAdmin && filters.retryOnly,
   ].filter(Boolean).length
   const sensitiveType = sensitiveVisible ? 'text' : 'password'
   const logTypeItems = useMemo(
@@ -432,6 +445,17 @@ export function CommonLogsFilterBar<TData>(
               }
             />
             {t('Latest result per request')}
+          </label>
+        </LogsFilterField>
+      )}
+      {isAdmin && (
+        <LogsFilterField className='flex items-center'>
+          <label className='flex cursor-pointer items-center gap-2 text-sm'>
+            <Switch
+              checked={!!filters.retryOnly}
+              onCheckedChange={(checked) => handleChange('retryOnly', checked)}
+            />
+            {t('Only show retried requests')}
           </label>
         </LogsFilterField>
       )}

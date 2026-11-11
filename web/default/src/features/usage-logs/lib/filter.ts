@@ -59,6 +59,7 @@ export function buildSearchParams(
           upstreamRequestId: commonFilters.upstreamRequestId,
         }),
         latestPerRequest: commonFilters.latestPerRequest !== false,
+        ...(commonFilters.retryOnly && { retryOnly: true }),
       }
     }
     case 'drawing': {

@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 
+import { buildSearchParams } from './filter'
 import { buildApiParams, buildBaseParams, getDefaultTimeRange } from './utils'
 
 const NativeDate = Date
@@ -101,6 +102,44 @@ describe('log request time parameters', () => {
           assert.equal(params.page_size, 20)
         })
       }
+    }
+  }
+})
+
+describe('retry-only log filters', () => {
+  it('preserves the enabled filter in URL search and clears it when reset', () => {
+    assert.equal(
+      buildSearchParams({ retryOnly: true }, 'common').retryOnly,
+      true
+    )
+    assert.equal(
+      Object.hasOwn(buildSearchParams({}, 'common'), 'retryOnly'),
+      false
+    )
+    assert.equal(
+      Object.hasOwn(
+        buildSearchParams({ retryOnly: false }, 'common'),
+        'retryOnly'
+      ),
+      false
+    )
+  })
+
+  for (const isAdmin of [false, true]) {
+    for (const retryOnly of [undefined, false, 'false', true]) {
+      it(`only sends retry_only for an enabled administrator filter (${isAdmin}, ${String(retryOnly)})`, () => {
+        const params = buildApiParams({
+          page: 1,
+          pageSize: 20,
+          searchParams: { retryOnly },
+          isAdmin,
+        })
+        if (isAdmin && retryOnly === true) {
+          assert.equal(params.retry_only, true)
+        } else {
+          assert.equal(Object.hasOwn(params, 'retry_only'), false)
+        }
+      })
     }
   }
 })

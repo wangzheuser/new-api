@@ -27,6 +27,7 @@ function stableStringify(obj) {
 
 const newKeys = {
   en: {
+    'Only show retried requests': 'Only show retried requests',
     'Global model system prompts': 'Global model system prompts',
     'Used when a channel has no model-specific system prompt.':
       'Used when a channel has no model-specific system prompt.',
@@ -113,6 +114,7 @@ const newKeys = {
     'registration code': 'registration code',
   },
   zh: {
+    'Only show retried requests': '仅显示重试请求',
     'Global model system prompts': '全局模型系统提示词',
     'Used when a channel has no model-specific system prompt.':
       '当渠道没有模型专属系统提示词时使用。',
@@ -191,6 +193,7 @@ const newKeys = {
     'registration code': '注册码',
   },
   'zh-TW': {
+    'Only show retried requests': '僅顯示重試請求',
     'Accounting only. Real upstream cache fields, including zero, always take priority. Defaults: creation 20%, read 60%; samples are independent.':
       '僅用於計費。實際上游快取欄位（包括零值）始終優先。預設值：建立 20%、讀取 60%；樣本彼此獨立。',
     'Billed before truncation': '截斷前計費',
@@ -303,6 +306,7 @@ const newKeys = {
     'registration code': '註冊碼',
   },
   fr: {
+    'Only show retried requests': 'Afficher uniquement les requêtes réessayées',
     'Global model system prompts': 'Prompts système globaux des modèles',
     'Used when a channel has no model-specific system prompt.':
       'Utilisé lorsqu’un canal ne possède pas de prompt système spécifique au modèle.',
@@ -391,6 +395,7 @@ const newKeys = {
     'registration code': 'code d’inscription',
   },
   ja: {
+    'Only show retried requests': '再試行されたリクエストのみ表示',
     'Global model system prompts': 'グローバルモデルシステムプロンプト',
     'Used when a channel has no model-specific system prompt.':
       'チャネルにモデル固有のシステムプロンプトがない場合に使用します。',
@@ -475,6 +480,8 @@ const newKeys = {
     'registration code': '登録コード',
   },
   ru: {
+    'Only show retried requests':
+      'Показывать только повторно выполненные запросы',
     'Global model system prompts': 'Глобальные системные подсказки моделей',
     'Used when a channel has no model-specific system prompt.':
       'Используется, если для канала не задана системная подсказка модели.',
@@ -562,6 +569,7 @@ const newKeys = {
     'registration code': 'код регистрации',
   },
   vi: {
+    'Only show retried requests': 'Chỉ hiển thị yêu cầu đã thử lại',
     'Global model system prompts': 'Lời nhắc hệ thống toàn cục cho mô hình',
     'Used when a channel has no model-specific system prompt.':
       'Được sử dụng khi kênh không có lời nhắc hệ thống riêng cho mô hình.',

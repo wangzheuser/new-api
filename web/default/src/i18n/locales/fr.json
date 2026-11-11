@@ -3511,6 +3511,7 @@
     "Only real upstream HTTP responses in these ranges count as statistical failures.": "Seules les réponses HTTP réelles du fournisseur comprises dans ces plages sont comptées comme échecs.",
     "Only required when creating a new account": "Requis uniquement pour créer un compte",
     "Only selected fields will be overwritten. You can re-run the sync wizard if new conflicts appear.": "Seuls les champs sélectionnés seront écrasés. Vous pouvez relancer l'assistant de synchronisation si de nouveaux conflits apparaissent.",
+    "Only show retried requests": "Afficher uniquement les requêtes réessayées",
     "Only successful requests": "Uniquement les requêtes réussies",
     "Only successful requests count toward this limit.": "Seules les requêtes réussies comptent pour cette limite.",
     "Only the last {{value}} log files will be retained; the rest will be deleted.": "Seuls les {{value}} derniers fichiers journaux seront conservés ; le reste sera supprimé.",

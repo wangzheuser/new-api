@@ -3511,6 +3511,7 @@
     "Only real upstream HTTP responses in these ranges count as statistical failures.": "Chỉ phản hồi HTTP thực tế từ thượng nguồn trong các khoảng này được tính là lỗi thống kê.",
     "Only required when creating a new account": "Chỉ cần khi tạo tài khoản mới",
     "Only selected fields will be overwritten. You can re-run the sync wizard if new conflicts appear.": "Chỉ các trường được chọn sẽ bị ghi đè. Bạn có thể chạy lại trình hướng dẫn đồng bộ hóa nếu có xung đột mới xuất hiện.",
+    "Only show retried requests": "Chỉ hiển thị yêu cầu đã thử lại",
     "Only successful requests": "Chỉ các yêu cầu thành công",
     "Only successful requests count toward this limit.": "Chỉ những yêu cầu thành công mới được tính vào giới hạn này.",
     "Only the last {{value}} log files will be retained; the rest will be deleted.": "Chỉ giữ lại {{value}} tệp nhật ký gần nhất; phần còn lại sẽ bị xóa.",

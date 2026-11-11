@@ -46,6 +46,10 @@ const usageLogsSearchSchema = z.object({
   requestId: z.string().optional().catch(''),
   upstreamRequestId: z.string().optional().catch(''),
   latestPerRequest: z.boolean().optional().default(true).catch(true),
+  retryOnly: z.preprocess(
+    (value) => (value === true || value === 'true' ? true : undefined),
+    z.boolean().optional()
+  ),
   startTime: z.number().optional(),
   endTime: z.number().optional(),
 })

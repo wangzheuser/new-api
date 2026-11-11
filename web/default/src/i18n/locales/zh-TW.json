@@ -3511,6 +3511,7 @@
     "Only real upstream HTTP responses in these ranges count as statistical failures.": "僅真實上游 HTTP 回應中位於這些範圍的狀態碼會計為統計失敗。",
     "Only required when creating a new account": "僅建立新帳戶時需要",
     "Only selected fields will be overwritten. You can re-run the sync wizard if new conflicts appear.": "僅選定的欄位將會被覆蓋。如果出現新的衝突，您可以重新執行同步精靈。",
+    "Only show retried requests": "僅顯示重試請求",
     "Only successful requests": "僅成功的請求",
     "Only successful requests count toward this limit.": "僅成功的請求計入此限制。",
     "Only the last {{value}} log files will be retained; the rest will be deleted.": "將只保留最近 {{value}} 個日誌檔案，其餘將被刪除。",

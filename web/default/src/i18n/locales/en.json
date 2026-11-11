@@ -3511,6 +3511,7 @@
     "Only real upstream HTTP responses in these ranges count as statistical failures.": "Only real upstream HTTP responses in these ranges count as statistical failures.",
     "Only required when creating a new account": "Only required when creating a new account",
     "Only selected fields will be overwritten. You can re-run the sync wizard if new conflicts appear.": "Only selected fields will be overwritten. You can re-run the sync wizard if new conflicts appear.",
+    "Only show retried requests": "Only show retried requests",
     "Only successful requests": "Only successful requests",
     "Only successful requests count toward this limit.": "Only successful requests count toward this limit.",
     "Only the last {{value}} log files will be retained; the rest will be deleted.": "Only the last {{value}} log files will be retained; the rest will be deleted.",

@@ -208,6 +208,7 @@ export function buildApiParams(config: {
     latest_per_request: isAdmin
       ? searchParams.latestPerRequest !== false
       : true,
+    ...(isAdmin && searchParams.retryOnly === true ? { retry_only: true } : {}),
     ...buildTimeRangeParams(searchParams, false),
   }
 

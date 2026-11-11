@@ -3511,6 +3511,7 @@
     "Only real upstream HTTP responses in these ranges count as statistical failures.": "これらの範囲に該当する実際の上流 HTTP 応答だけが統計上の失敗として記録されます。",
     "Only required when creating a new account": "新規アカウント作成時のみ必要です",
     "Only selected fields will be overwritten. You can re-run the sync wizard if new conflicts appear.": "選択されたフィールドのみが上書きされます。新しい競合が発生した場合は、同期ウィザードを再実行できます。",
+    "Only show retried requests": "再試行されたリクエストのみ表示",
     "Only successful requests": "成功したリクエストのみ",
     "Only successful requests count toward this limit.": "成功したリクエストのみがこの制限にカウントされます。",
     "Only the last {{value}} log files will be retained; the rest will be deleted.": "最新の{{value}}個のログファイルのみ保持され、残りは削除されます。",

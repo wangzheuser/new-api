@@ -1,10 +1,16 @@
 package model
 
 import (
+	"os"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // TestLogQueriesLatestPerRequest verifies deduplication happens before result filters and pagination.
@@ -90,6 +96,109 @@ func TestLogQueriesLatestPerRequestAcrossTimeRange(t *testing.T) {
 	assert.EqualValues(t, 1, total)
 	require.Len(t, userLogs, 1)
 	assert.Equal(t, "legacy empty request", userLogs[0].Content)
+}
+
+func TestLogQueriesRetryOnlyByUseChannelChain(t *testing.T) {
+	for _, dialect := range []common.DatabaseType{
+		common.DatabaseTypeSQLite, common.DatabaseTypeMySQL,
+		common.DatabaseTypePostgreSQL, common.DatabaseTypeClickHouse,
+	} {
+		t.Run(string(dialect), func(t *testing.T) {
+			var db *gorm.DB
+			var err error
+			if dialect == common.DatabaseTypeSQLite {
+				db, err = gorm.Open(sqlite.Open(":memory:"), newGormConfig(false))
+			} else {
+				env := "RETRY_LOG_" + strings.ToUpper(string(dialect)) + "_DSN"
+				dsn := os.Getenv(env)
+				if dsn == "" {
+					t.Skipf("set %s to an empty disposable database", env)
+				}
+				t.Setenv("RETRY_LOG_TEST_DSN", dsn)
+				var dbType common.DatabaseType
+				db, dbType, err = chooseDB("RETRY_LOG_TEST_DSN", true)
+				require.Equal(t, dialect, dbType)
+			}
+			require.NoError(t, err)
+			sqlDB, err := db.DB()
+			require.NoError(t, err)
+			sqlDB.SetMaxOpenConns(1)
+			t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+			require.False(t, db.Migrator().HasTable(&Log{}), "use an empty disposable database")
+			previousDB, previousType := LOG_DB, common.LogDatabaseType()
+			LOG_DB = db
+			common.SetLogDatabaseType(dialect)
+			initCol()
+			t.Cleanup(func() {
+				LOG_DB = previousDB
+				common.SetLogDatabaseType(previousType)
+				initCol()
+				assert.NoError(t, db.Migrator().DropTable(&Log{}))
+			})
+			if dialect == common.DatabaseTypeClickHouse {
+				require.NoError(t, db.Exec(clickHouseLogCreateTableSQL(0)).Error)
+			} else {
+				require.NoError(t, db.AutoMigrate(&Log{}))
+			}
+			versionQuery := "SELECT version()"
+			if dialect == common.DatabaseTypeSQLite {
+				versionQuery = "SELECT sqlite_version()"
+			}
+			var version string
+			require.NoError(t, db.Raw(versionQuery).Scan(&version).Error)
+			t.Logf("database version: %s", version)
+
+			now := time.Now().Unix()
+			logs := []*Log{
+				{CreatedAt: now - 8, Type: LogTypeConsume, Content: "single with metadata", RequestId: "single",
+					Other: `{"admin_info":{"use_channel":["118"]},"billing_source":"wallet","cache_tokens":0,"request_conversion":["OpenAI Compatible","Claude Messages"]}`, Quota: 10},
+				{CreatedAt: now - 7, Type: LogTypeError, Content: "older retry", RequestId: "final-single",
+					Other: `{"admin_info":{"use_channel":["118","120"]}}`},
+				{CreatedAt: now - 6, Type: LogTypeError, Content: "intermediate retry", RequestId: "final-single", IsIntermediate: true,
+					Other: `{"admin_info":{"use_channel":["118","120"]}}`},
+				{CreatedAt: now - 5, Type: LogTypeConsume, Content: "final single", RequestId: "final-single",
+					Other: `{"admin_info":{"use_channel":["118"]}}`, Quota: 20},
+				{CreatedAt: now - 4, Type: LogTypeConsume, Content: "different channel retry", RequestId: "different",
+					Other: `{"admin_info":{"use_channel":["118","120"]},"billing_source":"wallet"}`, Quota: 30, PromptTokens: 10, CompletionTokens: 20},
+				{CreatedAt: now - 3, Type: LogTypeConsume, Content: "same channel retry", RequestId: "same",
+					Other: `{"admin_info":{"use_channel":["118","118"]}}`, Quota: 40, PromptTokens: 20, CompletionTokens: 30},
+				{CreatedAt: now - 2, Type: LogTypeConsume, Content: "legacy log", RequestId: "legacy", Quota: 50},
+				{CreatedAt: now - 1, Type: LogTypeConsume, Content: "empty chain", RequestId: "empty",
+					Other: `{"admin_info":{"use_channel":[]},"request_conversion":["OpenAI Compatible","Claude Messages"]}`, Quota: 60},
+				{CreatedAt: now, Type: LogTypeConsume, Content: "missing chain", RequestId: "missing",
+					Other: `{"admin_info":{},"request_conversion":["OpenAI Compatible","Claude Messages"]}`, Quota: 70},
+			}
+			require.NoError(t, db.Create(&logs).Error)
+
+			retryLogs, total, err := GetAllLogs(LogTypeUnknown, now-10, now+1, "", "", "", 0, 20, 0, "", "", "", true, true)
+			require.NoError(t, err)
+			assert.EqualValues(t, 2, total)
+			assert.Equal(t, []string{"same channel retry", "different channel retry"}, logContents(retryLogs))
+
+			page, total, err := GetAllLogs(LogTypeUnknown, now-10, now+1, "", "", "", 1, 1, 0, "", "", "", true, true)
+			require.NoError(t, err)
+			assert.EqualValues(t, 2, total)
+			assert.Equal(t, []string{"different channel retry"}, logContents(page))
+
+			stat, err := SumUsedQuota(LogTypeUnknown, now-10, now+1, "", "", "", 0, "", "", "", true, true)
+			require.NoError(t, err)
+			assert.Equal(t, 70, stat.Quota)
+			assert.EqualValues(t, 2, stat.RequestCount)
+			assert.Equal(t, 2, stat.Rpm)
+			assert.Equal(t, 80, stat.Tpm)
+
+			filtered, total, err := GetAllLogs(LogTypeUnknown, now-10, now+1, "", "", "", 0, 20, 0, "", "same", "", true, true)
+			require.NoError(t, err)
+			assert.EqualValues(t, 1, total)
+			assert.Equal(t, []string{"same channel retry"}, logContents(filtered))
+			stat, err = SumUsedQuota(LogTypeUnknown, now-10, now+1, "", "", "", 0, "", "same", "", true, true)
+			require.NoError(t, err)
+			assert.Equal(t, 40, stat.Quota)
+			assert.EqualValues(t, 1, stat.RequestCount)
+			assert.Equal(t, 1, stat.Rpm)
+			assert.Equal(t, 50, stat.Tpm)
+		})
+	}
 }
 
 // TestLogSearchCountIsCapped verifies list endpoints never scan beyond the advertised result ceiling.
