@@ -759,9 +759,11 @@ func TestManagedTokenLifecycleReusesTargetOwnership(t *testing.T) {
 	assert.Error(t, db.First(&model.Token{}, created.Id).Error)
 
 	var auditLogs []model.AuditLog
-	require.NoError(t, db.Where("category = ?", model.AuditCategoryOperation).Find(&auditLogs).Error)
-	require.Len(t, auditLogs, 5)
-	for _, log := range auditLogs {
+	require.NoError(t, db.Where("category = ?", model.AuditCategoryOperation).Order("id").Find(&auditLogs).Error)
+	expectedActions := []string{"token.key_view", "token.update", "token.create", "token.delete"}
+	require.Len(t, auditLogs, len(expectedActions))
+	for i, log := range auditLogs {
+		assert.Equal(t, expectedActions[i], log.Action)
 		assert.NotContains(t, log.Content, targetToken.Key)
 		assert.Equal(t, 99, log.Other.AdminInfo.AdminID)
 		rawTargetID, ok := log.Other.Op.Params["target_user_id"].(json.RawMessage)
