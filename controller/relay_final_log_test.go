@@ -2,20 +2,143 @@ package controller
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestHTTPRelayAttemptLogs(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		retries  int
+		recover  bool
+		attempts int
+	}{
+		{"retry succeeds", 1, true, 2},
+		{"five failures", 4, false, 5},
+		{"no retry", 0, false, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dialect := os.Getenv("ATTEMPT_LOG_DB")
+			if dialect == "" {
+				dialect = "sqlite"
+			}
+			db := modelManagementDB(t, dialect, os.Getenv("TEST_"+strings.ToUpper(dialect)+"_DSN"))
+			require.NoError(t, db.AutoMigrate(&model.Log{}))
+			require.NoError(t, db.Create(&model.User{Id: 1, Username: "fixture", Group: "default", Quota: 1000000, Status: common.UserStatusEnabled}).Error)
+			oldRetry, oldMemory, oldRedis := common.RetryTimes, common.MemoryCacheEnabled, common.RedisEnabled
+			oldAuto, oldErrorLog := common.AutomaticDisableChannelEnabled, constant.ErrorLogEnabled
+			oldRatio := ratio_setting.ModelRatio2JSONString()
+			settings := operation_setting.GetGeneralSetting()
+			oldOverride := settings.DefaultFinalErrorOverride
+			common.RetryTimes, common.MemoryCacheEnabled, common.RedisEnabled = tc.retries, false, false
+			common.AutomaticDisableChannelEnabled, constant.ErrorLogEnabled = false, true
+			settings.DefaultFinalErrorOverride = finalErrorOverrideForTest("mapped final error", 503, "model_unavailable")
+			require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"ATTEMPT_TEST":0}`))
+			t.Cleanup(func() {
+				common.RetryTimes, common.MemoryCacheEnabled, common.RedisEnabled = oldRetry, oldMemory, oldRedis
+				common.AutomaticDisableChannelEnabled, constant.ErrorLogEnabled = oldAuto, oldErrorLog
+				settings.DefaultFinalErrorOverride = oldOverride
+				require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(oldRatio))
+			})
+			service.InitHttpClient()
+			attempts := 0
+			const requestID = "attempt-log-regression"
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				attempts++
+				if attempts > 1 {
+					_, total, err := model.GetAllLogs(model.LogTypeUnknown, 0, 0, "", "", "", 0, 20, 0, "", requestID, "", true)
+					assert.NoError(t, err)
+					assert.Zero(t, total, "a failed attempt is not a final request result")
+				}
+				w.Header().Set("Content-Type", "application/json")
+				if tc.recover && attempts == tc.attempts {
+					_, _ = fmt.Fprint(w, `{"id":"test","object":"chat.completion","model":"ATTEMPT_TEST","choices":[{"index":0,"message":{"role":"assistant","content":"recovered"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+					return
+				}
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = fmt.Fprintf(w, `{"error":{"message":"raw attempt %d","type":"rate_limit_error","code":"rate_limit"}}`, attempts)
+			}))
+			defer upstream.Close()
+			var first *model.Channel
+			for i := range tc.attempts {
+				channel := &model.Channel{Name: fmt.Sprintf("attempt-%d", i+1), Type: constant.ChannelTypeOpenAI, Key: "fixture", Status: common.ChannelStatusEnabled, Group: "default", Models: "ATTEMPT_TEST", BaseURL: &upstream.URL, Priority: common.GetPointer(int64(100 - i))}
+				require.NoError(t, db.Create(channel).Error)
+				require.NoError(t, channel.AddAbilities(db))
+				if first == nil {
+					first = channel
+				}
+			}
+			router := gin.New()
+			router.POST("/v1/chat/completions", func(c *gin.Context) {
+				c.Set("id", 1)
+				c.Set("user_id", 1)
+				c.Set("group", "default")
+				c.Set("token_group", "default")
+				c.Set("user_group", "default")
+				c.Set(common.RequestIdKey, requestID)
+				require.Nil(t, middleware.SetupContextForSelectedChannel(c, first, "ATTEMPT_TEST"))
+				Relay(c, types.RelayFormatOpenAI)
+			})
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"ATTEMPT_TEST","messages":[{"role":"user","content":"hello"}],"max_tokens":16}`))
+			request.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(response, request)
+			require.Equal(t, tc.attempts, attempts, response.Body.String())
+			failures := tc.attempts
+			if tc.recover {
+				failures--
+				assert.Contains(t, response.Body.String(), "recovered")
+			} else {
+				assert.Equal(t, 503, response.Code)
+				assert.Contains(t, response.Body.String(), "mapped final error")
+			}
+			var rows []model.Log
+			require.NoError(t, db.Where("request_id = ?", requestID).Order("id").Find(&rows).Error)
+			require.Len(t, rows, failures+1)
+			for i, row := range rows[:failures] {
+				assert.True(t, row.IsIntermediate)
+				assert.Contains(t, row.Content, fmt.Sprintf("raw attempt %d", i+1))
+			}
+			final := rows[len(rows)-1]
+			assert.False(t, final.IsIntermediate)
+			var other map[string]any
+			require.NoError(t, common.UnmarshalJsonStr(final.Other, &other))
+			admin := other["admin_info"].(map[string]any)
+			events, ok := admin["request_policy"].([]any)
+			require.True(t, ok, "final logs preserve request policy decisions")
+			failureEvents := 0
+			for _, item := range events {
+				event := item.(map[string]any)
+				if event["decision"].(map[string]any)["action"] == "failure" {
+					failureEvents++
+				}
+			}
+			assert.Equal(t, failures, failureEvents)
+			assert.Len(t, admin["use_channel"], tc.attempts)
+			if !tc.recover {
+				assert.Contains(t, final.Content, "mapped final error")
+				assert.Equal(t, "attempt_budget_exhausted", events[len(events)-1].(map[string]any)["decision"].(map[string]any)["reason"])
+			}
+		})
+	}
+}
 
 // TestRelayClientErrorLogContent verifies that final logs use the structured client-facing error.
 func TestRelayClientErrorLogContent(t *testing.T) {

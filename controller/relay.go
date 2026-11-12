@@ -337,13 +337,13 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 			break
 		}
 
-		willRetry := shouldRetry(c, relayInfo, newAPIError, common.RetryTimes-retryParam.GetRetry())
+		decision := decideHTTPRelayRetry(c, relayInfo, newAPIError, common.RetryTimes-retryParam.GetRetry())
 		localBillingError := types.IsLocalBillingError(newAPIError)
 		if localBillingError {
-			willRetry = false
+			decision = service.PolicyDecision{Action: "stop", Reason: "local_billing_error", Source: "system"}
 		}
 		if relayInfo.IsContextFallbackActive() && relayInfo.ContextFallback.RouteMode == dto.ContextFallbackModeSame {
-			willRetry = false
+			decision = service.PolicyDecision{Action: "stop", Reason: "same_channel_context_fallback", Source: "system"}
 		}
 		endpointMismatch := relayInfo.ProtocolEndpointMismatch &&
 			relayInfo.ChannelRoutePlan != nil &&
@@ -353,9 +353,13 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 				retryParam.ExcludedChannelIDs = make(map[int]struct{})
 			}
 			retryParam.ExcludedChannelIDs[channel.Id] = struct{}{}
-			willRetry = common.RetryTimes-retryParam.GetRetry() > 0 &&
+			if common.RetryTimes-retryParam.GetRetry() > 0 &&
 				!retryBlockedByClientCommit(c, relayInfo) && !service.ShouldSkipRetryAfterChannelAffinityFailure(c) &&
-				!(relayInfo.IsContextFallbackActive() && relayInfo.ContextFallback.RouteMode == dto.ContextFallbackModeSame)
+				!(relayInfo.IsContextFallbackActive() && relayInfo.ContextFallback.RouteMode == dto.ContextFallbackModeSame) {
+				decision = service.PolicyDecision{Action: "retry", Reason: "protocol_endpoint_mismatch", Source: "routing"}
+			} else if decision.Action == "retry" {
+				decision = service.PolicyDecision{Action: "stop", Reason: "protocol_retry_blocked", Source: "system"}
+			}
 		} else if !localBillingError {
 			usingKey := common.GetContextKeyString(c, constant.ContextKeyChannelKey)
 			if _, real := newAPIError.GetUpstreamStatusCode(); real && channel.ChannelInfo.IsMultiKey {
@@ -381,7 +385,7 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 				if common.RetryTimes-retryParam.GetRetry() > 0 && !retryBlockedByClientCommit(c, relayInfo) &&
 					!service.ShouldSkipRetryAfterChannelAffinityFailure(c) && !types.IsSkipRetryError(newAPIError) &&
 					!(relayInfo.IsContextFallbackActive() && relayInfo.ContextFallback.RouteMode == dto.ContextFallbackModeSame) {
-					willRetry = true
+					decision = service.PolicyDecision{Action: "retry", Reason: "multi_key_failover", Source: "channel"}
 					if !channelScoped {
 						retryParam.PreferredChannelID = channel.Id
 					}
@@ -390,14 +394,20 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 			} else {
 				service.RecordChannelUpstreamErrorAsync(channel, newAPIError, usingKey,
 					common.GetContextKeyString(c, constant.ContextKeyChannelHealthModel))
-				processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, usingKey, channel.GetAutoBan()), newAPIError, relayInfo)
+				processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, usingKey, channel.GetAutoBan()), newAPIError, relayInfo, relayFormat == types.RelayFormatOpenAIRealtime)
 			}
 		}
 		service.FinishChannelKeyProbe(c, false)
-		if willRetry {
+		if relayFormat != types.RelayFormatOpenAIRealtime && decision.Action == "retry" && common.RetryTimes-retryParam.GetRetry() <= 0 {
+			decision = service.PolicyDecision{Action: "stop", Reason: "attempt_budget_exhausted", Source: "global"}
+		}
+		if relayFormat != types.RelayFormatOpenAIRealtime {
+			service.RecordPolicyFailure(c, channel.Id, newAPIError, decision)
+		}
+		if relayFormat != types.RelayFormatOpenAIRealtime || decision.Action == "retry" {
 			recordRelayErrorLog(c, relayInfo, newAPIError, "", nil, true)
 		}
-		if !willRetry {
+		if decision.Action != "retry" {
 			break
 		}
 	}
@@ -648,9 +658,9 @@ func relayRetryGroup(info *relaycommon.RelayInfo) string {
 	return info.TokenGroup
 }
 
-func shouldRetry(c *gin.Context, relayInfo *relaycommon.RelayInfo, openaiErr *types.NewAPIError, retryTimes int) bool {
+func decideHTTPRelayRetry(c *gin.Context, relayInfo *relaycommon.RelayInfo, openaiErr *types.NewAPIError, retryTimes int) service.PolicyDecision {
 	if openaiErr == nil {
-		return false
+		return service.PolicyDecision{Action: "stop", Reason: "request_completed", Source: "system"}
 	}
 	if retryBlockedByClientCommit(c, relayInfo) {
 		// Legacy Claude requests flush SSE headers before receiving the upstream HTTP status.
@@ -662,41 +672,44 @@ func shouldRetry(c *gin.Context, relayInfo *relaycommon.RelayInfo, openaiErr *ty
 			relayInfo.ChannelRoutePlan == nil || relayInfo.ChannelRoutePlan.RouteMode != hosttypes.ChannelRouteModeLegacy ||
 			(relayInfo.RelayFormat != types.RelayFormatClaude && relayInfo.RelayFormat != types.RelayFormatOpenAI) ||
 			relayInfo.StreamStatus == nil || relayInfo.ReceivedResponseCount != 0 || relayInfo.SendResponseCount != 0 {
-			return false
+			return service.PolicyDecision{Action: "stop", Reason: "client_response_committed", Source: "system"}
 		}
 		status := relayInfo.StreamStatus
 		endReason, _ := status.End()
 		if c.Request.Context().Err() != nil || endReason != relaycommon.StreamEndReasonNone ||
 			status.ClientPayloadIsCommitted() || status.ErrorFrameIsWritten() {
-			return false
+			return service.PolicyDecision{Action: "stop", Reason: "client_response_committed", Source: "system"}
 		}
 	}
 	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
-		return false
+		return service.PolicyDecision{Action: "stop", Reason: "strict_session", Source: "session_rule"}
 	}
 	if types.IsChannelError(openaiErr) {
-		return true
+		return service.PolicyDecision{Action: "retry", Reason: "channel_error", Source: "system"}
 	}
 	if types.IsSkipRetryError(openaiErr) {
-		return false
+		return service.PolicyDecision{Action: "stop", Reason: "non_retryable_error", Source: "system"}
 	}
 	if retryTimes <= 0 {
-		return false
+		return service.PolicyDecision{Action: "stop", Reason: "attempt_budget_exhausted", Source: "global"}
 	}
 	if _, ok := c.Get("specific_channel_id"); ok {
-		return false
+		return service.PolicyDecision{Action: "stop", Reason: "pinned_channel", Source: "channel_constraint"}
 	}
 	code := openaiErr.StatusCode
 	if code >= 200 && code < 300 {
-		return false
+		return service.PolicyDecision{Action: "stop", Reason: "system_retry_exclusion", Source: "system"}
 	}
 	if code < 100 || code > 599 {
-		return true
+		return service.PolicyDecision{Action: "retry", Reason: "unrecognized_status", Source: "system"}
 	}
 	if operation_setting.IsAlwaysSkipRetryCode(openaiErr.GetErrorCode()) {
-		return false
+		return service.PolicyDecision{Action: "stop", Reason: "system_retry_exclusion", Source: "system"}
 	}
-	return operation_setting.ShouldRetryByStatusCode(code)
+	if operation_setting.ShouldRetryByStatusCode(code) {
+		return service.PolicyDecision{Action: "retry", Reason: "retry_status_matched", Source: "global"}
+	}
+	return service.PolicyDecision{Action: "stop", Reason: "status_not_retryable", Source: "global"}
 }
 
 func retryBlockedByClientCommit(c *gin.Context, relayInfo *relaycommon.RelayInfo) bool {
@@ -910,8 +923,8 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	return channel, nil
 }
 
-func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError, relayInfo *relaycommon.RelayInfo) {
-	service.ProcessChannelError(c, channelError, err, relayInfo)
+func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError, relayInfo *relaycommon.RelayInfo, recordLog bool) {
+	service.ProcessChannelError(c, channelError, err, relayInfo, recordLog)
 }
 
 func RelayMidjourney(c *gin.Context) {
@@ -1226,7 +1239,7 @@ func executeTaskSubmissionWith(
 				processChannelError(c,
 					*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, usingKey, channel.GetAutoBan()),
 					taskAPIError,
-					relayInfo)
+					relayInfo, true)
 			}
 		}
 

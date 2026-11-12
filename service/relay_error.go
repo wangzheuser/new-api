@@ -60,7 +60,7 @@ func ShouldRetryRelayError(c *gin.Context, openaiErr *types.NewAPIError, retryTi
 	return DecideRelayRetry(c, openaiErr, retryTimes).Action == "retry"
 }
 
-func ProcessChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError, relayInfo *relaycommon.RelayInfo) {
+func ProcessChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError, relayInfo *relaycommon.RelayInfo, recordLog bool) {
 	if err == nil {
 		return
 	}
@@ -72,7 +72,7 @@ func ProcessChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		})
 	}
 
-	if constant.ErrorLogEnabled && types.IsRecordErrorLog(err) {
+	if recordLog && constant.ErrorLogEnabled && types.IsRecordErrorLog(err) {
 		userId := c.GetInt("id")
 		tokenName := c.GetString("token_name")
 		modelName := c.GetString("original_model")

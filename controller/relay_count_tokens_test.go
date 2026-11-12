@@ -78,6 +78,6 @@ func TestShouldRetrySkipsToolProtocolInvalidOnly(t *testing.T) {
 		Code:    "upstream_error",
 	}, http.StatusBadGateway)
 
-	assert.False(t, shouldRetry(ctx, nil, protocolError, 1))
-	assert.True(t, shouldRetry(ctx, nil, ordinaryError, 1))
+	assert.False(t, decideHTTPRelayRetry(ctx, nil, protocolError, 1).Action == "retry")
+	assert.True(t, decideHTTPRelayRetry(ctx, nil, ordinaryError, 1).Action == "retry")
 }

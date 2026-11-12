@@ -109,6 +109,11 @@ export type UsageBillingPath =
   (typeof USAGE_BILLING_PATH)[keyof typeof USAGE_BILLING_PATH]
 
 export interface LogOtherData {
+  status_code?: number
+  error_code?: string | number
+  error_type?: string
+  public_error?: boolean
+  intermediate?: boolean
   context_truncated?: boolean
   cache_usage_simulated?: boolean
   input_tokens_total?: number
@@ -132,7 +137,11 @@ export interface LogOtherData {
     }
     is_multi_key?: boolean
     multi_key_index?: number
-    use_channel?: number[]
+    use_channel?: (number | string)[]
+    request_policy?: {
+      attempt?: number
+      decision?: { action?: string; reason?: string; source?: string }
+    }[]
     local_count_tokens?: boolean
     usage_billing_path?: UsageBillingPath | string
     channel_affinity?: ChannelAffinityInfo

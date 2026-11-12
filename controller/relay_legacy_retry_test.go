@@ -69,7 +69,7 @@ func TestLegacyClaudeHeaderOnlyRetry(t *testing.T) {
 				case "http success":
 					types.ErrOptionWithUpstreamStatusCode(200)(err)
 				}
-				assert.Equal(t, scenario == "headers" || scenario == "ping", shouldRetry(ctx, info, err, budget))
+				assert.Equal(t, scenario == "headers" || scenario == "ping", decideHTTPRelayRetry(ctx, info, err, budget).Action == "retry")
 			})
 		}
 	}
@@ -90,5 +90,5 @@ func TestShouldRetryConfigured504BeforeStreamPayload(t *testing.T) {
 	info := &relaycommon.RelayInfo{IsStream: true, StreamStatus: status}
 	err := types.NewOpenAIError(errors.New("stream ended abnormally: timeout"), types.ErrorCodeBadResponse, http.StatusGatewayTimeout)
 
-	assert.True(t, shouldRetry(ctx, info, err, 1))
+	assert.True(t, decideHTTPRelayRetry(ctx, info, err, 1).Action == "retry")
 }

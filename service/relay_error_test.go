@@ -107,7 +107,7 @@ func TestProcessChannelErrorMasksDisableReasonAndNotification(t *testing.T) {
 	t.Cleanup(func() { notifyLimitStore.Delete(notifyKey) })
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	apiErr := types.NewErrorWithStatusCode(errors.New("upstream https://private.example.com/path?token=review-token api_key:review-secret"), types.ErrorCodeChannelNoAvailableKey, http.StatusUnauthorized)
-	ProcessChannelError(c, types.ChannelError{ChannelId: channel.Id, ChannelName: channel.Name, AutoBan: true}, apiErr, nil)
+	ProcessChannelError(c, types.ChannelError{ChannelId: channel.Id, ChannelName: channel.Name, AutoBan: true}, apiErr, nil, false)
 	var notification WebhookPayload
 	select {
 	case payload := <-notifications:

@@ -192,7 +192,7 @@ func TestShouldRetryRejectsCommittedStreamEvenForChannelError(t *testing.T) {
 
 	relayErr := types.NewErrorWithStatusCode(errors.New("channel failed"), types.ErrorCode("channel:test"), http.StatusBadGateway)
 
-	assert.False(t, shouldRetry(ctx, nil, relayErr, 2))
+	assert.False(t, decideHTTPRelayRetry(ctx, nil, relayErr, 2).Action == "retry")
 }
 
 func TestShouldRetryAllowsPlannedStreamAfterHeaderOnlyCommit(t *testing.T) {
@@ -212,7 +212,7 @@ func TestShouldRetryAllowsPlannedStreamAfterHeaderOnlyCommit(t *testing.T) {
 	}
 	relayErr := types.NewErrorWithStatusCode(errors.New("upstream unavailable"), types.ErrorCodeBadResponse, http.StatusServiceUnavailable)
 
-	assert.True(t, shouldRetry(ctx, info, relayErr, 2))
+	assert.True(t, decideHTTPRelayRetry(ctx, info, relayErr, 2).Action == "retry")
 }
 
 func TestShouldRetryAllowsPlannedStreamAfterPingOnly(t *testing.T) {
@@ -229,7 +229,7 @@ func TestShouldRetryAllowsPlannedStreamAfterPingOnly(t *testing.T) {
 	info := &relaycommon.RelayInfo{IsStream: true, StreamStatus: streamStatus}
 	relayErr := types.NewErrorWithStatusCode(errors.New("upstream unavailable"), types.ErrorCodeBadResponse, http.StatusServiceUnavailable)
 
-	assert.True(t, shouldRetry(ctx, info, relayErr, 2))
+	assert.True(t, decideHTTPRelayRetry(ctx, info, relayErr, 2).Action == "retry")
 }
 
 func TestShouldRetryAllowsPayloadAwareEnvelopeErrorBeforeAnyEvent(t *testing.T) {
@@ -254,7 +254,7 @@ func TestShouldRetryAllowsPayloadAwareEnvelopeErrorBeforeAnyEvent(t *testing.T) 
 		types.ErrOptionWithUpstreamStatusCode(http.StatusOK),
 	)
 
-	assert.True(t, shouldRetry(ctx, info, relayErr, 1))
+	assert.True(t, decideHTTPRelayRetry(ctx, info, relayErr, 1).Action == "retry")
 }
 
 func TestShouldRetryRejectsPlannedStreamAfterBusinessPayloadOrErrorFrame(t *testing.T) {
@@ -282,7 +282,7 @@ func TestShouldRetryRejectsPlannedStreamAfterBusinessPayloadOrErrorFrame(t *test
 			info := &relaycommon.RelayInfo{IsStream: true, StreamStatus: streamStatus}
 			relayErr := types.NewErrorWithStatusCode(errors.New("upstream unavailable"), types.ErrorCodeBadResponse, http.StatusServiceUnavailable)
 
-			assert.False(t, shouldRetry(ctx, info, relayErr, 2))
+			assert.False(t, decideHTTPRelayRetry(ctx, info, relayErr, 2).Action == "retry")
 		})
 	}
 }

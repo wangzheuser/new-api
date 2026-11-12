@@ -27,6 +27,19 @@ function stableStringify(obj) {
 
 const newKeys = {
   en: {
+    'Retry details': 'Retry details',
+    'Attempt {{number}}': 'Attempt {{number}}',
+    'Unknown attempt': 'Unknown attempt',
+    'Error status code': 'Error status code',
+    'Historical retry details are incomplete':
+      'Historical retry details are incomplete',
+    'No attempt errors were recorded': 'No attempt errors were recorded',
+    'No error message was recorded': 'No error message was recorded',
+    'Original attempt errors; the final result is shown separately':
+      'Original attempt errors; the final result is shown separately',
+    'Failed to load retry details': 'Failed to load retry details',
+    'Retry details are incomplete': 'Retry details are incomplete',
+    'Request ID is required': 'Request ID is required',
     'Only show retried requests': 'Only show retried requests',
     'Global model system prompts': 'Global model system prompts',
     'Used when a channel has no model-specific system prompt.':
@@ -114,6 +127,18 @@ const newKeys = {
     'registration code': 'registration code',
   },
   zh: {
+    'Retry details': '重试详情',
+    'Attempt {{number}}': '第 {{number}} 次尝试',
+    'Unknown attempt': '尝试序号未知',
+    'Error status code': '错误状态码',
+    'Historical retry details are incomplete': '历史重试明细不完整',
+    'No attempt errors were recorded': '未找到尝试错误记录',
+    'No error message was recorded': '未保存错误信息',
+    'Original attempt errors; the final result is shown separately':
+      '以下为各次尝试的原始错误，最终结果单独显示',
+    'Failed to load retry details': '加载重试详情失败',
+    'Retry details are incomplete': '重试详情不完整',
+    'Request ID is required': '请求 ID 不能为空',
     'Only show retried requests': '仅显示重试请求',
     'Global model system prompts': '全局模型系统提示词',
     'Used when a channel has no model-specific system prompt.':
@@ -193,6 +218,18 @@ const newKeys = {
     'registration code': '注册码',
   },
   'zh-TW': {
+    'Retry details': '重試詳情',
+    'Attempt {{number}}': '第 {{number}} 次嘗試',
+    'Unknown attempt': '嘗試序號未知',
+    'Error status code': '錯誤狀態碼',
+    'Historical retry details are incomplete': '歷史重試明細不完整',
+    'No attempt errors were recorded': '未找到嘗試錯誤記錄',
+    'No error message was recorded': '未儲存錯誤訊息',
+    'Original attempt errors; the final result is shown separately':
+      '以下為各次嘗試的原始錯誤，最終結果另行顯示',
+    'Failed to load retry details': '載入重試詳情失敗',
+    'Retry details are incomplete': '重試詳情不完整',
+    'Request ID is required': '請求 ID 不可為空',
     'Only show retried requests': '僅顯示重試請求',
     'Accounting only. Real upstream cache fields, including zero, always take priority. Defaults: creation 20%, read 60%; samples are independent.':
       '僅用於計費。實際上游快取欄位（包括零值）始終優先。預設值：建立 20%、讀取 60%；樣本彼此獨立。',
@@ -306,6 +343,19 @@ const newKeys = {
     'registration code': '註冊碼',
   },
   fr: {
+    'Retry details': 'Détails des tentatives',
+    'Attempt {{number}}': 'Tentative {{number}}',
+    'Unknown attempt': 'Tentative non numérotée',
+    'Error status code': 'Code de statut de l’erreur',
+    'Historical retry details are incomplete':
+      'Historique des tentatives incomplet',
+    'No attempt errors were recorded': 'Aucune erreur de tentative enregistrée',
+    'No error message was recorded': 'Aucun message d’erreur enregistré',
+    'Original attempt errors; the final result is shown separately':
+      'Erreurs initiales des tentatives ; le résultat final est affiché séparément',
+    'Failed to load retry details': 'Échec du chargement des tentatives',
+    'Retry details are incomplete': 'Détails des tentatives incomplets',
+    'Request ID is required': 'L’identifiant de requête est requis',
     'Only show retried requests': 'Afficher uniquement les requêtes réessayées',
     'Global model system prompts': 'Prompts système globaux des modèles',
     'Used when a channel has no model-specific system prompt.':
@@ -395,6 +445,18 @@ const newKeys = {
     'registration code': 'code d’inscription',
   },
   ja: {
+    'Retry details': '再試行の詳細',
+    'Attempt {{number}}': '試行 {{number}}',
+    'Unknown attempt': '試行番号不明',
+    'Error status code': 'エラーステータスコード',
+    'Historical retry details are incomplete': '過去の再試行の詳細が不完全です',
+    'No attempt errors were recorded': '試行のエラー記録がありません',
+    'No error message was recorded': 'エラーメッセージが記録されていません',
+    'Original attempt errors; the final result is shown separately':
+      '各試行の元のエラーです。最終結果は別に表示されます',
+    'Failed to load retry details': '再試行の詳細を読み込めませんでした',
+    'Retry details are incomplete': '再試行の詳細が不完全です',
+    'Request ID is required': 'リクエスト ID が必要です',
     'Only show retried requests': '再試行されたリクエストのみ表示',
     'Global model system prompts': 'グローバルモデルシステムプロンプト',
     'Used when a channel has no model-specific system prompt.':
@@ -480,6 +542,18 @@ const newKeys = {
     'registration code': '登録コード',
   },
   ru: {
+    'Retry details': 'Подробности попыток',
+    'Attempt {{number}}': 'Попытка {{number}}',
+    'Unknown attempt': 'Номер попытки неизвестен',
+    'Error status code': 'Код статуса ошибки',
+    'Historical retry details are incomplete': 'История попыток неполная',
+    'No attempt errors were recorded': 'Ошибки попыток не записаны',
+    'No error message was recorded': 'Сообщение об ошибке не записано',
+    'Original attempt errors; the final result is shown separately':
+      'Исходные ошибки попыток; итоговый результат показан отдельно',
+    'Failed to load retry details': 'Не удалось загрузить подробности попыток',
+    'Retry details are incomplete': 'Подробности попыток неполные',
+    'Request ID is required': 'Требуется ID запроса',
     'Only show retried requests':
       'Показывать только повторно выполненные запросы',
     'Global model system prompts': 'Глобальные системные подсказки моделей',
@@ -569,6 +643,18 @@ const newKeys = {
     'registration code': 'код регистрации',
   },
   vi: {
+    'Retry details': 'Chi tiết thử lại',
+    'Attempt {{number}}': 'Lần thử {{number}}',
+    'Unknown attempt': 'Không rõ số lần thử',
+    'Error status code': 'Mã trạng thái lỗi',
+    'Historical retry details are incomplete': 'Lịch sử thử lại không đầy đủ',
+    'No attempt errors were recorded': 'Không có lỗi lần thử được ghi lại',
+    'No error message was recorded': 'Không có thông báo lỗi được ghi lại',
+    'Original attempt errors; the final result is shown separately':
+      'Lỗi gốc của từng lần thử; kết quả cuối cùng được hiển thị riêng',
+    'Failed to load retry details': 'Không thể tải chi tiết thử lại',
+    'Retry details are incomplete': 'Chi tiết thử lại không đầy đủ',
+    'Request ID is required': 'Cần có ID yêu cầu',
     'Only show retried requests': 'Chỉ hiển thị yêu cầu đã thử lại',
     'Global model system prompts': 'Lời nhắc hệ thống toàn cục cho mô hình',
     'Used when a channel has no model-specific system prompt.':

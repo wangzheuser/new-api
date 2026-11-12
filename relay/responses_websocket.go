@@ -360,7 +360,7 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 						usingKey,
 						common.GetContextKeyString(c, appconstant.ContextKeyChannelHealthModel),
 					)
-					service.ProcessChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, usingKey, channel.GetAutoBan()), apiErr, info)
+					service.ProcessChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, usingKey, channel.GetAutoBan()), apiErr, info, true)
 				}
 				service.FinishChannelKeyProbe(c, false)
 				if decision.Action == "retry" {

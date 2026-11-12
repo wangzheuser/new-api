@@ -25,5 +25,5 @@ func recordDistributorSetupError(c *gin.Context, channel *model.Channel, err *ty
 	}
 	service.ProcessChannelError(c, types.ChannelError{
 		ChannelId: channelID, ChannelType: channelType, ChannelName: channelName,
-	}, logErr, nil)
+	}, logErr, nil, true)
 }

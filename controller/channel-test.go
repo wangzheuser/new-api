@@ -2228,7 +2228,7 @@ func performOneChannelTest(ctx context.Context, target channelTestTarget, testUs
 		if channel.ChannelInfo.IsMultiKey {
 			service.HandleMultiKeyFailure(channel, common.GetContextKeyInt(result.context, constant.ContextKeyChannelMultiKeyIndex), common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), newAPIError, common.GetContextKeyString(result.context, constant.ContextKeyChannelHealthModel))
 		} else if service.ShouldDisableChannel(newAPIError) {
-			processChannelError(result.context, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, nil)
+			processChannelError(result.context, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, nil, true)
 		} else {
 			service.RecordChannelUpstreamErrorAsync(channel, newAPIError, "", common.GetContextKeyString(result.context, constant.ContextKeyChannelHealthModel))
 		}
