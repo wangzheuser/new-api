@@ -225,16 +225,70 @@ function ResourceCell(props: ResourceCellProps) {
   )
 }
 
-function SystemInstanceCard(props: { instance: SystemInstance }) {
+function NodeNameGuide() {
+  const { t } = useTranslation()
+  return (
+    <Popover>
+      <PopoverTrigger
+        className='inline-flex shrink-0 rounded-full focus-visible:ring-2 focus-visible:outline-none'
+        aria-label={t('Configure NODE_NAME')}
+      >
+        <Badge
+          variant='outline'
+          className='border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300'
+        >
+          <AlertTriangle className='size-3' aria-hidden='true' />
+        </Badge>
+      </PopoverTrigger>
+      <PopoverContent align='start' className='w-80'>
+        <PopoverHeader>
+          <PopoverTitle>{t('Configure NODE_NAME')}</PopoverTitle>
+          <PopoverDescription>
+            {t(
+              'This instance is using an automatic hostname. Set NODE_NAME to a stable unique value for multi-instance management.'
+            )}
+          </PopoverDescription>
+        </PopoverHeader>
+        <div className='space-y-2 text-xs'>
+          <div>
+            <div className='mb-1 font-medium'>{t('Example')}</div>
+            <code className='bg-muted block rounded-md px-2 py-1.5 font-mono text-[11px] break-all'>
+              NODE_NAME=new-api-master-1
+            </code>
+          </div>
+          <p className='text-muted-foreground'>
+            {t(
+              'Use a different stable value for each instance, then restart the service.'
+            )}
+          </p>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+export function SystemInstanceCard(props: {
+  instance: SystemInstance
+  deletingNodeName: string | null
+  isDeletingInstance: boolean
+  onDeleteStaleInstance: (instance: SystemInstance) => void
+}) {
   const { t } = useTranslation()
   const instance = props.instance
   const resources = instance.info?.resources
+  const isDeletingThisInstance =
+    props.isDeletingInstance && props.deletingNodeName === instance.node_name
   return (
     <article className='bg-background/60 space-y-3 rounded-lg border p-3'>
       <div className='flex min-w-0 items-start justify-between gap-3'>
         <div className='min-w-0'>
-          <div className='truncate text-sm font-medium'>
-            {getNodeName(instance)}
+          <div className='flex min-w-0 items-center gap-1.5'>
+            <span className='truncate text-sm font-medium'>
+              {getNodeName(instance)}
+            </span>
+            {instance.info?.node?.should_configure_manually && (
+              <NodeNameGuide />
+            )}
           </div>
           <div className='text-muted-foreground truncate font-mono text-[11px]'>
             {instance.info?.host?.hostname || '-'}
@@ -270,15 +324,45 @@ function SystemInstanceCard(props: { instance: SystemInstance }) {
           <div className='truncate font-mono'>{runtimeLabel(instance)}</div>
         </div>
         <div>
+          <div className='text-muted-foreground'>{t('Started')}</div>
+          <div>{formatTimestampToDate(instance.started_at)}</div>
+        </div>
+        <div>
           <div className='text-muted-foreground'>{t('Last Seen')}</div>
           <div>{formatTimestampToDate(instance.last_seen_at)}</div>
         </div>
       </div>
       <div className='grid grid-cols-3 gap-2 border-t pt-2'>
-        <ResourceCell value={resources?.cpu?.usage_percent} />
-        <ResourceCell value={resources?.memory?.usage_percent} />
-        <ResourceCell value={resources?.storage?.used_percent} />
+        <div className='min-w-0'>
+          <div className='text-muted-foreground text-xs'>{t('CPU')}</div>
+          <ResourceCell value={resources?.cpu?.usage_percent} />
+        </div>
+        <div className='min-w-0'>
+          <div className='text-muted-foreground text-xs'>{t('Memory')}</div>
+          <ResourceCell value={resources?.memory?.usage_percent} />
+        </div>
+        <div className='min-w-0'>
+          <div className='text-muted-foreground text-xs'>{t('Storage')}</div>
+          <ResourceCell value={resources?.storage?.used_percent} />
+        </div>
       </div>
+      {instance.status === 'stale' && (
+        <Button
+          type='button'
+          variant='destructive'
+          size='sm'
+          onClick={() => props.onDeleteStaleInstance(instance)}
+          disabled={props.isDeletingInstance}
+          aria-label={t('Delete stale instance')}
+        >
+          {isDeletingThisInstance ? (
+            <Loader2 className='size-3 animate-spin' aria-hidden='true' />
+          ) : (
+            <Trash2 className='size-3' aria-hidden='true' />
+          )}
+          {t('Delete stale instance')}
+        </Button>
+      )}
     </article>
   )
 }
@@ -297,7 +381,13 @@ function SystemInstancesList(props: SystemInstancesTableProps) {
     <div>
       <div className='space-y-2 sm:hidden'>
         {props.instances.map((instance) => (
-          <SystemInstanceCard key={instance.node_name} instance={instance} />
+          <SystemInstanceCard
+            key={instance.node_name}
+            instance={instance}
+            deletingNodeName={props.deletingNodeName}
+            isDeletingInstance={props.isDeletingInstance}
+            onDeleteStaleInstance={props.onDeleteStaleInstance}
+          />
         ))}
       </div>
       <div className='hidden overflow-x-auto rounded-md border sm:block'>
@@ -365,51 +455,7 @@ function SystemInstancesList(props: SystemInstancesTableProps) {
                           <span className='truncate text-sm font-medium'>
                             {getNodeName(instance)}
                           </span>
-                          {shouldConfigure && (
-                            <Popover>
-                              <PopoverTrigger
-                                className='inline-flex shrink-0 rounded-full focus-visible:ring-2 focus-visible:outline-none'
-                                aria-label={t('Configure NODE_NAME')}
-                              >
-                                <Badge
-                                  variant='outline'
-                                  className='border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300'
-                                >
-                                  <AlertTriangle
-                                    className='size-3'
-                                    aria-hidden='true'
-                                  />
-                                </Badge>
-                              </PopoverTrigger>
-                              <PopoverContent align='start' className='w-80'>
-                                <PopoverHeader>
-                                  <PopoverTitle>
-                                    {t('Configure NODE_NAME')}
-                                  </PopoverTitle>
-                                  <PopoverDescription>
-                                    {t(
-                                      'This instance is using an automatic hostname. Set NODE_NAME to a stable unique value for multi-instance management.'
-                                    )}
-                                  </PopoverDescription>
-                                </PopoverHeader>
-                                <div className='space-y-2 text-xs'>
-                                  <div>
-                                    <div className='mb-1 font-medium'>
-                                      {t('Example')}
-                                    </div>
-                                    <code className='bg-muted block rounded-md px-2 py-1.5 font-mono text-[11px] break-all'>
-                                      NODE_NAME=new-api-master-1
-                                    </code>
-                                  </div>
-                                  <p className='text-muted-foreground'>
-                                    {t(
-                                      'Use a different stable value for each instance, then restart the service.'
-                                    )}
-                                  </p>
-                                </div>
-                              </PopoverContent>
-                            </Popover>
-                          )}
+                          {shouldConfigure && <NodeNameGuide />}
                         </div>
                         <div className='text-muted-foreground truncate font-mono text-[11px]'>
                           {instance.info?.host?.hostname || '-'}
