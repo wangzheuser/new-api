@@ -17,7 +17,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
+import type { TFunction } from 'i18next'
 import { ListChecks, RefreshCw } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { ErrorState } from '@/components/error-state'
@@ -44,6 +46,12 @@ import { cn } from '@/lib/utils'
 
 const TASK_LIMIT = 20
 const ACTIVE_POLL_INTERVAL_MS = 8000
+const TASK_SKELETON_KEYS = [
+  'system-task-skeleton-1',
+  'system-task-skeleton-2',
+  'system-task-skeleton-3',
+  'system-task-skeleton-4',
+]
 
 const STATUS_VARIANT: Record<SystemTaskStatus, 'secondary' | 'destructive'> = {
   pending: 'secondary',
@@ -104,102 +112,258 @@ type SystemTasksTableProps = {
   tasks: SystemTask[]
 }
 
+function SystemTaskCard(props: { task: SystemTask }) {
+  const { t } = useTranslation()
+  const progress = getProgress(props.task)
+  return (
+    <article className='bg-background/60 space-y-2 rounded-lg border p-3'>
+      <div className='flex items-start justify-between gap-3'>
+        <div className='min-w-0'>
+          <div className='truncate text-sm font-medium'>
+            {t(TYPE_LABEL[props.task.type] ?? props.task.type)}
+          </div>
+          <div className='text-muted-foreground truncate font-mono text-[11px]'>
+            {TYPE_DISPLAY_ID[props.task.type] ?? props.task.type}
+          </div>
+        </div>
+        <Badge
+          variant={STATUS_VARIANT[props.task.status]}
+          className={cn(
+            'shrink-0 gap-1.5',
+            STATUS_CLASS_NAME[props.task.status]
+          )}
+        >
+          <span
+            className={cn(
+              'size-1.5 rounded-full',
+              STATUS_DOT_CLASS_NAME[props.task.status]
+            )}
+            aria-hidden='true'
+          />
+          {t(props.task.status)}
+        </Badge>
+      </div>
+      <div className='flex items-center gap-2'>
+        <Progress
+          value={progress ?? 0}
+          className={cn('flex-1', PROGRESS_BAR_CLASS_NAME[props.task.status])}
+        />
+        <span className='text-muted-foreground w-10 text-right text-xs tabular-nums'>
+          {progress === null ? '-' : `${progress}%`}
+        </span>
+      </div>
+      <div className='text-muted-foreground grid grid-cols-2 gap-2 text-xs'>
+        <div className='min-w-0'>
+          <div>{t('Executor')}</div>
+          <div className='truncate font-mono'>
+            {props.task.locked_by || '-'}
+          </div>
+        </div>
+        <div className='min-w-0'>
+          <div>{t('Updated')}</div>
+          <div>{formatTimestampToDate(props.task.updated_at)}</div>
+        </div>
+      </div>
+      {props.task.error && (
+        <div className='text-destructive border-t pt-2 text-xs break-words'>
+          {props.task.error}
+        </div>
+      )}
+    </article>
+  )
+}
+
 function SystemTasksTable(props: SystemTasksTableProps) {
   const { t, i18n } = useTranslation()
 
   return (
-    <div className='overflow-x-auto rounded-md border'>
-      <Table className='min-w-[900px]'>
-        <TableHeader>
-          <TableRow className='bg-muted/40 hover:bg-muted/40'>
-            <TableHead className='h-9 w-[260px] px-4 text-xs'>
-              {t('Type')}
-            </TableHead>
-            <TableHead className='h-9 w-[130px] text-xs'>
-              {t('Status')}
-            </TableHead>
-            <TableHead className='h-9 w-[180px] text-xs'>
-              {t('Progress')}
-            </TableHead>
-            <TableHead className='h-9 min-w-[260px] text-xs'>
-              {t('Executor')}
-            </TableHead>
-            <TableHead className='h-9 w-[190px] text-xs'>
-              {t('Updated')}
-            </TableHead>
-            <TableHead className='h-9 w-[220px] pr-4 text-xs'>
-              {t('Detail')}
-            </TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {props.tasks.map((task) => {
-            const progress = getProgress(task)
-            return (
-              <TableRow key={task.task_id} className='hover:bg-muted/30'>
-                <TableCell className='px-4 py-3 align-middle'>
-                  <div className='space-y-0.5'>
-                    <div className='font-medium'>
-                      {t(TYPE_LABEL[task.type] ?? task.type)}
+    <div>
+      <div className='space-y-2 sm:hidden'>
+        {props.tasks.map((task) => (
+          <SystemTaskCard key={task.task_id} task={task} />
+        ))}
+      </div>
+      <div className='hidden overflow-x-auto rounded-md border sm:block'>
+        <Table className='min-w-[900px]'>
+          <TableHeader>
+            <TableRow className='bg-muted/40 hover:bg-muted/40'>
+              <TableHead className='h-9 w-[260px] px-4 text-xs'>
+                {t('Type')}
+              </TableHead>
+              <TableHead className='h-9 w-[130px] text-xs'>
+                {t('Status')}
+              </TableHead>
+              <TableHead className='h-9 w-[180px] text-xs'>
+                {t('Progress')}
+              </TableHead>
+              <TableHead className='h-9 min-w-[260px] text-xs'>
+                {t('Executor')}
+              </TableHead>
+              <TableHead className='h-9 w-[190px] text-xs'>
+                {t('Updated')}
+              </TableHead>
+              <TableHead className='h-9 w-[220px] pr-4 text-xs'>
+                {t('Detail')}
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {props.tasks.map((task) => {
+              const progress = getProgress(task)
+              return (
+                <TableRow key={task.task_id} className='hover:bg-muted/30'>
+                  <TableCell className='px-4 py-3 align-middle'>
+                    <div className='space-y-0.5'>
+                      <div className='font-medium'>
+                        {t(TYPE_LABEL[task.type] ?? task.type)}
+                      </div>
+                      <div className='text-muted-foreground font-mono text-[11px]'>
+                        {TYPE_DISPLAY_ID[task.type] ?? task.type}
+                      </div>
                     </div>
-                    <div className='text-muted-foreground font-mono text-[11px]'>
-                      {TYPE_DISPLAY_ID[task.type] ?? task.type}
+                  </TableCell>
+                  <TableCell className='py-3 align-middle'>
+                    <Badge
+                      variant={STATUS_VARIANT[task.status]}
+                      className={cn('gap-1.5', STATUS_CLASS_NAME[task.status])}
+                    >
+                      <span
+                        className={cn(
+                          'size-1.5 rounded-full',
+                          STATUS_DOT_CLASS_NAME[task.status]
+                        )}
+                        aria-hidden='true'
+                      />
+                      {t(task.status)}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className='py-3 align-middle'>
+                    <div className='flex items-center gap-2'>
+                      <Progress
+                        value={progress ?? 0}
+                        className={cn(
+                          'w-24',
+                          PROGRESS_BAR_CLASS_NAME[task.status]
+                        )}
+                      />
+                      <span className='text-muted-foreground w-10 text-right text-xs tabular-nums'>
+                        {progress === null ? '-' : `${progress}%`}
+                      </span>
                     </div>
-                  </div>
-                </TableCell>
-                <TableCell className='py-3 align-middle'>
-                  <Badge
-                    variant={STATUS_VARIANT[task.status]}
-                    className={cn('gap-1.5', STATUS_CLASS_NAME[task.status])}
+                  </TableCell>
+                  <TableCell className='text-muted-foreground max-w-[280px] truncate py-3 align-middle font-mono text-xs'>
+                    {task.locked_by || '-'}
+                  </TableCell>
+                  <TableCell
+                    className='text-muted-foreground py-3 align-middle text-xs whitespace-nowrap'
+                    title={formatTimestampToDate(task.updated_at)}
                   >
-                    <span
-                      className={cn(
-                        'size-1.5 rounded-full',
-                        STATUS_DOT_CLASS_NAME[task.status]
-                      )}
-                      aria-hidden='true'
-                    />
-                    {t(task.status)}
-                  </Badge>
-                </TableCell>
-                <TableCell className='py-3 align-middle'>
-                  <div className='flex items-center gap-2'>
-                    <Progress
-                      value={progress ?? 0}
-                      className={cn(
-                        'w-24',
-                        PROGRESS_BAR_CLASS_NAME[task.status]
-                      )}
-                    />
-                    <span className='text-muted-foreground w-10 text-right text-xs tabular-nums'>
-                      {progress === null ? '-' : `${progress}%`}
-                    </span>
-                  </div>
-                </TableCell>
-                <TableCell className='text-muted-foreground max-w-[280px] truncate py-3 align-middle font-mono text-xs'>
-                  {task.locked_by || '-'}
-                </TableCell>
-                <TableCell
-                  className='text-muted-foreground py-3 align-middle text-xs whitespace-nowrap'
-                  title={formatTimestampToDate(task.updated_at)}
-                >
-                  {formatTimestampRelative(
-                    task.updated_at,
-                    'seconds',
-                    toIntlLocale(i18n.language)
-                  )}
-                </TableCell>
-                <TableCell
-                  className='text-destructive max-w-[220px] truncate py-3 pr-4 align-middle text-xs'
-                  title={task.error || undefined}
-                >
-                  {task.error || '-'}
-                </TableCell>
-              </TableRow>
-            )
-          })}
-        </TableBody>
-      </Table>
+                    {formatTimestampRelative(
+                      task.updated_at,
+                      'seconds',
+                      toIntlLocale(i18n.language)
+                    )}
+                  </TableCell>
+                  <TableCell
+                    className='text-destructive max-w-[220px] truncate py-3 pr-4 align-middle text-xs'
+                    title={task.error || undefined}
+                  >
+                    {task.error || '-'}
+                  </TableCell>
+                </TableRow>
+              )
+            })}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  )
+}
+
+function renderTaskContent(props: {
+  loading: boolean
+  isError: boolean
+  error: unknown
+  tasks: SystemTask[]
+  activeTasks: SystemTask[]
+  historyTasks: SystemTask[]
+  refetch: () => Promise<unknown>
+  t: TFunction
+}): ReactNode {
+  if (props.loading) {
+    return (
+      <div className='space-y-2 p-4 sm:p-5'>
+        {TASK_SKELETON_KEYS.map((key) => (
+          <Skeleton key={key} className='h-9 w-full rounded-md' />
+        ))}
+      </div>
+    )
+  }
+  if (props.isError) {
+    return (
+      <ErrorState
+        title={props.t('We could not load system tasks.')}
+        description={
+          props.error instanceof Error ? props.error.message : undefined
+        }
+        onRetry={() => void props.refetch()}
+        className='min-h-[260px]'
+      />
+    )
+  }
+  if (props.tasks.length === 0) {
+    return (
+      <div className='px-4 py-10 text-center sm:px-5'>
+        <div className='bg-muted mx-auto mb-3 flex size-10 items-center justify-center rounded-lg'>
+          <ListChecks
+            className='text-muted-foreground size-5'
+            aria-hidden='true'
+          />
+        </div>
+        <p className='text-muted-foreground text-sm'>
+          {props.t('No system tasks yet.')}
+        </p>
+      </div>
+    )
+  }
+  return (
+    <div className='space-y-4 p-4 sm:p-5'>
+      <div>
+        <div className='mb-2 flex items-center justify-between gap-3'>
+          <div>
+            <h4 className='text-sm font-medium'>{props.t('Active Tasks')}</h4>
+            <p className='text-muted-foreground mt-0.5 text-xs'>
+              {props.t('Tasks currently pending or running.')}
+            </p>
+          </div>
+          <Badge variant='outline'>{props.activeTasks.length}</Badge>
+        </div>
+        {props.activeTasks.length > 0 ? (
+          <SystemTasksTable tasks={props.activeTasks} />
+        ) : (
+          <div className='text-muted-foreground rounded-md border border-dashed px-4 py-6 text-center text-sm'>
+            {props.t('No active system tasks.')}
+          </div>
+        )}
+      </div>
+      <div>
+        <div className='mb-2 flex items-center justify-between gap-3'>
+          <div>
+            <h4 className='text-sm font-medium'>{props.t('Task History')}</h4>
+            <p className='text-muted-foreground mt-0.5 text-xs'>
+              {props.t('Recently completed or failed system task runs.')}
+            </p>
+          </div>
+          <Badge variant='outline'>{props.historyTasks.length}</Badge>
+        </div>
+        {props.historyTasks.length > 0 ? (
+          <SystemTasksTable tasks={props.historyTasks} />
+        ) : (
+          <div className='text-muted-foreground rounded-md border border-dashed px-4 py-6 text-center text-sm'>
+            {props.t('No historical system tasks.')}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -285,78 +449,16 @@ export function SystemTasksPanel() {
       </div>
 
       <div aria-busy={tasksQuery.isFetching}>
-        {loading ? (
-          <div className='space-y-2 p-4 sm:p-5'>
-            {Array.from({ length: 4 }).map((_, i) => (
-              <Skeleton key={i} className='h-9 w-full rounded-md' />
-            ))}
-          </div>
-        ) : tasksQuery.isError ? (
-          <ErrorState
-            title={t('We could not load system tasks.')}
-            description={
-              tasksQuery.error instanceof Error
-                ? tasksQuery.error.message
-                : undefined
-            }
-            onRetry={() => {
-              void tasksQuery.refetch()
-            }}
-            className='min-h-[260px]'
-          />
-        ) : tasks.length === 0 ? (
-          <div className='px-4 py-10 text-center sm:px-5'>
-            <div className='bg-muted mx-auto mb-3 flex size-10 items-center justify-center rounded-lg'>
-              <ListChecks
-                className='text-muted-foreground size-5'
-                aria-hidden='true'
-              />
-            </div>
-            <p className='text-muted-foreground text-sm'>
-              {t('No system tasks yet.')}
-            </p>
-          </div>
-        ) : (
-          <div className='space-y-4 p-4 sm:p-5'>
-            <div>
-              <div className='mb-2 flex items-center justify-between gap-3'>
-                <div>
-                  <h4 className='text-sm font-medium'>{t('Active Tasks')}</h4>
-                  <p className='text-muted-foreground mt-0.5 text-xs'>
-                    {t('Tasks currently pending or running.')}
-                  </p>
-                </div>
-                <Badge variant='outline'>{activeTasks.length}</Badge>
-              </div>
-              {activeTasks.length > 0 ? (
-                <SystemTasksTable tasks={activeTasks} />
-              ) : (
-                <div className='text-muted-foreground rounded-md border border-dashed px-4 py-6 text-center text-sm'>
-                  {t('No active system tasks.')}
-                </div>
-              )}
-            </div>
-
-            <div>
-              <div className='mb-2 flex items-center justify-between gap-3'>
-                <div>
-                  <h4 className='text-sm font-medium'>{t('Task History')}</h4>
-                  <p className='text-muted-foreground mt-0.5 text-xs'>
-                    {t('Recently completed or failed system task runs.')}
-                  </p>
-                </div>
-                <Badge variant='outline'>{historyTasks.length}</Badge>
-              </div>
-              {historyTasks.length > 0 ? (
-                <SystemTasksTable tasks={historyTasks} />
-              ) : (
-                <div className='text-muted-foreground rounded-md border border-dashed px-4 py-6 text-center text-sm'>
-                  {t('No historical system tasks.')}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
+        {renderTaskContent({
+          loading,
+          isError: tasksQuery.isError,
+          error: tasksQuery.error,
+          tasks,
+          activeTasks,
+          historyTasks,
+          refetch: tasksQuery.refetch,
+          t,
+        })}
       </div>
     </section>
   )

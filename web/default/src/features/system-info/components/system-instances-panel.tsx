@@ -225,6 +225,64 @@ function ResourceCell(props: ResourceCellProps) {
   )
 }
 
+function SystemInstanceCard(props: { instance: SystemInstance }) {
+  const { t } = useTranslation()
+  const instance = props.instance
+  const resources = instance.info?.resources
+  return (
+    <article className='bg-background/60 space-y-3 rounded-lg border p-3'>
+      <div className='flex min-w-0 items-start justify-between gap-3'>
+        <div className='min-w-0'>
+          <div className='truncate text-sm font-medium'>
+            {getNodeName(instance)}
+          </div>
+          <div className='text-muted-foreground truncate font-mono text-[11px]'>
+            {instance.info?.host?.hostname || '-'}
+          </div>
+        </div>
+        <Badge
+          variant='secondary'
+          className={cn('shrink-0 gap-1.5', STATUS_CLASS_NAME[instance.status])}
+        >
+          <span
+            className={cn(
+              'size-1.5 rounded-full',
+              STATUS_DOT_CLASS_NAME[instance.status]
+            )}
+            aria-hidden='true'
+          />
+          {t(instance.status)}
+        </Badge>
+      </div>
+      <div className='grid grid-cols-2 gap-x-4 gap-y-2 text-xs'>
+        <div>
+          <div className='text-muted-foreground'>{t('Role')}</div>
+          <div>{roleLabel(instance)}</div>
+        </div>
+        <div>
+          <div className='text-muted-foreground'>{t('Version')}</div>
+          <div className='truncate font-mono'>
+            {instance.info?.runtime?.version || '-'}
+          </div>
+        </div>
+        <div>
+          <div className='text-muted-foreground'>{t('Runtime')}</div>
+          <div className='truncate font-mono'>{runtimeLabel(instance)}</div>
+        </div>
+        <div>
+          <div className='text-muted-foreground'>{t('Last Seen')}</div>
+          <div>{formatTimestampToDate(instance.last_seen_at)}</div>
+        </div>
+      </div>
+      <div className='grid grid-cols-3 gap-2 border-t pt-2'>
+        <ResourceCell value={resources?.cpu?.usage_percent} />
+        <ResourceCell value={resources?.memory?.usage_percent} />
+        <ResourceCell value={resources?.storage?.used_percent} />
+      </div>
+    </article>
+  )
+}
+
 type SystemInstancesTableProps = {
   instances: SystemInstance[]
   deletingNodeName: string | null
@@ -236,255 +294,270 @@ function SystemInstancesList(props: SystemInstancesTableProps) {
   const { t, i18n } = useTranslation()
 
   return (
-    <div className='overflow-x-auto rounded-md border'>
-      <Table className='min-w-[1230px]'>
-        <TableHeader>
-          <TableRow className='bg-muted/40 hover:bg-muted/40'>
-            <TableHead className='h-9 min-w-[240px] px-4 text-xs'>
-              {t('Instances')}
-            </TableHead>
-            <TableHead className='h-9 w-[110px] text-xs'>
-              {t('Status')}
-            </TableHead>
-            <TableHead className='h-9 w-[100px] text-xs'>{t('Role')}</TableHead>
-            <TableHead className='h-9 w-[96px] text-xs'>{t('CPU')}</TableHead>
-            <TableHead className='h-9 w-[96px] text-xs'>
-              {t('Memory')}
-            </TableHead>
-            <TableHead className='h-9 w-[96px] text-xs'>
-              {t('Storage')}
-            </TableHead>
-            <TableHead className='h-9 w-[100px] text-xs'>
-              {t('Version')}
-            </TableHead>
-            <TableHead className='h-9 w-[140px] text-xs'>
-              {t('Runtime')}
-            </TableHead>
-            <TableHead className='h-9 w-[170px] text-xs'>
-              {t('Started')}
-            </TableHead>
-            <TableHead className='h-9 w-[170px] text-xs'>
-              {t('Last Seen')}
-            </TableHead>
-            <TableHead className='h-9 w-[90px] pr-4 text-right text-xs'>
-              {t('Actions')}
-            </TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {props.instances.map((instance) => {
-            const shouldConfigure =
-              instance.info?.node?.should_configure_manually === true
-            const resources = instance.info?.resources
-            const storage = resources?.storage
-            const isDeletingThisInstance =
-              props.isDeletingInstance &&
-              props.deletingNodeName === instance.node_name
-            return (
-              <TableRow key={instance.node_name} className='hover:bg-muted/30'>
-                <TableCell className='px-4 py-2.5 align-middle'>
-                  <div className='flex min-w-0 items-center gap-2'>
-                    <span
-                      className={cn(
-                        'size-2 shrink-0 rounded-full',
-                        STATUS_DOT_CLASS_NAME[instance.status]
-                      )}
-                      aria-hidden='true'
-                    />
-                    <div className='min-w-0'>
-                      <div className='flex min-w-0 items-center gap-1.5'>
-                        <span className='truncate text-sm font-medium'>
-                          {getNodeName(instance)}
-                        </span>
-                        {shouldConfigure && (
-                          <Popover>
-                            <PopoverTrigger
-                              className='inline-flex shrink-0 rounded-full focus-visible:ring-2 focus-visible:outline-none'
-                              aria-label={t('Configure NODE_NAME')}
-                            >
-                              <Badge
-                                variant='outline'
-                                className='border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300'
-                              >
-                                <AlertTriangle
-                                  className='size-3'
-                                  aria-hidden='true'
-                                />
-                              </Badge>
-                            </PopoverTrigger>
-                            <PopoverContent align='start' className='w-80'>
-                              <PopoverHeader>
-                                <PopoverTitle>
-                                  {t('Configure NODE_NAME')}
-                                </PopoverTitle>
-                                <PopoverDescription>
-                                  {t(
-                                    'This instance is using an automatic hostname. Set NODE_NAME to a stable unique value for multi-instance management.'
-                                  )}
-                                </PopoverDescription>
-                              </PopoverHeader>
-                              <div className='space-y-2 text-xs'>
-                                <div>
-                                  <div className='mb-1 font-medium'>
-                                    {t('Example')}
-                                  </div>
-                                  <code className='bg-muted block rounded-md px-2 py-1.5 font-mono text-[11px] break-all'>
-                                    NODE_NAME=new-api-master-1
-                                  </code>
-                                </div>
-                                <p className='text-muted-foreground'>
-                                  {t(
-                                    'Use a different stable value for each instance, then restart the service.'
-                                  )}
-                                </p>
-                              </div>
-                            </PopoverContent>
-                          </Popover>
+    <div>
+      <div className='space-y-2 sm:hidden'>
+        {props.instances.map((instance) => (
+          <SystemInstanceCard key={instance.node_name} instance={instance} />
+        ))}
+      </div>
+      <div className='hidden overflow-x-auto rounded-md border sm:block'>
+        <Table className='min-w-[1230px]'>
+          <TableHeader>
+            <TableRow className='bg-muted/40 hover:bg-muted/40'>
+              <TableHead className='h-9 min-w-[240px] px-4 text-xs'>
+                {t('Instances')}
+              </TableHead>
+              <TableHead className='h-9 w-[110px] text-xs'>
+                {t('Status')}
+              </TableHead>
+              <TableHead className='h-9 w-[100px] text-xs'>
+                {t('Role')}
+              </TableHead>
+              <TableHead className='h-9 w-[96px] text-xs'>{t('CPU')}</TableHead>
+              <TableHead className='h-9 w-[96px] text-xs'>
+                {t('Memory')}
+              </TableHead>
+              <TableHead className='h-9 w-[96px] text-xs'>
+                {t('Storage')}
+              </TableHead>
+              <TableHead className='h-9 w-[100px] text-xs'>
+                {t('Version')}
+              </TableHead>
+              <TableHead className='h-9 w-[140px] text-xs'>
+                {t('Runtime')}
+              </TableHead>
+              <TableHead className='h-9 w-[170px] text-xs'>
+                {t('Started')}
+              </TableHead>
+              <TableHead className='h-9 w-[170px] text-xs'>
+                {t('Last Seen')}
+              </TableHead>
+              <TableHead className='h-9 w-[90px] pr-4 text-right text-xs'>
+                {t('Actions')}
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {props.instances.map((instance) => {
+              const shouldConfigure =
+                instance.info?.node?.should_configure_manually === true
+              const resources = instance.info?.resources
+              const storage = resources?.storage
+              const isDeletingThisInstance =
+                props.isDeletingInstance &&
+                props.deletingNodeName === instance.node_name
+              return (
+                <TableRow
+                  key={instance.node_name}
+                  className='hover:bg-muted/30'
+                >
+                  <TableCell className='px-4 py-2.5 align-middle'>
+                    <div className='flex min-w-0 items-center gap-2'>
+                      <span
+                        className={cn(
+                          'size-2 shrink-0 rounded-full',
+                          STATUS_DOT_CLASS_NAME[instance.status]
                         )}
-                      </div>
-                      <div className='text-muted-foreground truncate font-mono text-[11px]'>
-                        {instance.info?.host?.hostname || '-'}
+                        aria-hidden='true'
+                      />
+                      <div className='min-w-0'>
+                        <div className='flex min-w-0 items-center gap-1.5'>
+                          <span className='truncate text-sm font-medium'>
+                            {getNodeName(instance)}
+                          </span>
+                          {shouldConfigure && (
+                            <Popover>
+                              <PopoverTrigger
+                                className='inline-flex shrink-0 rounded-full focus-visible:ring-2 focus-visible:outline-none'
+                                aria-label={t('Configure NODE_NAME')}
+                              >
+                                <Badge
+                                  variant='outline'
+                                  className='border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300'
+                                >
+                                  <AlertTriangle
+                                    className='size-3'
+                                    aria-hidden='true'
+                                  />
+                                </Badge>
+                              </PopoverTrigger>
+                              <PopoverContent align='start' className='w-80'>
+                                <PopoverHeader>
+                                  <PopoverTitle>
+                                    {t('Configure NODE_NAME')}
+                                  </PopoverTitle>
+                                  <PopoverDescription>
+                                    {t(
+                                      'This instance is using an automatic hostname. Set NODE_NAME to a stable unique value for multi-instance management.'
+                                    )}
+                                  </PopoverDescription>
+                                </PopoverHeader>
+                                <div className='space-y-2 text-xs'>
+                                  <div>
+                                    <div className='mb-1 font-medium'>
+                                      {t('Example')}
+                                    </div>
+                                    <code className='bg-muted block rounded-md px-2 py-1.5 font-mono text-[11px] break-all'>
+                                      NODE_NAME=new-api-master-1
+                                    </code>
+                                  </div>
+                                  <p className='text-muted-foreground'>
+                                    {t(
+                                      'Use a different stable value for each instance, then restart the service.'
+                                    )}
+                                  </p>
+                                </div>
+                              </PopoverContent>
+                            </Popover>
+                          )}
+                        </div>
+                        <div className='text-muted-foreground truncate font-mono text-[11px]'>
+                          {instance.info?.host?.hostname || '-'}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </TableCell>
-                <TableCell className='py-2.5 align-middle'>
-                  <Badge
-                    variant='secondary'
-                    className={cn(
-                      'gap-1.5',
-                      STATUS_CLASS_NAME[instance.status]
-                    )}
-                  >
-                    <span
+                  </TableCell>
+                  <TableCell className='py-2.5 align-middle'>
+                    <Badge
+                      variant='secondary'
                       className={cn(
-                        'size-1.5 rounded-full',
-                        STATUS_DOT_CLASS_NAME[instance.status]
+                        'gap-1.5',
+                        STATUS_CLASS_NAME[instance.status]
                       )}
-                      aria-hidden='true'
-                    />
-                    {t(instance.status)}
-                  </Badge>
-                </TableCell>
-                <TableCell className='py-2.5 align-middle'>
-                  <TooltipProvider delay={100}>
-                    <Tooltip>
-                      <TooltipTrigger
-                        className='inline-flex shrink-0 rounded-full focus-visible:ring-2 focus-visible:outline-none'
-                        aria-label={t('Node role')}
-                      >
-                        <Badge variant='outline'>{roleLabel(instance)}</Badge>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        {t(roleDescriptionKey(instance))}
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                </TableCell>
-                <TableCell className='py-2.5 align-middle'>
-                  <ResourceCell value={resources?.cpu?.usage_percent} />
-                </TableCell>
-                <TableCell className='py-2.5 align-middle'>
-                  <ResourceCell value={resources?.memory?.usage_percent} />
-                </TableCell>
-                <TableCell className='py-2.5 align-middle'>
-                  <ResourceCell
-                    value={storage?.used_percent}
-                    tooltip={
-                      storage ? (
-                        <div className='space-y-1 text-xs'>
-                          <div className='grid grid-cols-[auto_1fr] gap-x-3 gap-y-1'>
-                            <span className='text-muted-foreground'>
-                              {t('Used')}
-                            </span>
-                            <span className='font-mono'>
-                              {formatBytes(storage.used_bytes)}
-                            </span>
-                            <span className='text-muted-foreground'>
-                              {t('Free')}
-                            </span>
-                            <span className='font-mono'>
-                              {formatBytes(storage.free_bytes)}
-                            </span>
-                            <span className='text-muted-foreground'>
-                              {t('Total')}
-                            </span>
-                            <span className='font-mono'>
-                              {formatBytes(storage.total_bytes)}
-                            </span>
-                          </div>
-                        </div>
-                      ) : undefined
-                    }
-                  />
-                </TableCell>
-                <TableCell className='py-2.5 align-middle'>
-                  <div className='truncate font-mono text-xs'>
-                    {instance.info?.runtime?.version || '-'}
-                  </div>
-                </TableCell>
-                <TableCell className='py-2.5 align-middle'>
-                  <div className='truncate font-mono text-xs'>
-                    {runtimeLabel(instance)}
-                  </div>
-                </TableCell>
-                <TableCell className='text-muted-foreground py-2.5 align-middle text-xs whitespace-nowrap'>
-                  {formatTimestampToDate(instance.started_at)}
-                </TableCell>
-                <TableCell
-                  className='text-muted-foreground py-2.5 align-middle text-xs whitespace-nowrap'
-                  title={formatTimestampToDate(instance.last_seen_at)}
-                >
-                  {formatTimestampRelative(
-                    instance.last_seen_at,
-                    'seconds',
-                    toIntlLocale(i18n.language)
-                  )}
-                </TableCell>
-                <TableCell className='py-2.5 pr-4 text-right align-middle'>
-                  {instance.status === 'stale' ? (
+                    >
+                      <span
+                        className={cn(
+                          'size-1.5 rounded-full',
+                          STATUS_DOT_CLASS_NAME[instance.status]
+                        )}
+                        aria-hidden='true'
+                      />
+                      {t(instance.status)}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className='py-2.5 align-middle'>
                     <TooltipProvider delay={100}>
                       <Tooltip>
                         <TooltipTrigger
-                          render={
-                            <Button
-                              type='button'
-                              variant='destructive'
-                              size='icon-xs'
-                              onClick={() =>
-                                props.onDeleteStaleInstance(instance)
-                              }
-                              disabled={
-                                props.isDeletingInstance ||
-                                isDeletingThisInstance
-                              }
-                              aria-label={t('Delete stale instance')}
-                            >
-                              {isDeletingThisInstance ? (
-                                <Loader2
-                                  className='size-3 animate-spin'
-                                  aria-hidden='true'
-                                />
-                              ) : (
-                                <Trash2 className='size-3' aria-hidden='true' />
-                              )}
-                            </Button>
-                          }
-                        />
+                          className='inline-flex shrink-0 rounded-full focus-visible:ring-2 focus-visible:outline-none'
+                          aria-label={t('Node role')}
+                        >
+                          <Badge variant='outline'>{roleLabel(instance)}</Badge>
+                        </TooltipTrigger>
                         <TooltipContent>
-                          {t('Delete stale instance')}
+                          {t(roleDescriptionKey(instance))}
                         </TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
-                  ) : (
-                    <span className='text-muted-foreground text-xs'>-</span>
-                  )}
-                </TableCell>
-              </TableRow>
-            )
-          })}
-        </TableBody>
-      </Table>
+                  </TableCell>
+                  <TableCell className='py-2.5 align-middle'>
+                    <ResourceCell value={resources?.cpu?.usage_percent} />
+                  </TableCell>
+                  <TableCell className='py-2.5 align-middle'>
+                    <ResourceCell value={resources?.memory?.usage_percent} />
+                  </TableCell>
+                  <TableCell className='py-2.5 align-middle'>
+                    <ResourceCell
+                      value={storage?.used_percent}
+                      tooltip={
+                        storage ? (
+                          <div className='space-y-1 text-xs'>
+                            <div className='grid grid-cols-[auto_1fr] gap-x-3 gap-y-1'>
+                              <span className='text-muted-foreground'>
+                                {t('Used')}
+                              </span>
+                              <span className='font-mono'>
+                                {formatBytes(storage.used_bytes)}
+                              </span>
+                              <span className='text-muted-foreground'>
+                                {t('Free')}
+                              </span>
+                              <span className='font-mono'>
+                                {formatBytes(storage.free_bytes)}
+                              </span>
+                              <span className='text-muted-foreground'>
+                                {t('Total')}
+                              </span>
+                              <span className='font-mono'>
+                                {formatBytes(storage.total_bytes)}
+                              </span>
+                            </div>
+                          </div>
+                        ) : undefined
+                      }
+                    />
+                  </TableCell>
+                  <TableCell className='py-2.5 align-middle'>
+                    <div className='truncate font-mono text-xs'>
+                      {instance.info?.runtime?.version || '-'}
+                    </div>
+                  </TableCell>
+                  <TableCell className='py-2.5 align-middle'>
+                    <div className='truncate font-mono text-xs'>
+                      {runtimeLabel(instance)}
+                    </div>
+                  </TableCell>
+                  <TableCell className='text-muted-foreground py-2.5 align-middle text-xs whitespace-nowrap'>
+                    {formatTimestampToDate(instance.started_at)}
+                  </TableCell>
+                  <TableCell
+                    className='text-muted-foreground py-2.5 align-middle text-xs whitespace-nowrap'
+                    title={formatTimestampToDate(instance.last_seen_at)}
+                  >
+                    {formatTimestampRelative(
+                      instance.last_seen_at,
+                      'seconds',
+                      toIntlLocale(i18n.language)
+                    )}
+                  </TableCell>
+                  <TableCell className='py-2.5 pr-4 text-right align-middle'>
+                    {instance.status === 'stale' ? (
+                      <TooltipProvider delay={100}>
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <Button
+                                type='button'
+                                variant='destructive'
+                                size='icon-xs'
+                                onClick={() =>
+                                  props.onDeleteStaleInstance(instance)
+                                }
+                                disabled={
+                                  props.isDeletingInstance ||
+                                  isDeletingThisInstance
+                                }
+                                aria-label={t('Delete stale instance')}
+                              >
+                                {isDeletingThisInstance ? (
+                                  <Loader2
+                                    className='size-3 animate-spin'
+                                    aria-hidden='true'
+                                  />
+                                ) : (
+                                  <Trash2
+                                    className='size-3'
+                                    aria-hidden='true'
+                                  />
+                                )}
+                              </Button>
+                            }
+                          />
+                          <TooltipContent>
+                            {t('Delete stale instance')}
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    ) : (
+                      <span className='text-muted-foreground text-xs'>-</span>
+                    )}
+                  </TableCell>
+                </TableRow>
+              )
+            })}
+          </TableBody>
+        </Table>
+      </div>
     </div>
   )
 }
