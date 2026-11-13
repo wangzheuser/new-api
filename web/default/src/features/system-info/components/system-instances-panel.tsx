@@ -225,6 +225,29 @@ function ResourceCell(props: ResourceCellProps) {
   )
 }
 
+function InstanceStorageDetails(props: { instance: SystemInstance }) {
+  const { t } = useTranslation()
+  const storage = props.instance.info?.resources?.storage
+  if (!storage) return null
+
+  return (
+    <dl className='grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs'>
+      <dt className='text-muted-foreground'>{t('Used')}</dt>
+      <dd className='text-right font-mono'>
+        {formatBytes(storage.used_bytes)}
+      </dd>
+      <dt className='text-muted-foreground'>{t('Free')}</dt>
+      <dd className='text-right font-mono'>
+        {formatBytes(storage.free_bytes)}
+      </dd>
+      <dt className='text-muted-foreground'>{t('Total')}</dt>
+      <dd className='text-right font-mono'>
+        {formatBytes(storage.total_bytes)}
+      </dd>
+    </dl>
+  )
+}
+
 function NodeNameGuide() {
   const { t } = useTranslation()
   return (
@@ -309,9 +332,12 @@ export function SystemInstanceCard(props: {
         </Badge>
       </div>
       <div className='grid grid-cols-2 gap-x-4 gap-y-2 text-xs'>
-        <div>
+        <div className='col-span-2'>
           <div className='text-muted-foreground'>{t('Role')}</div>
           <div>{roleLabel(instance)}</div>
+          <p className='text-muted-foreground mt-1'>
+            {t(roleDescriptionKey(instance))}
+          </p>
         </div>
         <div>
           <div className='text-muted-foreground'>{t('Version')}</div>
@@ -346,6 +372,7 @@ export function SystemInstanceCard(props: {
           <ResourceCell value={resources?.storage?.used_percent} />
         </div>
       </div>
+      <InstanceStorageDetails instance={instance} />
       {instance.status === 'stale' && (
         <Button
           type='button'
@@ -507,28 +534,7 @@ function SystemInstancesList(props: SystemInstancesTableProps) {
                       value={storage?.used_percent}
                       tooltip={
                         storage ? (
-                          <div className='space-y-1 text-xs'>
-                            <div className='grid grid-cols-[auto_1fr] gap-x-3 gap-y-1'>
-                              <span className='text-muted-foreground'>
-                                {t('Used')}
-                              </span>
-                              <span className='font-mono'>
-                                {formatBytes(storage.used_bytes)}
-                              </span>
-                              <span className='text-muted-foreground'>
-                                {t('Free')}
-                              </span>
-                              <span className='font-mono'>
-                                {formatBytes(storage.free_bytes)}
-                              </span>
-                              <span className='text-muted-foreground'>
-                                {t('Total')}
-                              </span>
-                              <span className='font-mono'>
-                                {formatBytes(storage.total_bytes)}
-                              </span>
-                            </div>
-                          </div>
+                          <InstanceStorageDetails instance={instance} />
                         ) : undefined
                       }
                     />

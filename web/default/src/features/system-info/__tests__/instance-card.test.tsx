@@ -73,3 +73,50 @@ test('online instances cannot be deleted and pending deletion disables the actio
   )
   assert.match(await renderCard(instance, true), /disabled=""/)
 })
+
+test('mobile instances explain both master and worker roles', async () => {
+  assert.match(
+    await renderCard({ ...instance, info: { role: { is_master: true } } }),
+    /Master instances run scheduled background tasks\./
+  )
+  assert.match(
+    await renderCard({ ...instance, info: { role: { is_master: false } } }),
+    /Worker instances do not run master-only background tasks\./
+  )
+})
+
+test('mobile storage details show used, free and total capacity with units', async () => {
+  const html = await renderCard({
+    ...instance,
+    info: {
+      resources: {
+        storage: {
+          used_bytes: 1024 ** 3,
+          free_bytes: 2 * 1024 ** 3,
+          total_bytes: 3 * 1024 ** 3,
+        },
+      },
+    },
+  })
+  for (const [label, value] of [
+    ['Used', '1 GB'],
+    ['Free', '2 GB'],
+    ['Total', '3 GB'],
+  ]) {
+    assert.match(html, new RegExp(`>${label}</dt><dd[^>]*>${value}</dd>`))
+  }
+})
+
+test('missing storage omits capacity details and partial storage preserves zero and unknown values', async () => {
+  assert.doesNotMatch(
+    await renderCard({ ...instance, info: undefined }),
+    /<dt[^>]*>(Used|Free|Total)<\/dt>/
+  )
+  const html = await renderCard({
+    ...instance,
+    info: { resources: { storage: { used_bytes: 0 } } },
+  })
+  assert.match(html, />Used<\/dt><dd[^>]*>0 B<\/dd>/)
+  assert.match(html, />Free<\/dt><dd[^>]*>-<\/dd>/)
+  assert.match(html, />Total<\/dt><dd[^>]*>-<\/dd>/)
+})
