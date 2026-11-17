@@ -1,10 +1,15 @@
 package controller
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -14,7 +19,10 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relay/channel"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/alicebob/miniredis/v2"
@@ -31,18 +39,26 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
 	for _, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAI} {
 		for _, scenario := range []struct {
-			name     string
-			status   int
-			message  string
-			recover  bool
-			backup   bool
-			wantKeys []string
+			name        string
+			status      int
+			message     string
+			recover     bool
+			backup      bool
+			wantKeys    []string
+			dialFailure bool
+			stop        string
 		}{
-			{"key quota recovery", 429, "quota exceeded", true, false, []string{"KEY_A", "KEY_B"}},
-			{"key quota budget exhausted", 429, "quota exceeded", false, false, []string{"KEY_A", "KEY_B", "KEY_C"}},
-			{"channel recovery", 500, "upstream failed", true, true, []string{"KEY_A", "BACKUP_A"}},
-			{"channel unavailable", 500, "upstream failed", false, false, []string{"KEY_A"}},
-			{"protocol event", 0, "", false, false, []string{"KEY_A"}},
+			{name: "key quota recovery", status: 429, message: "quota exceeded", recover: true, wantKeys: []string{"KEY_A", "KEY_B"}},
+			{name: "key quota budget exhausted", status: 429, message: "quota exceeded", wantKeys: []string{"KEY_A", "KEY_B", "KEY_C"}},
+			{name: "channel recovery", status: 500, message: "upstream failed", recover: true, backup: true, wantKeys: []string{"KEY_A", "BACKUP_A"}},
+			{name: "channel unavailable", status: 500, message: "upstream failed", wantKeys: []string{"KEY_A"}},
+			{name: "protocol event", wantKeys: []string{"KEY_A"}},
+			{name: "dial recovery", dialFailure: true, recover: true, backup: true, wantKeys: []string{"KEY_A", "BACKUP_A"}},
+			{name: "dial budget exhausted", dialFailure: true, backup: true, wantKeys: []string{"KEY_A", "BACKUP_A", "BACKUP_B"}},
+			{name: "dial no budget", dialFailure: true, stop: "budget", wantKeys: []string{"KEY_A"}},
+			{name: "dial status excluded", dialFailure: true, stop: "status", wantKeys: []string{"KEY_A"}},
+			{name: "dial pinned", dialFailure: true, stop: "pin", wantKeys: []string{"KEY_A"}},
+			{name: "dial strict session", dialFailure: true, stop: "session", wantKeys: []string{"KEY_A"}},
 		} {
 			t.Run(string(format)+"/"+scenario.name, func(t *testing.T) {
 				oldDB, oldLogDB := model.DB, model.LOG_DB
@@ -69,13 +85,19 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 				})
 				require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"MODEL_X":1}`))
 				service.InitHttpClient()
+				previousRanges := operation_setting.AutomaticRetryStatusCodeRanges
+				operation_setting.AutomaticRetryStatusCodeRanges = []operation_setting.StatusCodeRange{{Start: 400, End: 599}}
+				t.Cleanup(func() { operation_setting.AutomaticRetryStatusCodeRanges = previousRanges })
+				if scenario.stop == "budget" {
+					common.RetryTimes = 0
+				}
+				if scenario.stop == "status" {
+					operation_setting.AutomaticRetryStatusCodeRanges = []operation_setting.StatusCodeRange{{Start: 503, End: 503}}
+				}
 				var mu sync.Mutex
 				var attempts []string
 				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					key := r.Header.Get("X-Api-Key")
-					mu.Lock()
-					attempts = append(attempts, key)
-					mu.Unlock()
 					failed := scenario.status != 0
 					if scenario.recover {
 						failed = key == "KEY_A"
@@ -98,25 +120,61 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 					_, _ = io.WriteString(w, "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"fixture-ok\"}}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\ndata: {\"type\":\"message_stop\"}\n\n")
 				}))
 				defer upstream.Close()
+				clientTransport := service.GetHttpClient()
+				base := clientTransport.Transport
+				transport := base.(*http.Transport).Clone()
+				t.Cleanup(transport.CloseIdleConnections)
+				transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+					if strings.HasPrefix(address, "unreachable.invalid:") {
+						return nil, &net.OpError{Op: "dial", Net: network, Err: context.DeadlineExceeded}
+					}
+					return (&net.Dialer{}).DialContext(ctx, network, address)
+				}
+				transport.Proxy = nil
+				clientTransport.Transport = legacyRetryTransportFunc(func(r *http.Request) (*http.Response, error) {
+					mu.Lock()
+					attempts = append(attempts, r.Header.Get("X-Api-Key"))
+					mu.Unlock()
+					return transport.RoundTrip(r)
+				})
+				t.Cleanup(func() { clientTransport.Transport = base })
+				primaryURL := upstream.URL
+				if scenario.dialFailure {
+					primaryURL = "http://unreachable.invalid"
+				}
+
 				channel := &model.Channel{
 					Type: constant.ChannelTypeAnthropic, Name: "legacy-fixture", Key: "KEY_A\nKEY_B\nKEY_C\nKEY_D", Status: common.ChannelStatusEnabled,
-					AutoBan: common.GetPointer(1), BaseURL: &upstream.URL, Group: "default", Models: "MODEL_X",
+					AutoBan: common.GetPointer(1), BaseURL: &primaryURL, Priority: common.GetPointer(int64(3)), Group: "default", Models: "MODEL_X",
 					ChannelInfo:   model.ChannelInfo{IsMultiKey: true, MultiKeySize: 4, MultiKeyMode: constant.MultiKeyModePolling},
 					OtherSettings: `{"multi_key_auto_disable_override":{"temporary_status_codes":"429,500-503","persistent_status_codes":"401","temporary_disable_minutes":1}}`,
 				}
 				require.NoError(t, db.Create(channel).Error)
-				require.NoError(t, db.Create(&model.Ability{Group: "default", Model: "MODEL_X", ChannelId: channel.Id, Enabled: true}).Error)
+				require.NoError(t, db.Create(&model.Ability{Group: "default", Model: "MODEL_X", ChannelId: channel.Id, Enabled: true, Priority: channel.Priority}).Error)
 				if scenario.backup {
 					backup := channel.Snapshot()
 					backup.Id, backup.Name, backup.Key = 0, "backup-fixture", "BACKUP_A\nBACKUP_B"
 					backup.ChannelInfo.MultiKeySize = 2
+					backup.Priority = common.GetPointer(int64(2))
+					if scenario.recover {
+						backup.BaseURL = &upstream.URL
+					}
 					require.NoError(t, db.Create(backup).Error)
 					require.NoError(t, backup.AddAbilities(nil))
+					if scenario.name == "dial budget exhausted" {
+						last := backup.Snapshot()
+						last.Id, last.Name, last.Key = 0, "last-fixture", "BACKUP_B"
+						last.Priority = common.GetPointer(int64(1))
+						last.ChannelInfo = model.ChannelInfo{}
+						require.NoError(t, db.Create(last).Error)
+						require.NoError(t, last.AddAbilities(nil))
+					}
 				}
 				path := "/v1/messages"
 				if format == types.RelayFormatOpenAI {
 					path = "/v1/chat/completions"
 				}
+				var requestContext *gin.Context
 				router := gin.New()
 				router.POST(path, func(c *gin.Context) {
 					c.Set("id", 1)
@@ -130,6 +188,13 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 						c.Status(503)
 						return
 					}
+					if scenario.stop == "pin" {
+						c.Set("specific_channel_id", channel.Id)
+					}
+					if scenario.stop == "session" {
+						c.Set("channel_affinity_skip_retry_on_failure", true)
+					}
+					requestContext = c
 					Relay(c, format)
 				})
 				// Wait for the handler before inspecting stream output and settled consumption.
@@ -142,6 +207,20 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 				got := append([]string(nil), attempts...)
 				mu.Unlock()
 				require.Equal(t, scenario.wantKeys, got, body)
+				if scenario.dialFailure {
+					events := service.RequestPolicy(requestContext).Events()
+					require.GreaterOrEqual(t, len(events), 3)
+					assert.Equal(t, "transport", events[1].ErrorSource)
+					assert.Equal(t, "do_request_failed", events[1].ErrorCode)
+					assert.Equal(t, 500, events[1].Status)
+					reasons := map[string]string{"budget": "attempt_budget_exhausted", "status": "status_not_retryable", "pin": "pinned_channel", "session": "strict_session"}
+					reason := "retry_status_matched"
+					if scenario.stop != "" {
+						reason = reasons[scenario.stop]
+					}
+					assert.Equal(t, reason, events[2].Decision.Reason)
+					assert.NotContains(t, body, "unreachable.invalid")
+				}
 				var logs []model.Log
 				require.NoError(t, db.Where("type = ?", model.LogTypeConsume).Find(&logs).Error)
 				var user model.User
@@ -194,5 +273,82 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 				assert.Empty(t, loaded.ChannelInfo.MultiKeyStatusList, "temporary failures must not permanently disable the channel or keys")
 			})
 		}
+	}
+}
+
+// legacyRetryTransportFunc adapts deterministic transport faults to the real relay fixture.
+type legacyRetryTransportFunc func(*http.Request) (*http.Response, error)
+
+// RoundTrip delegates one outgoing request to the fixture.
+func (f legacyRetryTransportFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// TestStreamConnectionFailureBoundary preserves commit protection across transport phases.
+func TestStreamConnectionFailureBoundary(t *testing.T) {
+	for _, phase := range []string{"connecting", "http proxy", "connected", "reconnecting", "no trace", "payload", "error frame", "ping failed", "cancelled"} {
+		t.Run(phase, func(t *testing.T) {
+			service.InitHttpClient()
+			client := service.GetHttpClient()
+			previous := client.Transport
+			t.Cleanup(func() { client.Transport = previous })
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			requestCtx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil).WithContext(requestCtx)
+			info := &relaycommon.RelayInfo{IsStream: true, StreamStatus: relaycommon.NewStreamStatus(), ChannelMeta: &relaycommon.ChannelMeta{}}
+			oldRanges := operation_setting.AutomaticRetryStatusCodeRanges
+			operation_setting.AutomaticRetryStatusCodeRanges = []operation_setting.StatusCodeRange{{Start: 400, End: 599}}
+			t.Cleanup(func() { operation_setting.AutomaticRetryStatusCodeRanges = oldRanges })
+			client.Transport = legacyRetryTransportFunc(func(r *http.Request) (*http.Response, error) {
+				trace := httptrace.ContextClientTrace(r.Context())
+				if phase != "no trace" && trace != nil && trace.GetConn != nil {
+					trace.GetConn(r.URL.Host)
+				}
+				if (phase == "connected" || phase == "reconnecting") && trace != nil && trace.GotConn != nil {
+					trace.GotConn(httptrace.GotConnInfo{})
+				}
+				if phase == "reconnecting" && trace != nil && trace.GetConn != nil {
+					trace.GetConn(r.URL.Host)
+				}
+				switch phase {
+				case "payload":
+					info.StreamStatus.MarkClientPayloadCommitted()
+				case "error frame":
+					info.StreamStatus.TryMarkErrorFrameWritten()
+				case "ping failed":
+					info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonPingFail, errors.New("client write failed"))
+				case "cancelled":
+					cancel()
+				}
+				return nil, errors.New("transport fixture failure")
+			})
+			if phase == "http proxy" {
+				transport := &http.Transport{
+					Proxy: http.ProxyURL(&url.URL{Scheme: "http", Host: "proxy.invalid:8080"}),
+					DialContext: func(context.Context, string, string) (net.Conn, error) {
+						return nil, &net.OpError{Op: "dial", Net: "tcp", Err: context.DeadlineExceeded}
+					},
+				}
+				t.Cleanup(transport.CloseIdleConnections)
+				client.Transport = transport
+			}
+			req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, "http://upstream.invalid", strings.NewReader("fixture"))
+			require.NoError(t, err)
+			_, err = channel.DoRequest(ctx, req, info)
+			require.Error(t, err)
+			apiErr := types.NewError(err, types.ErrorCodeDoRequestFailed)
+			assert.Equal(t, "upstream error: do request failed", apiErr.Error())
+			decision := decideHTTPRelayRetry(ctx, info, apiErr, 2)
+			if phase == "connecting" || phase == "http proxy" {
+				assert.Equal(t, "retry", decision.Action)
+			} else if phase == "cancelled" {
+				assert.Error(t, ctx.Request.Context().Err())
+			} else {
+				assert.Equal(t, "stop", decision.Action)
+			}
+			if phase == "connecting" || phase == "http proxy" {
+				info.StreamStatus.PrepareRetryAttempt()
+				assert.Equal(t, relaycommon.StreamRetryCommitPolicyHTTP, info.StreamStatus.RetryCommitPolicy())
+			}
+		})
 	}
 }

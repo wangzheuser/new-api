@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	common2 "github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -568,9 +569,14 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	clientCopy.CheckRedirect = keepUpstreamRedirectResponse
 	client = &clientCopy
 
+	var connectionRequested, connectionObtained atomic.Bool
 	if info.IsStream {
 		upstreamCtx, upstreamCancel := context.WithCancel(req.Context())
 		req = req.WithContext(upstreamCtx)
+		req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+			GetConn: func(string) { connectionRequested.Store(true) },
+			GotConn: func(httptrace.GotConnInfo) { connectionObtained.Store(true) },
+		}))
 		info.SetStreamUpstreamCancel(upstreamCancel)
 		if info.StreamStatus == nil {
 			info.StreamStatus = common.NewStreamStatus()
@@ -589,6 +595,10 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	resp, err := client.Do(req)
 	if err != nil {
 		info.StopStreamPinger()
+		// No business request was sent when connection establishment never completed.
+		if connectionRequested.Load() && !connectionObtained.Load() {
+			info.EnablePayloadRetry()
+		}
 		if c.Request.Context().Err() == nil {
 			logger.LogError(c, "do request failed: "+err.Error())
 		}
