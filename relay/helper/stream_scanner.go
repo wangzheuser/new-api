@@ -195,6 +195,9 @@ func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *
 		queueMaxBytes = 1 << 20
 		maxEventBytes = 1 << 20
 	}
+	if options.RequireExplicitTerminal {
+		info.StreamStatus.RequireTerminal()
+	}
 	scanner := newStreamScannerWithLimit(resp.Body, maxEventBytes)
 	dataQueue := newBoundedStreamDataQueue(queueMaxEvents, queueMaxBytes)
 
@@ -250,6 +253,12 @@ func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *
 			func() {
 				writeMutex.Lock()
 				defer writeMutex.Unlock()
+				if !info.FirstPayloadDeadline.IsZero() {
+					if _, endErr := info.StreamStatus.End(); endErr == relaycommon.ErrFirstPayloadTimeout {
+						sr.Stop(nil)
+						return
+					}
+				}
 				ExtendWriteDeadline(c)
 				info.ObserveCacheUsage(info.GetFinalRequestRelayFormat(), []byte(data))
 				dataHandler(data, sr)
@@ -307,6 +316,10 @@ func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *
 					return
 				}
 			} else {
+				// A transport trailer cannot replace a protocol-specific terminal queued before it.
+				if options.RequiredTerminalEvent != "" && options.RequiredTerminalEvent != "[DONE]" {
+					return
+				}
 				info.StreamStatus.SetTerminal("[DONE]", "completed")
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
 				logger.LogDebug(c, "received [DONE], stopping scanner")

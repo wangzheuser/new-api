@@ -39,7 +39,8 @@ func ClassifyRelayOutcome(ctx context.Context, info *relaycommon.RelayInfo, apiE
 		local := root.GetErrorType() == types.ErrorTypeNewAPIError
 		return classifyFailure(local, string(root.GetErrorCode()), root.ToOpenAIError().Type, root.StatusCode)
 	}
-	deadlineExceeded := info.StreamStatus != nil && errors.Is(info.StreamStatus.EndError, context.DeadlineExceeded)
+	_, endErr := info.StreamStatus.End()
+	deadlineExceeded := errors.Is(endErr, context.DeadlineExceeded)
 	if stream.Response == relaycommon.ResponseOutcomeCancelled || stream.EndReason == relaycommon.StreamEndReasonPingFail {
 		return OutcomeIgnored
 	}
@@ -60,7 +61,7 @@ func ClassifyRelayOutcome(ctx context.Context, info *relaycommon.RelayInfo, apiE
 		return OutcomeFailure
 	}
 	switch stream.EndReason {
-	case relaycommon.StreamEndReasonTimeout, relaycommon.StreamEndReasonScannerErr, relaycommon.StreamEndReasonPanic:
+	case relaycommon.StreamEndReasonTimeout, relaycommon.StreamEndReasonUnexpectedEOF, relaycommon.StreamEndReasonScannerErr, relaycommon.StreamEndReasonPanic:
 		return OutcomeFailure
 	}
 	if stream.ExpectsTerminal && stream.Response == relaycommon.ResponseOutcomeUnknown && stream.EndReason != relaycommon.StreamEndReasonDone {

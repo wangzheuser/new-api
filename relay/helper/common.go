@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 
@@ -87,9 +88,50 @@ func ResponseChunkData(c *gin.Context, resp dto.ResponsesStreamResponse, data st
 		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
 	}
 
-	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
-	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("data: %s", data)})
+	// Gin's Render stores write errors in c.Errors, which would make a failed delta look committed.
+	header := common.CustomEvent{Data: "event: " + resp.Type + "\n"}
+	if err := header.Render(c.Writer); err != nil {
+		return err
+	}
+	payload := common.CustomEvent{Data: "data: " + data}
+	if err := payload.Render(c.Writer); err != nil {
+		return err
+	}
 	return FlushWriter(c)
+}
+
+// WriteConvertedResponsesEvent records the payload and terminal outcome only after the event is flushed.
+func WriteConvertedResponsesEvent(c *gin.Context, info *relaycommon.RelayInfo, event dto.ResponsesStreamResponse) error {
+	data, err := common.Marshal(event)
+	if err != nil {
+		return types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+	}
+	if err := ResponseChunkData(c, event, string(data)); err != nil {
+		return err
+	}
+	if info == nil || info.StreamStatus == nil {
+		return nil
+	}
+	status := info.StreamStatus
+	observation := ObserveStreamDataPayload(string(data), types.RelayFormatOpenAIResponses)
+	if observation.Meaningful {
+		status.MarkClientPayloadCommitted()
+	}
+	status.ObserveToolPayloadBytes(observation.ToolNameBytes, observation.ToolArgumentBytes)
+	switch event.Type {
+	case "error", "response.failed":
+		status.TryMarkErrorFrameWritten()
+		status.SetTerminal(event.Type, "failed")
+	case "response.completed":
+		status.MarkCompleted()
+	case "response.incomplete":
+		reason := ""
+		if event.Response != nil && event.Response.IncompleteDetails != nil {
+			reason = event.Response.IncompleteDetails.Reason
+		}
+		status.MarkIncomplete(reason)
+	}
+	return nil
 }
 
 func StringData(c *gin.Context, str string) error {

@@ -408,6 +408,10 @@ func handleConvertedTextStream(c *gin.Context, info *relaycommon.RelayInfo, resp
 		RequireExplicitTerminal: plan.UpstreamRelayFormat == types.RelayFormatOpenAIResponses ||
 			plan.UpstreamRelayFormat == types.RelayFormatOpenAI,
 	}
+	if plan.UpstreamRelayFormat == types.RelayFormatClaude {
+		scannerOptions.RequireExplicitTerminal = true
+		scannerOptions.RequiredTerminalEvent = "message_stop"
+	}
 	helper.StreamScannerHandlerWithOptions(c, resp, info, scannerOptions, func(data string, sr *helper.StreamResult) {
 		if streamErr != nil {
 			sr.Stop(streamErr)
@@ -437,6 +441,9 @@ func handleConvertedTextStream(c *gin.Context, info *relaycommon.RelayInfo, resp
 				sr.Stop(streamErr)
 				return
 			}
+		}
+		if event, ok := chunk.(*dto.ClaudeResponse); ok && event.Type == "message_stop" {
+			sr.DoneWithTerminal(event.Type, "completed")
 		}
 		if responseEvent, ok := chunk.(*dto.ResponsesStreamResponse); ok {
 			if terminalStatus, terminal := responsesStreamTerminal(responseEvent); terminal {
@@ -829,18 +836,16 @@ func writeConvertedStreamResult(c *gin.Context, info *relaycommon.RelayInfo, cli
 	case types.RelayFormatOpenAIResponses:
 		switch event := value.(type) {
 		case relayconvert.ChatToResponsesStreamEvent:
-			payload, err = common.Marshal(event.Payload)
-			if err == nil {
-				err = helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: event.Type}, string(payload))
-			}
+			payload := event.Payload
+			payload.Type = event.Type
+			return helper.WriteConvertedResponsesEvent(c, info, payload)
 		case *relayconvert.ChatToResponsesStreamEvent:
 			if event == nil {
 				return nil
 			}
-			payload, err = common.Marshal(event.Payload)
-			if err == nil {
-				err = helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: event.Type}, string(payload))
-			}
+			payload := event.Payload
+			payload.Type = event.Type
+			return helper.WriteConvertedResponsesEvent(c, info, payload)
 		default:
 			payload, err = common.Marshal(value)
 			if err == nil {

@@ -581,6 +581,9 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		if info.StreamStatus == nil {
 			info.StreamStatus = common.NewStreamStatus()
 		}
+		if info.TracksFirstPayload() {
+			info.StreamStatus.WatchFirstPayload(info.FirstPayloadDeadline, info.StreamWriterMutex(), upstreamCancel)
+		}
 		info.StreamStatus.SetRetryCommitPolicy(info.ResolveStreamRetryCommitPolicy())
 		helper.SetEventStreamHeaders(c)
 		// 先提交 SSE 响应头，避免上游首包等待触发调用方的响应头超时。

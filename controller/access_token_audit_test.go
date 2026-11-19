@@ -830,8 +830,18 @@ func (releasedAuditLog) TableName() string { return "logs" }
 // instance. They never drop databases or tables supplied through an environment variable.
 func newAuditTestDatabase(t *testing.T, kind, dsn string) (*gorm.DB, string) {
 	t.Helper()
+	return newIsolatedTestDatabase(t, kind, dsn, nil)
+}
+
+// newIsolatedTestDatabase lets a fixture opt into its production SQLite writer
+// policy; snapshot tests may deliberately need deferred transactions instead.
+func newIsolatedTestDatabase(t *testing.T, kind, dsn string, sqliteDSN func(string) string) (*gorm.DB, string) {
+	t.Helper()
 	if kind == "sqlite" {
 		path := t.TempDir() + "/audit.db"
+		if sqliteDSN != nil {
+			path = sqliteDSN(path)
+		}
 		db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
 		require.NoError(t, err)
 		connection, err := db.DB()

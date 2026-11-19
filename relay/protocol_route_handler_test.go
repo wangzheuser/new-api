@@ -12,8 +12,11 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relay/channel/claude"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	kitconvert "github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/relayconvert"
 	"github.com/QuantumNous/new-api/service/relaynormalize"
@@ -750,4 +753,96 @@ func TestProtocolUsageTextIncludesContentAndToolArguments(t *testing.T) {
 	streamText := protocolStreamChunkUsageText(chunk)
 	assert.Contains(t, streamText, "chunk")
 	assert.Contains(t, streamText, `{"id":1}`)
+}
+
+// rejectedResponsesDelta simulates a client connection lost during the first payload write.
+type rejectedResponsesDelta struct{ gin.ResponseWriter }
+
+func (w rejectedResponsesDelta) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), `"delta":"hello"`) {
+		return 0, io.ErrClosedPipe
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+// TestClaudeResponsesStreamTerminal verifies the two runtime routes against the Claude wire contract.
+func TestClaudeResponsesStreamTerminal(t *testing.T) {
+	previous := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = previous })
+	const start = `data: {"type":"message_start","message":{"id":"msg_1","type":"message","model":"MODEL_X","usage":{"input_tokens":7}}}` + "\n"
+	const delta = `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}` + "\n"
+	const finish = `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}` + "\n"
+	const stop = `data: {"type":"message_stop"}` + "\n"
+	const upstreamError = `data: {"type":"error","error":{"type":"api_error","message":"generation interrupted"}}` + "\n"
+	for _, route := range []string{"adaptor", "planned"} {
+		for _, tc := range []struct {
+			name, body       string
+			success, payload bool
+		}{
+			{"complete", start + delta + finish + stop, true, true},
+			{"max tokens", start + delta + strings.Replace(finish, "end_turn", "max_tokens", 1) + stop, true, true},
+			{"complete with transport trailer", start + delta + finish + stop + "data: [DONE]\n", true, true},
+			{"missing stop", start + delta + finish, false, true},
+			{"transport trailer without stop", start + delta + "data: [DONE]\n", false, true},
+			{"upstream failure after text", start + delta + upstreamError, false, true},
+			{"upstream failure before text", start + upstreamError, false, false},
+			{"failed payload write", start + delta + finish + stop, false, false},
+		} {
+			t.Run(route+"/"+tc.name, func(t *testing.T) {
+				w := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(w)
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+				if tc.name == "failed payload write" {
+					c.Writer = rejectedResponsesDelta{c.Writer}
+				}
+				info := convertedResponsesViaChatTestInfo("", true)
+				info.ChannelRoutePlan.UpstreamRelayFormat = types.RelayFormatClaude
+				info.ChannelRoutePlan.ResponseConverter = kitconvert.ConverterClaudeMessagesToOpenAIResponses
+				resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(tc.body))}
+				var apiErr *types.NewAPIError
+				if route == "adaptor" {
+					_, apiErr = (&claude.Adaptor{}).DoResponse(c, resp, info)
+				} else {
+					_, apiErr = handleConvertedTextStream(c, info, resp)
+				}
+				wire := w.Body.String()
+				assert.Equal(t, tc.payload, info.StreamStatus.ClientPayloadIsCommitted())
+				assert.True(t, info.StreamStatus.OutcomeSnapshot().ExpectsTerminal)
+				if tc.success {
+					require.Nil(t, apiErr)
+					outcome := "completed"
+					if tc.name == "max tokens" {
+						outcome = "incomplete"
+					}
+					assert.Equal(t, 1, strings.Count(wire, "event: response."+outcome+"\n"))
+					assert.Equal(t, outcome, info.StreamStatus.ResponseOutcome())
+					other := model.NewLogOther()
+					service.AppendStreamStatus(info, other)
+					statusLog, ok := other.Snapshot()["stream_status"].(map[string]any)
+					require.True(t, ok)
+					assert.Equal(t, "completed", statusLog["terminal_status"])
+					assert.Equal(t, outcome, statusLog["response_status"])
+					event, status := info.StreamStatus.Terminal()
+					assert.Equal(t, "message_stop", event)
+					assert.Equal(t, "completed", status)
+					return
+				}
+				require.NotNil(t, apiErr)
+				assert.NotContains(t, wire, "event: response.completed")
+				reason, _ := info.StreamStatus.End()
+				assert.NotEqual(t, relaycommon.StreamEndReasonPanic, reason)
+				if tc.payload {
+					partial, ok, _ := info.StreamStatus.PartialUsageSnapshot()
+					require.True(t, ok)
+					assert.GreaterOrEqual(t, partial.PromptTokens, 7)
+				}
+				if route == "adaptor" && strings.Contains(tc.body, upstreamError) {
+					assert.True(t, types.IsClientErrorWritten(apiErr))
+					assert.True(t, info.StreamStatus.ErrorFrameIsWritten())
+					assert.Equal(t, 1, strings.Count(wire, "event: response.failed\n"))
+				}
+			})
+		}
+	}
 }

@@ -54,8 +54,8 @@ func setupSecurityEnrollmentTest(t *testing.T) (*model.User, service.AuthIdentit
 		dialect = "sqlite"
 	}
 	dsn := os.Getenv("TEST_" + strings.ToUpper(dialect) + "_DSN")
-	db, _ := newAuditTestDatabase(t, dialect, dsn)
-	logDB, _ := newAuditTestDatabase(t, dialect, dsn)
+	db, _ := newIsolatedTestDatabase(t, dialect, dsn, common.SQLiteDSN)
+	logDB, _ := newIsolatedTestDatabase(t, dialect, dsn, common.SQLiteDSN)
 	db.Logger = logger.Default.LogMode(logger.Silent)
 	logDB.Logger = logger.Default.LogMode(logger.Silent)
 	versionQuery := "SELECT VERSION()"

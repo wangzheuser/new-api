@@ -1,15 +1,64 @@
 package common
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestStreamFirstPayloadBudget checks retry, cancellation and long-stream boundaries on a virtual clock.
+func TestStreamFirstPayloadBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		deadline := time.Now().Add(2 * time.Second)
+		status := NewStreamStatus()
+		var writer sync.Mutex
+		client := t.Context()
+		first, cancelFirst := context.WithCancel(client)
+		defer cancelFirst()
+		status.WatchFirstPayload(deadline, &writer, cancelFirst)
+		time.Sleep(time.Second)
+		require.False(t, status.FinishFirstPayloadWait())
+		status.PrepareRetryAttempt()
+		second, cancelSecond := context.WithCancel(client)
+		defer cancelSecond()
+		status.WatchFirstPayload(deadline, &writer, cancelSecond)
+		status.MarkAppHTTPCommitted()
+		status.MarkClientEventCommitted(false) // Responses metadata already commits its historical billing boundary.
+		require.True(t, status.ClientPayloadIsCommitted())
+		require.Zero(t, status.FirstMeaningfulByteDuration(deadline.Add(-2*time.Second)))
+		time.Sleep(time.Second)
+		synctest.Wait()
+		require.ErrorIs(t, second.Err(), context.Canceled)
+		require.NoError(t, first.Err())
+		require.NoError(t, client.Err())
+		assert.True(t, status.FinishFirstPayloadWait())
+		reason, err := status.End()
+		assert.Equal(t, StreamEndReasonTimeout, reason)
+		assert.ErrorIs(t, err, ErrFirstPayloadTimeout)
+
+		for _, finish := range []func(*StreamStatus){
+			(*StreamStatus).MarkClientPayloadCommitted,
+			func(s *StreamStatus) { s.SetEndReason(StreamEndReasonDone, nil) },
+		} {
+			stream, cancel := context.WithCancel(client)
+			status = NewStreamStatus()
+			status.WatchFirstPayload(time.Now().Add(time.Second), &writer, cancel)
+			finish(status)
+			time.Sleep(time.Hour)
+			synctest.Wait()
+			assert.NoError(t, stream.Err())
+			assert.False(t, status.FinishFirstPayloadWait())
+			cancel()
+		}
+	})
+}
 
 func TestStreamStatus_SetEndReason_FirstWins(t *testing.T) {
 	t.Parallel()
@@ -43,6 +92,17 @@ func TestStreamStatus_PartialUsageFillsMissingFieldsThenPrefersUpstream(t *testi
 	assert.False(t, estimated)
 	assert.Equal(t, 4, usage.CompletionTokens, "authoritative upstream usage replaces the local estimate")
 	assert.Equal(t, 16, usage.TotalTokens)
+
+	// A retry before the first payload must not inherit the first attempt's input or failure.
+	status.MarkFailed("incomplete", "api_error", 502)
+	status.RecordError("stream interrupted")
+	status.PrepareRetryAttempt()
+	status.ObservePartialUsage(&dto.Usage{PromptTokens: 3, CompletionTokens: 1}, true, false)
+	usage, ok, _ = status.PartialUsageSnapshot()
+	require.True(t, ok)
+	assert.Equal(t, 3, usage.PromptTokens)
+	assert.False(t, status.HasErrors())
+	assert.False(t, status.ResponseFailed())
 }
 
 func TestStreamStatus_FirstMeaningfulByteRecordedOnce(t *testing.T) {

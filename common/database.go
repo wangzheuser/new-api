@@ -1,5 +1,7 @@
 package common
 
+import "strings"
+
 type DatabaseType string
 
 const (
@@ -61,4 +63,13 @@ func UsingLogDatabase(databaseType DatabaseType) bool {
 //     front, so writers serialize through the busy timeout instead of dying on
 //     a stale snapshot. Autocommit SELECTs stay concurrent because WAL keeps
 //     readers unlocked.
-var SQLitePath = "one-api.db?_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)&_txlock=immediate"
+var SQLitePath = SQLiteDSN("one-api.db")
+
+// SQLiteDSN applies the writer policy to ordinary file paths. Explicit DSNs,
+// file URIs and SQLite's temporary or in-memory databases retain their semantics.
+func SQLiteDSN(path string) string {
+	if path == "" || path == ":memory:" || strings.HasPrefix(path, "file:") || strings.Contains(path, "?") {
+		return path
+	}
+	return path + "?_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)&_txlock=immediate"
+}

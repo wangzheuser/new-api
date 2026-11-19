@@ -41,6 +41,7 @@ func TestClaudeStreamHandlerPartialToolFailureUsesFlushedToolUsage(t *testing.T)
 	constant.StreamingTimeout = 30
 	t.Cleanup(func() { constant.StreamingTimeout = oldStreamingTimeout })
 	body := strings.Join([]string{
+		`data: {"type":"message_start","message":{"type":"message","model":"MODEL_X","usage":{"input_tokens":5,"cache_read_input_tokens":24,"cache_creation_input_tokens":8,"cache_creation":{"ephemeral_5m_input_tokens":2,"ephemeral_1h_input_tokens":6}}}}`,
 		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"get_weather","input":{}}}`,
 		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"city\":\"深圳\"}"}}`,
 		`data: {"type":"error","error":{"type":"api_error","message":"upstream generation stopped"}}`,
@@ -53,6 +54,16 @@ func TestClaudeStreamHandlerPartialToolFailureUsesFlushedToolUsage(t *testing.T)
 	require.NotNil(t, relayErr)
 	require.NotNil(t, usage)
 	assert.Greater(t, usage.CompletionTokens, 0)
+	partial, ok, estimated := info.StreamStatus.PartialUsageSnapshot()
+	require.True(t, ok)
+	assert.True(t, estimated)
+	billable, ok := partial.BillingUsage.CanonicalUsage()
+	require.True(t, ok, "the partial settlement must retain the provider's usage breakdown")
+	assert.Equal(t, 24, billable.PromptTokensDetails.CachedTokens)
+	assert.Equal(t, 8, billable.PromptTokensDetails.CachedCreationTokens)
+	assert.Equal(t, 2, billable.ClaudeCacheCreation5mTokens)
+	assert.Equal(t, 6, billable.ClaudeCacheCreation1hTokens)
+	assert.Equal(t, usage.CompletionTokens, billable.CompletionTokens)
 	assert.Equal(t, relaycommon.StreamRetryCommitPolicyPayload, info.StreamStatus.RetryCommitPolicy())
 	assert.True(t, info.StreamStatus.ClientPayloadIsCommitted())
 	nameBytes, argumentBytes := info.StreamStatus.ToolPayloadBytes()

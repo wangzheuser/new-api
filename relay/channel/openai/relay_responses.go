@@ -98,7 +98,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			return
 		}
 		if info.StreamStatus != nil {
-			info.StreamStatus.MarkClientPayloadCommitted()
+			info.StreamStatus.MarkClientEventCommitted(helper.ObserveStreamDataPayload(data, types.RelayFormatOpenAIResponses).Meaningful)
 		}
 		accumulator.Observe(&streamResponse, common.StringToByteSlice(data))
 		switch streamResponse.Type {

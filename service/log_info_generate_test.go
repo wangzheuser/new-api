@@ -128,6 +128,7 @@ func TestAppendStreamStatusIncludesProtocolTerminalAndTransportEnd(t *testing.T)
 	assert.Equal(t, true, streamInfo["terminal_seen"])
 	assert.Equal(t, "response.failed", streamInfo["terminal_event"])
 	assert.Equal(t, "failed", streamInfo["terminal_status"])
+	assert.Equal(t, "failed", streamInfo["response_status"])
 	assert.Equal(t, 1, streamInfo["error_count"])
 	assert.Equal(t, []string{"malformed event"}, streamInfo["errors"])
 	assert.Equal(t, relaycommon.StreamRetryCommitPolicyPayload, streamInfo["retry_commit_policy"])
@@ -235,6 +236,7 @@ func TestAppendStreamStatusMarksUnexpectedEOFWithoutTerminal(t *testing.T) {
 	assert.Equal(t, "unexpected_eof", streamInfo["end_reason"])
 	assert.Equal(t, false, streamInfo["terminal_seen"])
 	assert.NotContains(t, streamInfo, "terminal_event")
+	assert.NotContains(t, streamInfo, "response_status")
 }
 
 func TestAppendStreamStatusMarksPreStreamFailure(t *testing.T) {

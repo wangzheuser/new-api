@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/textproto"
 	"regexp"
 	"strings"
@@ -208,25 +209,42 @@ func TestSecurityAccountDeletionRechecksTransactionAndConsumesFailedProof(t *tes
 	}
 }
 
+// TestDeletedAccountInvalidatesInFlightVerification covers the gap between
+// committing the account deletion and finishing session revocation.
+func TestDeletedAccountInvalidatesInFlightVerification(t *testing.T) {
+	user, identity := setupSecurityEnrollmentTest(t)
+	require.NoError(t, model.DB.Delete(user).Error)
+	_, _, err := service.ValidateLoginSession(identity)
+	assert.ErrorIs(t, err, service.ErrLoginSessionRevoked)
+	_, err = service.GetVerificationRequirements(identity, service.VerificationScopeAccountDelete)
+	assert.ErrorIs(t, err, service.ErrAuthTokenInvalid)
+}
+
+// TestSecurityAccountDeletionConcurrentRequestsHaveOneWinner verifies both
+// request outcomes and the persisted account and audit state.
 func TestSecurityAccountDeletionConcurrentRequestsHaveOneWinner(t *testing.T) {
 	user, identity := setupSecurityEnrollmentTest(t)
 	proof := issueSecurityEnrollmentProof(t, identity, service.VerificationOperation{Scope: service.VerificationScopeAccountDelete}, "password")
 	start := make(chan struct{})
-	responses := make(chan string, 2)
+	responses := make(chan *httptest.ResponseRecorder, 2)
 	for range 2 {
 		go func() {
 			<-start
 			response := securityEnrollmentRequest("DELETE", "/api/user/self", "", proof, identity, DeleteSelf)
-			responses <- response.Body.String()
+			responses <- response
 		}()
 	}
 	close(start)
 	succeeded := 0
 	for range 2 {
+		got := <-responses
 		var response securityEnrollmentResponse
-		require.NoError(t, common.UnmarshalJsonStr(<-responses, &response))
+		require.NoError(t, common.Unmarshal(got.Body.Bytes(), &response))
 		if response.Success {
+			assert.Equal(t, http.StatusOK, got.Code)
 			succeeded++
+		} else {
+			assert.Equal(t, http.StatusForbidden, got.Code, response.Code)
 		}
 	}
 	assert.Equal(t, 1, succeeded)
@@ -234,6 +252,12 @@ func TestSecurityAccountDeletionConcurrentRequestsHaveOneWinner(t *testing.T) {
 	require.NoError(t, model.DB.Unscoped().First(&deleted, user.Id).Error)
 	assert.True(t, deleted.DeletedAt.Valid)
 	assert.Equal(t, identity.UserAuthVersion+1, deleted.AuthVersion)
+	var audits []model.AuditLog
+	require.NoError(t, model.LOG_DB.Where("action = ?", "user.account_delete").Find(&audits).Error)
+	require.Len(t, audits, 2)
+	assert.NotEqual(t, audits[0].Success, audits[1].Success)
+	_, _, err := service.ValidateLoginSession(identity)
+	assert.Error(t, err)
 }
 
 type securityMailbox struct {

@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// ClaudeResponsesStreamHandler finalizes the converted response only after an upstream message_stop.
 func ClaudeResponsesStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *types.NewAPIError) {
 	responseID := helper.GetResponseID(c)
 	created := common.GetTimestamp()
@@ -38,19 +39,9 @@ func ClaudeResponsesStreamHandler(c *gin.Context, resp *http.Response, info *rel
 		Usage:        &dto.Usage{},
 	}
 	var streamErr *types.NewAPIError
-	// streamFailed means a Responses-native terminal error was sent successfully.
-	// In that case the scanner stops without a transport error and the partial
-	// upstream usage remains billable.
-	streamFailed := false
-
 	sendResponsesEvent := func(eventType string, payload dto.ResponsesStreamResponse) bool {
 		payload.Type = eventType
-		data, err := common.Marshal(payload)
-		if err != nil {
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
-			return false
-		}
-		if err := helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: eventType}, string(data)); err != nil {
+		if err := helper.WriteConvertedResponsesEvent(c, info, payload); err != nil {
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 			return false
 		}
@@ -68,40 +59,35 @@ func ClaudeResponsesStreamHandler(c *gin.Context, resp *http.Response, info *rel
 		}
 		return sendResponsesEvent(event.Type, event.Payload)
 	}
-	failResponsesStream := func(err error) bool {
-		failureResults, handled := state.FailResponsesStream("server_error", err.Error(), "")
-		if !handled {
-			return false
-		}
+	// Preserve the native Responses error sequence; the controller handles settlement, not another frame.
+	failResponsesStream := func(err *types.NewAPIError) *types.NewAPIError {
+		failureResults, _ := state.FailResponsesStream("server_error", err.Error(), "")
 		for _, result := range failureResults {
 			if !sendResult(result) {
-				return true
+				err = streamErr
+				break
 			}
 		}
-		streamFailed = true
-		return true
+		if info.StreamStatus.ErrorFrameIsWritten() {
+			return types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway,
+				types.ErrOptionWithSkipRetry(), types.ErrOptionWithClientErrorWritten())
+		}
+		return err
 	}
 
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+	helper.StreamScannerHandlerWithOptions(c, resp, info, helper.StreamScannerOptions{
+		RequireExplicitTerminal: true,
+		RequiredTerminalEvent:   "message_stop",
+	}, func(data string, sr *helper.StreamResult) {
 		var claudeResponse dto.ClaudeResponse
 		if err := common.UnmarshalJsonStr(data, &claudeResponse); err != nil {
 			logger.LogError(c, common.LogText("failed to unmarshal Claude stream event: %s", err.Error()))
-			if failResponsesStream(err) {
-				// A nil streamErr here is intentional: the protocol-level failure
-				// event was delivered, so only the scanner needs to stop.
-				sr.Stop(streamErr)
-				return
-			}
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			streamErr = failResponsesStream(types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway))
 			sr.Stop(streamErr)
 			return
 		}
 		if claudeError := claudeResponse.GetClaudeError(); claudeError != nil && claudeError.Type != "" {
-			if failResponsesStream(fmt.Errorf("%s", claudeError.Message)) {
-				sr.Stop(streamErr)
-				return
-			}
-			streamErr = types.WithClaudeError(*claudeError, http.StatusInternalServerError)
+			streamErr = failResponsesStream(types.WithClaudeError(*claudeError, http.StatusInternalServerError))
 			sr.Stop(streamErr)
 			return
 		}
@@ -112,22 +98,18 @@ func ClaudeResponsesStreamHandler(c *gin.Context, resp *http.Response, info *rel
 		if claudeResponse.Delta != nil && claudeResponse.Delta.StopReason != nil {
 			maybeMarkClaudeRefusal(c, info, *claudeResponse.Delta.StopReason)
 		}
-		if claudeResponse.Type == "message_stop" {
-			info.StreamStatus.MarkCompleted()
-		}
 		if claudeResponse.Type == "message_start" && claudeResponse.Message != nil {
 			info.ObserveResponseModel(claudeResponse.Message.Model)
 			info.UpstreamModelName = claudeResponse.Message.Model
 		}
 		FormatClaudeResponseInfo(&claudeResponse, nil, claudeInfo)
+		if claudeResponse.Usage != nil || (claudeResponse.Message != nil && claudeResponse.Message.Usage != nil) {
+			info.StreamStatus.ObservePartialUsage(claudeInfo.Usage, true, false)
+		}
 		countClaudeStreamBillableTools(info, &claudeResponse)
 		hostedEvents, consumed, err := hostedBridge.Convert(&claudeResponse, state)
 		if err != nil {
-			if failResponsesStream(err) {
-				sr.Stop(streamErr)
-				return
-			}
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			streamErr = failResponsesStream(types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError))
 			sr.Stop(streamErr)
 			return
 		}
@@ -143,11 +125,7 @@ func ClaudeResponsesStreamHandler(c *gin.Context, resp *http.Response, info *rel
 
 		results, err := service.ConvertStreamResponseChunk(c, info, state, &claudeResponse)
 		if err != nil {
-			if failResponsesStream(err) {
-				sr.Stop(streamErr)
-				return
-			}
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			streamErr = failResponsesStream(types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError))
 			sr.Stop(streamErr)
 			return
 		}
@@ -157,23 +135,23 @@ func ClaudeResponsesStreamHandler(c *gin.Context, resp *http.Response, info *rel
 				return
 			}
 		}
+		if claudeResponse.Type == "message_stop" {
+			sr.DoneWithTerminal(claudeResponse.Type, "completed")
+		}
 	})
-	if streamErr != nil {
-		return nil, streamErr
+	if streamErr == nil {
+		streamErr = helper.StreamStatusError(c, info)
 	}
-	if streamFailed {
-		return claudeInfo.Usage, nil
-	}
-
 	HandleStreamFinalResponse(c, info, claudeInfo)
+	if streamErr != nil {
+		info.StreamStatus.ObservePartialUsage(claudeInfo.Usage, false, true)
+		return claudeInfo.Usage, streamErr
+	}
 	openAIUsage := buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage)
 	state.SetUsage(&openAIUsage)
 	finalResults, err := service.FinalizeStreamResponse(c, info, state)
 	if err != nil {
-		if failResponsesStream(err) {
-			return claudeInfo.Usage, streamErr
-		}
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return claudeInfo.Usage, failResponsesStream(types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError))
 	}
 	for _, result := range finalResults {
 		if !sendResult(result) {

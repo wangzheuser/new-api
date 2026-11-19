@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 const RefreshCookieName = "new_api_refresh"
@@ -140,6 +141,10 @@ func ValidateLoginSession(identity AuthIdentity) (*model.UserSession, *model.Use
 		return nil, nil, ErrLoginSessionRevoked
 	}
 	user, err := model.GetUserCache(identity.UserID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		// Account deletion can commit just after the session lookup.
+		return nil, nil, ErrLoginSessionRevoked
+	}
 	if err != nil {
 		return nil, nil, err
 	}

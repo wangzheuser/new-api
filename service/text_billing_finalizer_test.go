@@ -53,6 +53,20 @@ func TestTextBillingFinalizationDoesNotPartiallySettleNonStreamRequest(t *testin
 	assert.Equal(t, relaycommon.BillingRefunded, textBillingFinalization(info, relayErr))
 }
 
+// TestResponsesMetadataRefundsOnlyLocalFirstPayloadTimeout keeps upstream failures on their existing billing contract.
+func TestResponsesMetadataRefundsOnlyLocalFirstPayloadTimeout(t *testing.T) {
+	t.Parallel()
+	info := &relaycommon.RelayInfo{IsStream: true, StreamStatus: relaycommon.NewStreamStatus()}
+	info.StreamStatus.MarkClientEventCommitted(false)
+	external := types.NewOpenAIError(errors.New("upstream timeout"), types.ErrorCodeBadResponse, http.StatusGatewayTimeout)
+	assert.Equal(t, relaycommon.BillingSettledPartial, textBillingFinalization(info, external))
+
+	local := types.NewErrorWithStatusCode(relaycommon.ErrFirstPayloadTimeout, types.ErrorCodeBadResponse, http.StatusGatewayTimeout)
+	info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, relaycommon.ErrFirstPayloadTimeout)
+	local.SetMessage("timeout (request id: fixture)") // The controller decorates the error before settlement.
+	assert.Equal(t, relaycommon.BillingRefunded, textBillingFinalization(info, local))
+}
+
 func TestFinalizeTextBillingRefundApplicationIsIdempotent(t *testing.T) {
 	t.Parallel()
 	relayErr := types.NewOpenAIError(errors.New("precommit failed"), types.ErrorCodeBadResponse, http.StatusBadGateway)

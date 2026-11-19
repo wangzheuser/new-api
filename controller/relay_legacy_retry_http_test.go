@@ -53,6 +53,8 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 			{name: "channel recovery", status: 500, message: "upstream failed", recover: true, backup: true, wantKeys: []string{"KEY_A", "BACKUP_A"}},
 			{name: "channel unavailable", status: 500, message: "upstream failed", wantKeys: []string{"KEY_A"}},
 			{name: "protocol event", wantKeys: []string{"KEY_A"}},
+			{name: "metadata without payload", stop: "payload", wantKeys: []string{"KEY_A"}},
+			{name: "client cancels before headers", stop: "client", wantKeys: []string{"KEY_A"}},
 			{name: "dial recovery", dialFailure: true, recover: true, backup: true, wantKeys: []string{"KEY_A", "BACKUP_A"}},
 			{name: "dial budget exhausted", dialFailure: true, backup: true, wantKeys: []string{"KEY_A", "BACKUP_A", "BACKUP_B"}},
 			{name: "dial no budget", dialFailure: true, stop: "budget", wantKeys: []string{"KEY_A"}},
@@ -94,8 +96,15 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 				if scenario.stop == "status" {
 					operation_setting.AutomaticRetryStatusCodeRanges = []operation_setting.StatusCodeRange{{Start: 503, End: 503}}
 				}
+				if scenario.stop == "payload" {
+					previous := common.RelayFirstPayloadTimeout
+					common.RelayFirstPayloadTimeout = 150 * time.Millisecond
+					t.Cleanup(func() { common.RelayFirstPayloadTimeout = previous })
+				}
 				var mu sync.Mutex
 				var attempts []string
+				requestCtx, cancel := context.WithCancel(context.Background())
+				defer cancel()
 				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					key := r.Header.Get("X-Api-Key")
 					failed := scenario.status != 0
@@ -117,6 +126,15 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 						_, _ = io.WriteString(w, "data: {\"type\":\"error\",\"error\":{\"type\":\"server_error\",\"message\":\"stream failed\"}}\n\n")
 						return
 					}
+					if scenario.stop == "payload" {
+						w.(http.Flusher).Flush()
+						select {
+						case <-r.Context().Done():
+						case <-time.After(3 * time.Second):
+							t.Error("metadata-only upstream was not cancelled")
+						}
+						return
+					}
 					_, _ = io.WriteString(w, "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"fixture-ok\"}}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\ndata: {\"type\":\"message_stop\"}\n\n")
 				}))
 				defer upstream.Close()
@@ -135,6 +153,10 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 					mu.Lock()
 					attempts = append(attempts, r.Header.Get("X-Api-Key"))
 					mu.Unlock()
+					if scenario.stop == "client" {
+						cancel()
+						return nil, r.Context().Err()
+					}
 					return transport.RoundTrip(r)
 				})
 				t.Cleanup(func() { clientTransport.Transport = base })
@@ -201,12 +223,19 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 				response := httptest.NewRecorder()
 				request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"MODEL_X","messages":[{"role":"user","content":"hello"}],"max_tokens":16,"stream":true}`))
 				request.Header.Set("Content-Type", "application/json")
-				router.ServeHTTP(response, request)
+				router.ServeHTTP(response, request.WithContext(requestCtx))
 				body := response.Body.String()
 				mu.Lock()
 				got := append([]string(nil), attempts...)
 				mu.Unlock()
 				require.Equal(t, scenario.wantKeys, got, body)
+				if scenario.stop == "payload" {
+					require.NoError(t, requestCtx.Err())
+					assert.Contains(t, body, "first stream payload")
+					events := service.RequestPolicy(requestContext).Events()
+					require.NotEmpty(t, events)
+					assert.Equal(t, "first_payload_timeout", events[len(events)-1].Decision.Reason)
+				}
 				if scenario.dialFailure {
 					events := service.RequestPolicy(requestContext).Events()
 					require.GreaterOrEqual(t, len(events), 3)
@@ -246,7 +275,17 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 						return db.First(&user, 1).Error == nil && db.First(&token, 1).Error == nil &&
 							user.Quota == initialQuota && token.RemainQuota == initialQuota
 					}, time.Second, time.Millisecond)
-					assert.Equal(t, 1, strings.Count(body, `"error":`), body)
+					keys, err := client.Keys(context.Background(), "perf:MODEL_X:*").Result()
+					require.NoError(t, err)
+					if scenario.stop == "client" {
+						assert.Empty(t, keys, "a downstream cancellation is not a health failure")
+						assert.NotContains(t, body, `"error":`)
+					} else {
+						assert.Equal(t, 1, strings.Count(body, `"error":`), body)
+						if scenario.name == "dial no budget" {
+							assert.NotEmpty(t, keys, "a transport failure is still recorded")
+						}
+					}
 					assert.NotContains(t, body, "event: message_stop")
 					assert.NotContains(t, body, "[DONE]")
 				}

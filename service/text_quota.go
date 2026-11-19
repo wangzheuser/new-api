@@ -606,7 +606,10 @@ func textBillingFinalization(
 	}
 	if relayInfo != nil && relayInfo.IsStream && relayInfo.StreamStatus != nil &&
 		relayInfo.StreamStatus.ClientPayloadIsCommitted() {
-		return relaycommon.BillingSettledPartial
+		// Responses metadata commits the wire but is not billable output for our own first-payload deadline.
+		if _, endErr := relayInfo.StreamStatus.End(); endErr != relaycommon.ErrFirstPayloadTimeout {
+			return relaycommon.BillingSettledPartial
+		}
 	}
 	return relaycommon.BillingRefunded
 }

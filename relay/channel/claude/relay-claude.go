@@ -186,7 +186,8 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		}
 	}
 	if info.StreamStatus != nil && claudeInfo.Usage != nil {
-		info.StreamStatus.ObservePartialUsage(claudeInfo.Usage, claudeResponse.Usage != nil, claudeResponse.Usage == nil)
+		hasUsage := claudeResponse.Usage != nil || (claudeResponse.Type == "message_start" && claudeResponse.Message != nil && claudeResponse.Message.Usage != nil)
+		info.StreamStatus.ObservePartialUsage(claudeInfo.Usage, hasUsage, !hasUsage)
 	}
 	return nil
 }

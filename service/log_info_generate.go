@@ -355,6 +355,10 @@ func AppendStreamStatus(relayInfo *relaycommon.RelayInfo, other *model.LogOther)
 		streamInfo["terminal_status"] = terminalStatus
 		streamInfo["response_status"] = terminalStatus
 	}
+	// A provider can finish its transport normally but expose an incomplete Responses result.
+	if outcome := ss.ResponseOutcome(); outcome != "" && outcome != relaycommon.ResponseOutcomeUnknown {
+		streamInfo["response_status"] = outcome
+	}
 	if errorCount > 0 {
 		streamInfo["error_count"] = errorCount
 		if relayInfo.RelayFormat == types.RelayFormatOpenAIResponses || relayInfo.RelayFormat == types.RelayFormatOpenAIResponsesCompaction {

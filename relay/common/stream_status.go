@@ -1,6 +1,7 @@
 package common
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -49,6 +50,8 @@ type ResponseOutcome = string
 
 const maxStreamErrorEntries = 20
 
+var ErrFirstPayloadTimeout = errors.New("timed out waiting for first stream payload")
+
 type StreamErrorEntry struct {
 	Message   string
 	Timestamp time.Time
@@ -58,7 +61,6 @@ type StreamStatus struct {
 	EndReason StreamEndReason
 	EndError  error
 	endSet    bool
-	endMu     sync.RWMutex
 
 	mu                       sync.Mutex
 	Errors                   []StreamErrorEntry
@@ -74,13 +76,13 @@ type StreamStatus struct {
 	billingApplied           bool
 	partialUsage             dto.Usage
 	hasPartialUsage          bool
-	hasUpstreamUsage         bool
 	upstreamPromptUsage      bool
 	upstreamCompletionUsage  bool
 	upstreamInputUsage       bool
 	upstreamOutputUsage      bool
 	partialUsageEstimated    bool
 	firstPayloadAt           time.Time
+	firstPayloadTimer        *time.Timer
 	partialToolNameBytes     int64
 	partialToolArgumentBytes int64
 	response                 ResponseOutcome
@@ -129,15 +131,72 @@ func (s *StreamStatus) AppHTTPIsCommitted() bool {
 
 // MarkClientPayloadCommitted records the first successfully flushed business payload.
 func (s *StreamStatus) MarkClientPayloadCommitted() {
+	s.MarkClientEventCommitted(true)
+}
+
+// MarkClientEventCommitted preserves protocol-specific commit rules independently of the first business output.
+func (s *StreamStatus) MarkClientEventCommitted(meaningful bool) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
-	if !s.clientPayloadCommitted {
-		s.clientPayloadCommitted = true
+	s.clientPayloadCommitted = true
+	if meaningful && s.firstPayloadAt.IsZero() {
 		s.firstPayloadAt = time.Now()
+		if s.firstPayloadTimer != nil {
+			s.firstPayloadTimer.Stop()
+			s.firstPayloadTimer = nil
+		}
 	}
 	s.mu.Unlock()
+}
+
+// WatchFirstPayload bounds this attempt by the original deadline without cancelling the client.
+func (s *StreamStatus) WatchFirstPayload(deadline time.Time, writer *sync.Mutex, cancel func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.firstPayloadAt.IsZero() {
+		return
+	}
+	expire := func() {
+		if s.endSet || s.errorFrameWritten {
+			return
+		}
+		s.endSet, s.EndReason, s.EndError = true, StreamEndReasonTimeout, ErrFirstPayloadTimeout
+		cancel()
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		expire()
+		return
+	}
+	var timer *time.Timer
+	timer = time.AfterFunc(remaining, func() {
+		// A successful write and its payload mark must win or lose together.
+		writer.Lock()
+		defer writer.Unlock()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		// A stopped callback may already be queued when a retry starts.
+		if s.firstPayloadTimer == timer {
+			expire()
+		}
+	})
+	s.firstPayloadTimer = timer
+}
+
+// FinishFirstPayloadWait disarms this attempt and reports a request-level budget expiry.
+func (s *StreamStatus) FinishFirstPayloadWait() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.firstPayloadTimer != nil {
+		s.firstPayloadTimer.Stop()
+		s.firstPayloadTimer = nil
+	}
+	return s.EndError == ErrFirstPayloadTimeout
 }
 
 // FirstMeaningfulByteDuration returns the delay from request start to the first flushed payload.
@@ -310,33 +369,21 @@ func (s *StreamStatus) ObservePartialUsage(rawUsage any, upstream bool, estimate
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if upstream {
-		if usage.PromptTokens > 0 {
-			s.partialUsage.PromptTokens = max(s.partialUsage.PromptTokens, usage.PromptTokens)
-			s.upstreamPromptUsage = true
+		previous := s.partialUsage
+		dto.MergeUsageNonZero(&s.partialUsage, usage)
+		// Keep authoritative totals monotonic, but let the first reported output replace a local estimate.
+		s.partialUsage.PromptTokens = max(previous.PromptTokens, s.partialUsage.PromptTokens)
+		s.partialUsage.InputTokens = max(previous.InputTokens, s.partialUsage.InputTokens)
+		if s.upstreamCompletionUsage {
+			s.partialUsage.CompletionTokens = max(previous.CompletionTokens, s.partialUsage.CompletionTokens)
 		}
-		if usage.CompletionTokens > 0 {
-			if !s.upstreamCompletionUsage {
-				s.partialUsage.CompletionTokens = usage.CompletionTokens
-			} else {
-				s.partialUsage.CompletionTokens = max(s.partialUsage.CompletionTokens, usage.CompletionTokens)
-			}
-			s.upstreamCompletionUsage = true
+		if s.upstreamOutputUsage {
+			s.partialUsage.OutputTokens = max(previous.OutputTokens, s.partialUsage.OutputTokens)
 		}
-		if usage.InputTokens > 0 {
-			s.partialUsage.InputTokens = max(s.partialUsage.InputTokens, usage.InputTokens)
-			s.upstreamInputUsage = true
-		}
-		if usage.OutputTokens > 0 {
-			if !s.upstreamOutputUsage {
-				s.partialUsage.OutputTokens = usage.OutputTokens
-			} else {
-				s.partialUsage.OutputTokens = max(s.partialUsage.OutputTokens, usage.OutputTokens)
-			}
-			s.upstreamOutputUsage = true
-		}
-		s.partialUsage.UsageSemantic = usage.UsageSemantic
-		s.partialUsage.BillingUsage = usage.BillingUsage
-		s.hasUpstreamUsage = true
+		s.upstreamPromptUsage = s.upstreamPromptUsage || usage.PromptTokens > 0
+		s.upstreamCompletionUsage = s.upstreamCompletionUsage || usage.CompletionTokens > 0
+		s.upstreamInputUsage = s.upstreamInputUsage || usage.InputTokens > 0
+		s.upstreamOutputUsage = s.upstreamOutputUsage || usage.OutputTokens > 0
 	} else {
 		if !s.upstreamPromptUsage {
 			s.partialUsage.PromptTokens = max(s.partialUsage.PromptTokens, usage.PromptTokens)
@@ -369,7 +416,11 @@ func (s *StreamStatus) PartialUsageSnapshot() (dto.Usage, bool, bool) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.partialUsage, s.hasPartialUsage, s.partialUsageEstimated
+	usage := s.partialUsage
+	if s.partialUsageEstimated {
+		usage.BillingUsage = dto.CloneBillingUsageWithEstimatedCompletion(usage.BillingUsage, usage.CompletionTokens)
+	}
+	return usage, s.hasPartialUsage, s.partialUsageEstimated
 }
 
 func normalizePartialUsage(raw any) *dto.Usage {
@@ -426,8 +477,8 @@ func (s *StreamStatus) SetEndReason(reason StreamEndReason, err error) {
 	if s == nil {
 		return
 	}
-	s.endMu.Lock()
-	defer s.endMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.endSet {
 		return
 	}
@@ -441,17 +492,24 @@ func (s *StreamStatus) PrepareRetryAttempt() {
 	if s == nil {
 		return
 	}
-	s.endMu.Lock()
-	if s.EndReason == StreamEndReasonClientGone || s.EndReason == StreamEndReasonPingFail {
-		s.endMu.Unlock()
+	s.mu.Lock()
+	if s.EndError == ErrFirstPayloadTimeout || s.EndReason == StreamEndReasonClientGone || s.EndReason == StreamEndReasonPingFail {
+		s.mu.Unlock()
 		return
 	}
 	s.endSet = false
 	s.EndReason = StreamEndReasonNone
 	s.EndError = nil
-	s.endMu.Unlock()
 
-	s.mu.Lock()
+	// The failed attempt's usage and terminal errors must not become the next attempt's bill or outcome.
+	s.partialUsage = dto.Usage{}
+	s.hasPartialUsage, s.partialUsageEstimated = false, false
+	s.upstreamPromptUsage, s.upstreamCompletionUsage = false, false
+	s.upstreamInputUsage, s.upstreamOutputUsage = false, false
+	s.Errors, s.ErrorCount = nil, 0
+	s.response, s.incompleteReason = ResponseOutcomeUnknown, ""
+	s.errorCode, s.errorType, s.errorStatus = "", "", 0
+	s.expectsTerminal = false
 	s.terminalEvent = ""
 	s.terminalStatus = ""
 	s.streamPolicyVersion = ""
@@ -485,8 +543,8 @@ func (s *StreamStatus) HasEnded() bool {
 	if s == nil {
 		return false
 	}
-	s.endMu.RLock()
-	defer s.endMu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.EndReason != StreamEndReasonNone
 }
 
@@ -495,8 +553,8 @@ func (s *StreamStatus) End() (StreamEndReason, error) {
 	if s == nil {
 		return StreamEndReasonNone, nil
 	}
-	s.endMu.RLock()
-	defer s.endMu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.EndReason, s.EndError
 }
 
@@ -643,9 +701,7 @@ func (s *StreamStatus) IsNormalEnd() bool {
 	if s == nil {
 		return true
 	}
-	s.endMu.RLock()
-	reason := s.EndReason
-	s.endMu.RUnlock()
+	reason, _ := s.End()
 	return reason == StreamEndReasonDone ||
 		reason == StreamEndReasonEOF ||
 		reason == StreamEndReasonHandlerStop
@@ -656,15 +712,13 @@ func (s *StreamStatus) Summary() string {
 		return "StreamStatus<nil>"
 	}
 	b := &strings.Builder{}
-	s.endMu.RLock()
-	reason := s.EndReason
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	endError := s.EndError
-	s.endMu.RUnlock()
-	fmt.Fprintf(b, "reason=%s", reason)
+	fmt.Fprintf(b, "reason=%s", s.EndReason)
 	if endError != nil {
 		fmt.Fprintf(b, " end_error=%q", endError.Error())
 	}
-	s.mu.Lock()
 	if s.terminalEvent != "" {
 		fmt.Fprintf(b, " terminal_event=%q", s.terminalEvent)
 	}
@@ -674,6 +728,5 @@ func (s *StreamStatus) Summary() string {
 	if s.ErrorCount > 0 {
 		fmt.Fprintf(b, " soft_errors=%d", s.ErrorCount)
 	}
-	s.mu.Unlock()
 	return b.String()
 }

@@ -163,6 +163,7 @@ type RelayInfo struct {
 	RequestUploadDuration    time.Duration
 	IncomingRequestBodyBytes int64
 	FirstResponseTime        time.Time
+	FirstPayloadDeadline     time.Time // Shared by all attempts after initial request validation.
 	isFirstResponse          bool
 	//SendLastReasoningResponse bool
 	IsStream                 bool
@@ -1101,6 +1102,38 @@ func (info *RelayInfo) ResolveStreamRetryCommitPolicy() StreamRetryCommitPolicy 
 		return StreamRetryCommitPolicyPayload
 	default:
 		return StreamRetryCommitPolicyHTTP
+	}
+}
+
+// TracksFirstPayload reports whether this text route marks flushed downstream business events.
+func (info *RelayInfo) TracksFirstPayload() bool {
+	if info == nil || !info.IsStream || info.FirstPayloadDeadline.IsZero() || info.ChannelMeta == nil {
+		return false
+	}
+	switch info.RelayFormat {
+	case types.RelayFormatClaude, types.RelayFormatOpenAIResponses:
+	case types.RelayFormatOpenAI:
+		if request, ok := info.Request.(*dto.GeneralOpenAIRequest); ok && (len(request.Audio) != 0 || len(request.Modalities) != 0) {
+			// The text commit marker doesn't cover audio or other multimodal output.
+			return false
+		}
+	default:
+		return false
+	}
+	if info.ResolveStreamRetryCommitPolicy() == StreamRetryCommitPolicyPayload {
+		return true
+	}
+	// Legacy conversions that buffer or rewrite another endpoint need their own flush instrumentation.
+	if info.ApiType != constant.APITypeAnthropic && info.ApiType != constant.APITypeOpenAI {
+		return false
+	}
+	switch info.RelayFormat {
+	case types.RelayFormatClaude:
+		return info.ApiType == constant.APITypeAnthropic && info.RelayMode != relayconstant.RelayModeResponses
+	case types.RelayFormatOpenAI:
+		return info.RelayMode == relayconstant.RelayModeChatCompletions
+	default:
+		return info.RelayMode == relayconstant.RelayModeResponses
 	}
 }
 

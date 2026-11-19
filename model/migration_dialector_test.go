@@ -77,6 +77,42 @@ func TestIs64BitIntegerType(t *testing.T) {
 	}
 }
 
+// TestSQLiteConnectionSettings covers the default writer policy and the
+// connection options operators supply for a file or an in-memory database.
+func TestSQLiteConnectionSettings(t *testing.T) {
+	previous := common.SQLitePath
+	t.Cleanup(func() { common.SQLitePath = previous })
+	path := filepath.Join(t.TempDir(), "custom.db")
+	for _, tc := range []struct {
+		name, dsn, path, journal string
+		timeout                  int
+	}{
+		{"plain file", "", path, "wal", 30000},
+		{"custom DSN", "local", path + "?_pragma=journal_mode(DELETE)&_pragma=busy_timeout(731)&_txlock=deferred", "delete", 731},
+		{"memory URI", "local", "file:custom?mode=memory&cache=shared&_pragma=busy_timeout(471)", "memory", 471},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SQLITE_TEST_DSN", tc.dsn)
+			common.SQLitePath = tc.path
+			db, kind, err := chooseDB("SQLITE_TEST_DSN", false)
+			require.NoError(t, err)
+			require.Equal(t, common.DatabaseTypeSQLite, kind)
+			conn, err := db.DB()
+			require.NoError(t, err)
+			t.Cleanup(func() { assert.NoError(t, conn.Close()) })
+			var mode string
+			var timeout int
+			require.NoError(t, conn.QueryRow("PRAGMA journal_mode").Scan(&mode))
+			require.NoError(t, conn.QueryRow("PRAGMA busy_timeout").Scan(&timeout))
+			assert.Equal(t, tc.journal, mode)
+			assert.Equal(t, tc.timeout, timeout)
+		})
+	}
+	for _, path := range []string{"", ":memory:", "file::memory:", "file:/custom.db", "file:/custom.db?mode=ro"} {
+		assert.Equal(t, path, common.SQLiteDSN(path))
+	}
+}
+
 func TestMigrationSchemaStability(t *testing.T) {
 	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
 		t.Run(dialect, func(t *testing.T) {

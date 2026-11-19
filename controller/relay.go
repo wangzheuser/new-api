@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -105,6 +104,7 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 
 	defer func() {
 		if relayInfo != nil {
+			relayInfo.StreamStatus.FinishFirstPayloadWait()
 			relayInfo.StopStreamPinger()
 		}
 		if newAPIError != nil && billingFinalizerArmed {
@@ -138,7 +138,7 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 			}
 		}
 		if testChannel == nil && newAPIError != nil && finalization != relaycommon.BillingSettled && finalization != relaycommon.BillingSettledPartial {
-			perfmetrics.RecordRelayResultSync(context.Background(), relayInfo, newAPIError)
+			perfmetrics.RecordRelayResultSync(c.Request.Context(), relayInfo, newAPIError)
 		}
 		conversationError := newAPIError
 		if conversationError == nil {
@@ -259,6 +259,10 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
 	relayStarted = true
+	if relayInfo.IsStream && common.RelayFirstPayloadTimeout > 0 {
+		// Channel selection and every retry share one clock; request upload isn't upstream wait.
+		relayInfo.FirstPayloadDeadline = time.Now().Add(common.RelayFirstPayloadTimeout)
+	}
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		relayInfo.RetryIndex = retryParam.GetRetry()
@@ -299,6 +303,7 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 			newAPIError = relayHandler(c, relayInfo)
 		}
 
+		firstPayloadExpired := relayInfo.StreamStatus.FinishFirstPayloadWait()
 		if newAPIError == nil {
 			service.FinishChannelKeyProbe(c, true)
 			if testChannel == nil {
@@ -327,6 +332,14 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 			if relayInfo.StreamStatus != nil {
 				relayInfo.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, requestErr)
 			}
+			return
+		}
+
+		if firstPayloadExpired {
+			// The budget belongs to the request, not the last channel. Do not replay or quarantine it.
+			newAPIError = types.NewErrorWithStatusCode(relaycommon.ErrFirstPayloadTimeout, types.ErrorCodeBadResponse, http.StatusGatewayTimeout, types.ErrOptionWithSkipRetry())
+			rawFinalError, relayInfo.LastError = newAPIError, newAPIError
+			service.RecordPolicyFailure(c, channel.Id, newAPIError, service.PolicyDecision{Action: "stop", Reason: "first_payload_timeout", Source: "system"})
 			return
 		}
 

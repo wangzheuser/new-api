@@ -369,6 +369,10 @@ func GetVerificationRequirements(identity AuthIdentity, scope string) (*Verifica
 		return nil, ErrProofScope
 	}
 	state, err := model.GetUserVerificationState(identity.UserID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		// The authenticated account no longer exists.
+		return nil, ErrAuthTokenInvalid
+	}
 	if err != nil {
 		return nil, err
 	}
