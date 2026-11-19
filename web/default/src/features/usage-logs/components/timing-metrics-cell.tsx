@@ -157,18 +157,30 @@ export function TimingMetricsCell(props: TimingMetricsCellProps) {
 
 interface StreamTpsCellProps {
   isStream: boolean
-  tokensPerSecond?: number | null
+  useTimeSec: number
+  completionTokens: number
+  frtMs?: number
   streamStatus?: LogOtherData['stream_status']
   className?: string
 }
 
+/** Display output speed, excluding the first packet wait for streams. */
 export function StreamTpsCell(props: StreamTpsCellProps) {
   const { t } = useTranslation()
   const showStreamError =
     props.isStream && props.streamStatus && props.streamStatus.status !== 'ok'
+  let durationSec = props.useTimeSec
+  if (props.isStream) {
+    const frtMs = props.frtMs ?? 0
+    // shortcut: total duration has whole-second precision, use millisecond timing when available.
+    durationSec =
+      Number.isFinite(frtMs) && frtMs > 0
+        ? (durationSec * 1000 - frtMs) / 1000
+        : 0
+  }
   const tpsLabel =
-    props.tokensPerSecond != null
-      ? `${Math.round(props.tokensPerSecond)} t/s`
+    durationSec > 0 && props.completionTokens > 0
+      ? `${Math.round(props.completionTokens / durationSec)} t/s`
       : '—'
   const streamLabel = props.isStream ? t('Stream') : t('Non-stream')
 

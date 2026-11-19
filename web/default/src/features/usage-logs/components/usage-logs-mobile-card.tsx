@@ -283,10 +283,6 @@ function MobileStreamTimingField({ log }: { log: UsageLog }) {
 
   const other = parseLogOther(log.other)
   const useTime = log.use_time || 0
-  const tokensPerSecond =
-    useTime > 0 && log.completion_tokens > 0
-      ? log.completion_tokens / useTime
-      : null
 
   return (
     <div className='bg-muted/20 flex min-w-0 items-center gap-2.5 rounded-md px-2 py-1.5'>
@@ -300,7 +296,9 @@ function MobileStreamTimingField({ log }: { log: UsageLog }) {
       />
       <StreamTpsCell
         isStream={log.is_stream}
-        tokensPerSecond={tokensPerSecond}
+        useTimeSec={useTime}
+        completionTokens={log.completion_tokens}
+        frtMs={other?.frt}
         streamStatus={other?.stream_status}
         className='shrink-0'
       />
