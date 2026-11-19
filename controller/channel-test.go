@@ -19,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	rootdto "github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
@@ -47,6 +48,8 @@ type testResult struct {
 	responseBody          []byte
 	responseBodyTruncated bool
 	upstreamStatus        int
+	upstreamHTTP          *relaycommon.ChannelTestHTTP
+	upstreamEvents        int
 	effectiveEndpointType constant.EndpointType
 	upstreamEndpointType  constant.EndpointType
 	upstreamModel         string
@@ -119,6 +122,11 @@ type channelNativeProbeRequest struct {
 const maxChannelPromptTestUserPromptBytes = 16 * 1024
 const customChannelTestMaxOutputTokens = 1024
 const maxChannelTestResponseDetailBytes = 64 * 1024
+
+// Keep the synchronous admin response inside the public ingress deadline.
+const channelConnectionTestTimeout = 100 * time.Second
+
+var errChannelConnectionTestTimeout = errors.New("channel connection test deadline reached")
 
 // getChannelConnectionTestMaxOutputTokens returns the expanded output limit for a custom prompt.
 func getChannelConnectionTestMaxOutputTokens(_ string) uint {
@@ -1568,6 +1576,11 @@ func shouldApplySystemPromptForConnectionTest(channel *model.Channel) bool {
 
 // TestChannelConnectionPrompt uses the supplied prompt for one real channel connection test.
 func TestChannelConnectionPrompt(c *gin.Context) {
+	testChannelConnectionPrompt(c, channelConnectionTestTimeout)
+}
+
+// testChannelConnectionPrompt runs the relay within the connection test's own time budget.
+func testChannelConnectionPrompt(c *gin.Context, timeout time.Duration) {
 	channelId, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
 		common.ApiError(c, err)
@@ -1619,7 +1632,9 @@ func TestChannelConnectionPrompt(c *gin.Context) {
 	}
 
 	tik := time.Now()
-	result := testChannel(c.Request.Context(), channel, testUserID, channelTestOptions{
+	ctx, cancel := context.WithTimeoutCause(c.Request.Context(), timeout, errChannelConnectionTestTimeout)
+	defer cancel()
+	result := testChannel(ctx, channel, testUserID, channelTestOptions{
 		model:             request.Model,
 		endpointType:      request.EndpointType,
 		isStream:          request.Stream,
@@ -1627,9 +1642,54 @@ func TestChannelConnectionPrompt(c *gin.Context) {
 		maxOutputTokens:   getChannelConnectionTestMaxOutputTokens(request.UserPrompt),
 		applySystemPrompt: shouldApplySystemPromptForConnectionTest(channel),
 	})
+	if context.Cause(ctx) == errChannelConnectionTestTimeout {
+		respondChannelConnectionTimeout(c, channelId, tik, result)
+		return
+	}
 	respondChannelConnectionTest(c, channel, tik, result, channelTestResponseOptions{
 		includeDetails:     true,
 		updateResponseTime: true,
+	})
+}
+
+// respondChannelConnectionTimeout reports only observed upstream milestones, not provider content.
+func respondChannelConnectionTimeout(c *gin.Context, channelID int, startedAt time.Time, result testResult) {
+	elapsed := time.Since(startedAt)
+	message := "Channel test timed out"
+	details := gin.H{"phase": "test", "stream": result.isStream}
+	if result.upstreamModel != "" {
+		details["upstream_model"] = result.upstreamModel
+	}
+	if result.context != nil && common.GetContextKeyBool(result.context, constant.ContextKeyChannelIsMultiKey) {
+		details["key_index"] = common.GetContextKeyInt(result.context, constant.ContextKeyChannelMultiKeyIndex)
+	}
+	if upstream := result.upstreamHTTP; upstream != nil {
+		details["upstream_start_ms"] = upstream.StartedAt.Sub(startedAt).Milliseconds()
+		if !upstream.HeadersAt.IsZero() {
+			details["upstream_status"] = upstream.StatusCode
+			details["upstream_headers_ms"] = upstream.HeadersAt.Sub(upstream.StartedAt).Milliseconds()
+		}
+		switch {
+		case result.upstreamStatus == http.StatusOK:
+			// The relay finished; the deadline elapsed during test result processing.
+		case upstream.HeadersAt.IsZero():
+			details["phase"] = "upstream_headers"
+			message = "Channel test timed out waiting for upstream response headers"
+		case upstream.StatusCode >= http.StatusBadRequest:
+			details["phase"] = "upstream_error_body"
+			message = "Channel test timed out reading the upstream error response"
+		case result.isStream && result.upstreamEvents > 0:
+			details["phase"] = "upstream_stream"
+			message = "Channel test timed out before the upstream stream finished"
+		default:
+			details["phase"] = "upstream_body"
+		}
+	}
+	logger.LogWarn(c, fmt.Sprintf("channel connection test timed out: channel_id=%d duration_ms=%d details=%s", channelID, elapsed.Milliseconds(), common.GetJsonString(details)))
+	common.ApiErrorStatus(c, http.StatusOK, common.NewMessage(message), gin.H{
+		"error_code": "channel_test_timeout",
+		"time":       elapsed.Seconds(),
+		"data":       details,
 	})
 }
 

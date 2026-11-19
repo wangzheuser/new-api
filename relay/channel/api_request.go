@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	common2 "github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -595,7 +596,14 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		helper.EnsureConfiguredStreamPinger(c, info)
 	}
 
+	if info.IsChannelTest {
+		info.ChannelTestHTTP = &common.ChannelTestHTTP{StartedAt: time.Now()}
+	}
 	resp, err := client.Do(req)
+	if info.ChannelTestHTTP != nil && resp != nil {
+		info.ChannelTestHTTP.HeadersAt = time.Now()
+		info.ChannelTestHTTP.StatusCode = resp.StatusCode
+	}
 	if err != nil {
 		info.StopStreamPinger()
 		// No business request was sent when connection establishment never completed.

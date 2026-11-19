@@ -248,6 +248,7 @@ export interface ChannelOpsResponse {
 export interface ChannelTestResponse {
   success: boolean
   message?: string
+  message_key?: string
   error_code?: string
   time?: number
   data?: ChannelTestResponseDetails

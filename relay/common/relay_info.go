@@ -147,6 +147,13 @@ type streamLifecycleState struct {
 
 var streamLifecycleInitMu sync.Mutex
 
+// ChannelTestHTTP records transport milestones for an administrator's channel test.
+type ChannelTestHTTP struct {
+	StartedAt  time.Time
+	HeadersAt  time.Time
+	StatusCode int
+}
+
 type RelayInfo struct {
 	ContextTruncation        *ContextTruncationState
 	CacheUsageSimulation     *CacheUsageState
@@ -234,6 +241,7 @@ type RelayInfo struct {
 	SubscriptionAmountUsedAfterPreConsume int64
 	IsClaudeBetaQuery                     bool // /v1/messages?beta=true
 	IsChannelTest                         bool // channel test request
+	ChannelTestHTTP                       *ChannelTestHTTP
 	RetryIndex                            int
 	LastError                             *types.NewAPIError
 	RuntimeHeadersOverride                map[string]any

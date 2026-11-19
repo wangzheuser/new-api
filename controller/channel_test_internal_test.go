@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -324,6 +325,108 @@ func TestChannelConnectionPromptValidatesInput(t *testing.T) {
 			TestChannelConnectionPrompt(ctx)
 
 			assert.Contains(t, response.Body.String(), test.wantMessage)
+		})
+	}
+}
+
+// TestChannelConnectionPromptDeadline verifies the management API returns a diagnostic and cancels the upstream.
+func TestChannelConnectionPromptDeadline(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	service.InitHttpClient()
+	oldStreamTimeout, oldLogConsume := constant.StreamingTimeout, common.LogConsumeEnabled
+	constant.StreamingTimeout, common.LogConsumeEnabled = 30, false
+	t.Cleanup(func() {
+		constant.StreamingTimeout, common.LogConsumeEnabled = oldStreamTimeout, oldLogConsume
+	})
+	user := &model.User{Id: 1, Username: "timeout-test", Role: common.RoleRootUser, Status: common.UserStatusEnabled, Group: "default"}
+	user.SetSetting(dto.UserSetting{AcceptUnsetRatioModel: true})
+	require.NoError(t, db.Create(user).Error)
+
+	const firstEvent = "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"model\":\"upstream-model\",\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n"
+	const terminalEvent = "data: {\"type\":\"message_stop\"}\n\n"
+	for i, tc := range []struct {
+		name   string
+		status int
+		body   string
+		phase  string
+	}{
+		{name: "no headers", phase: "upstream_headers"},
+		{name: "error body stalls", status: http.StatusForbidden, body: "{\"error\":", phase: "upstream_error_body"},
+		{name: "stream stalls", status: http.StatusOK, body: firstEvent, phase: "upstream_stream"},
+		{name: "complete stream", status: http.StatusOK, body: firstEvent + terminalEvent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upstreamClosed := make(chan struct{})
+			releaseUpstream := make(chan struct{})
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				defer close(upstreamClosed)
+				_, _ = io.Copy(io.Discard, r.Body)
+				if tc.status != 0 {
+					if tc.status == http.StatusOK {
+						w.Header().Set("Content-Type", "text/event-stream")
+					} else {
+						w.Header().Set("Content-Type", "application/json")
+					}
+					w.WriteHeader(tc.status)
+					_, _ = io.WriteString(w, tc.body)
+					w.(http.Flusher).Flush()
+				}
+				select {
+				case <-r.Context().Done():
+				case <-releaseUpstream:
+				}
+			}))
+			defer upstream.Close()
+			defer close(releaseUpstream)
+			channel := &model.Channel{
+				Id: i + 106, Type: constant.ChannelTypeAnthropic, Key: "test-key",
+				Name: tc.name, Status: common.ChannelStatusEnabled, BaseURL: &upstream.URL,
+				Models: "test-model", Group: "default",
+				ModelMapping: common.GetPointer(`{"test-model":"upstream-model"}`),
+				ChannelInfo:  model.ChannelInfo{IsMultiKey: true, MultiKeySize: 1},
+			}
+			require.NoError(t, db.Create(channel).Error)
+			response := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(response)
+			ctx.Set("id", user.Id)
+			ctx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(channel.Id)}}
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"model":"test-model","user_prompt":"hi","endpoint_type":"anthropic","stream":true}`))
+			ctx.Request.Header.Set("Content-Type", "application/json")
+
+			testChannelConnectionPrompt(ctx, time.Second)
+
+			var result struct {
+				Success    bool           `json:"success"`
+				ErrorCode  string         `json:"error_code"`
+				MessageKey string         `json:"message_key"`
+				Time       float64        `json:"time"`
+				Data       map[string]any `json:"data"`
+			}
+			require.Equal(t, http.StatusOK, response.Code)
+			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+			if tc.phase == "" {
+				assert.True(t, result.Success, response.Body.String())
+				assert.Empty(t, result.ErrorCode)
+			} else {
+				assert.False(t, result.Success)
+				assert.Equal(t, "channel_test_timeout", result.ErrorCode)
+				assert.NotEmpty(t, result.MessageKey)
+				assert.GreaterOrEqual(t, result.Time, 1.0)
+				assert.Equal(t, tc.phase, result.Data["phase"])
+				assert.Equal(t, "upstream-model", result.Data["upstream_model"])
+				assert.Equal(t, float64(0), result.Data["key_index"])
+				if tc.status == 0 {
+					assert.NotContains(t, result.Data, "upstream_status")
+				} else {
+					assert.Equal(t, float64(tc.status), result.Data["upstream_status"])
+					assert.Contains(t, result.Data, "upstream_headers_ms")
+				}
+			}
+			select {
+			case <-upstreamClosed:
+			case <-time.After(3 * time.Second):
+				t.Fatal("upstream request did not close")
+			}
 		})
 	}
 }

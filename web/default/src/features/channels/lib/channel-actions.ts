@@ -329,7 +329,9 @@ export async function handleTestChannel(
         details: response.data,
       }
     } else {
-      const errorMsg = response.message || i18next.t(ERROR_MESSAGES.TEST_FAILED)
+      const errorMsg = response.message_key
+        ? i18next.t(response.message_key, { defaultValue: response.message })
+        : response.message || i18next.t(ERROR_MESSAGES.TEST_FAILED)
       if (!options?.silent) {
         toast.error(i18next.t('{{target}} test failed', { target }), {
           description: response.error_code

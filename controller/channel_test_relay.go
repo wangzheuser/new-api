@@ -42,6 +42,10 @@ func testTextChannel(c *gin.Context, recorder *httptest.ResponseRecorder, channe
 	defer common.CleanupBodyStorage(c)
 
 	info, apiErr := executeRelayRequest(c, format, channel)
+	if info != nil {
+		result.upstreamHTTP = info.ChannelTestHTTP
+		result.upstreamEvents = info.ReceivedResponseCount
+	}
 	if info != nil && info.ChannelMeta != nil {
 		result.upstreamModel = info.UpstreamModelName
 		switch info.GetFinalRequestRelayFormat() {
