@@ -265,7 +265,11 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 	}
 	common.SetContextKey(c, appconstant.ContextKeyOriginalModel, modelName)
 	common.SetContextKey(c, appconstant.ContextKeyRequestStartTime, time.Now())
-	service.GetChannelConstraints(c).AddFilter(appdto.ChannelFilter{Kind: appdto.FilterRequestPath, RequestPath: c.Request.URL.Path})
+	constraints := service.GetChannelConstraints(c)
+	constraints.AddFilter(appdto.ChannelFilter{Kind: appdto.FilterRequestPath, RequestPath: c.Request.URL.Path})
+	if helper.HasImageInput(c, &create.Request) {
+		constraints.ImageInputModel = modelName
+	}
 
 	if s.lockedChannelID != 0 {
 		if apiErr = s.restoreConnectionContext(c, modelName); apiErr != nil {
@@ -670,6 +674,9 @@ func (s *responsesWSSession) restoreConnectionContext(c *gin.Context, model stri
 			return types.NewErrorWithStatusCode(errors.New("the connection channel is no longer allowed for this group and model"), types.ErrorCodeAccessDenied, http.StatusForbidden, types.ErrOptionWithSkipRetry())
 		}
 	}
+	if imageErr := service.CheckChannelImageInput(c, channel, model); imageErr != nil {
+		return imageErr
+	}
 	for key, value := range s.lockedContext {
 		c.Set(string(key), value)
 	}
@@ -1021,20 +1028,33 @@ func selectResponsesWSChannel(c *gin.Context, modelName string, retryParam *serv
 	}) {
 		constraints.AddFilter(appdto.ChannelFilter{Kind: appdto.FilterResponsesWebSocket})
 	}
-	channel, _, selectErr := service.SelectChannelForRequest(c, modelName, retryParam)
-	if selectErr != nil {
-		message := selectErr.Message
-		if selectErr.MessageID != "" {
-			message = i18n.T(c, selectErr.MessageID, selectErr.Params)
+	_, pinned, _ := constraints.ResolvedPin()
+	for {
+		channel, _, selectErr := service.SelectChannelForRequest(c, modelName, retryParam)
+		if selectErr != nil {
+			message := selectErr.Message
+			if selectErr.MessageID != "" {
+				message = i18n.T(c, selectErr.MessageID, selectErr.Params)
+			}
+			code := selectErr.Code
+			if code == "" {
+				code = types.ErrorCodeGetChannelFailed
+			}
+			return nil, types.NewErrorWithStatusCode(errors.New(message), code, selectErr.StatusCode, types.ErrOptionWithSkipRetry())
 		}
-		code := selectErr.Code
-		if code == "" {
-			code = types.ErrorCodeGetChannelFailed
+		setupErr := middleware.SetupContextForSelectedChannelWithKeyExclusions(c, channel, modelName, retryParam.ExcludedChannelKeys(channel.Id))
+		if setupErr == nil {
+			return channel, nil
 		}
-		return nil, types.NewErrorWithStatusCode(errors.New(message), code, selectErr.StatusCode, types.ErrOptionWithSkipRetry())
+		if constraints.ImageInputModel == "" || setupErr.GetErrorCode() != types.ErrorCodeChannelNoAvailableKey {
+			return nil, setupErr
+		}
+		if pinned || service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
+			return nil, types.NewErrorWithStatusCode(setupErr, setupErr.GetErrorCode(), http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+		}
+		if retryParam.ExcludedChannelIDs == nil {
+			retryParam.ExcludedChannelIDs = make(map[int]struct{})
+		}
+		retryParam.ExcludedChannelIDs[channel.Id] = struct{}{}
 	}
-	if err := middleware.SetupContextForSelectedChannel(c, channel, modelName); err != nil {
-		return nil, err
-	}
-	return channel, nil
 }

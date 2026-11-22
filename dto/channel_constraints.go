@@ -52,6 +52,8 @@ type ChannelFilter struct {
 type ChannelConstraints struct {
 	Pins    []ChannelPin
 	Filters []ChannelFilter
+	// ImageInputModel is the original client model when the request contains an image.
+	ImageInputModel string
 }
 
 func (cc *ChannelConstraints) AddPin(p ChannelPin) {

@@ -7,6 +7,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -140,6 +141,25 @@ func TestDetectInputModalities(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			assert.Equal(t, test.want, DetectInputModalities(test.request))
+		})
+	}
+}
+
+func TestDetectImageInputInParsedGeminiRequests(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		json      string
+		wantImage bool
+	}{
+		{"audio file", `{"contents":[{"parts":[{"fileData":{"mimeType":"audio/wav","fileUri":"gs://fixture/audio.wav"}}]}]}`, false},
+		{"image in system instruction", `{"systemInstruction":{"parts":[{"inlineData":{"mimeType":"image/png","data":"AA=="}}]}}`, true},
+		{"image in batch", `{"requests":[{"contents":[{"parts":[{"inlineData":{"mimeType":"image/png","data":"AA=="}}]}]}]}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var request kitdto.GeminiChatRequest
+			require.NoError(t, common.UnmarshalJsonStr(tc.json, &request))
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			assert.Equal(t, tc.wantImage, HasImageInput(ctx, &request))
 		})
 	}
 }

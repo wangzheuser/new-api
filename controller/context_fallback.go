@@ -104,6 +104,9 @@ func prepareContextFallback(c *gin.Context, info *relaycommon.RelayInfo, request
 		if !common.StringsContains(sourceChannel.GetModels(), rule.FallbackModel) {
 			return nil, contextFallbackChannelError(fmt.Errorf("no available channel for the requested model"))
 		}
+		if imageErr := service.CheckChannelImageInput(c, sourceChannel, rule.FallbackModel); imageErr != nil {
+			return nil, imageErr
+		}
 		decision.TargetChannelID = sourceChannelID
 	} else {
 		if _, pinned := c.Get("specific_channel_id"); pinned {
@@ -217,6 +220,8 @@ func selectContextFallbackTarget(c *gin.Context, info *relaycommon.RelayInfo, re
 	group := contextFallbackRoutingGroup(c, info)
 	if len(decision.TargetChannelIDs) > 0 {
 		used := usedChannelIDSet(c)
+		var imageErr *types.NewAPIError
+		hasUsableImage := false
 		for _, channelID := range decision.TargetChannelIDs {
 			if channelID == decision.SourceChannelID {
 				continue
@@ -228,7 +233,22 @@ func selectContextFallbackTarget(c *gin.Context, info *relaycommon.RelayInfo, re
 			if err != nil || !contextFallbackTargetEligible(channel, group, decision.FallbackModel, c.Request.URL.Path, info.IsStream) {
 				continue
 			}
+			if candidateErr := service.CheckChannelImageInput(c, channel, decision.FallbackModel); candidateErr != nil {
+				if candidateErr.GetErrorCode() == types.ErrorCodeUnsupportedInputModality {
+					imageErr = candidateErr
+				} else {
+					hasUsableImage = true
+				}
+				continue
+			}
+			if service.IsChannelRoutingBlocked(channel, decision.FallbackModel) {
+				hasUsableImage = true
+				continue
+			}
 			return channel, nil
+		}
+		if imageErr != nil && !hasUsableImage {
+			return nil, imageErr
 		}
 		return nil, contextFallbackChannelError(fmt.Errorf("no available channel for the requested model"))
 	}
@@ -241,11 +261,15 @@ func selectContextFallbackTarget(c *gin.Context, info *relaycommon.RelayInfo, re
 		candidateParam := *retryParam
 		candidateParam.TokenGroup = group
 		candidateParam.ModelName = decision.FallbackModel
+		candidateParam.ContextFallbackSourceID = decision.SourceChannelID
 		candidateParam.RequestPath = c.Request.URL.Path
 		candidateParam.IsStream = info.IsStream
 		candidateParam.Retry = &retryValue
 		channel, _, _, err := service.CacheGetRandomSatisfiedChannelWithRoute(&candidateParam)
 		if err != nil {
+			if imageErr, ok := err.(*types.NewAPIError); ok {
+				return nil, imageErr
+			}
 			return nil, contextFallbackChannelError(err)
 		}
 		if channel != nil && channel.Id != decision.SourceChannelID {
@@ -271,15 +295,12 @@ func contextFallbackTargetEligible(channel *model.Channel, group, modelName, req
 	if channel == nil || channel.Status != common.ChannelStatusEnabled {
 		return false
 	}
-	if service.IsChannelRoutingBlocked(channel, modelName) {
-		return false
-	}
 	if !common.StringsContains(channel.GetGroups(), group) || !common.StringsContains(channel.GetModels(), modelName) {
 		return false
 	}
 	if channel.Type == constant.ChannelTypeAdvancedCustom {
-		config := channel.GetOtherSettings().AdvancedCustom
-		if config == nil || !config.SupportsPathForModel(requestPath, modelName) {
+		settings, _ := channel.ReadOtherSettings()
+		if settings.AdvancedCustom == nil || !settings.AdvancedCustom.SupportsPathForModel(requestPath, modelName) {
 			return false
 		}
 	}

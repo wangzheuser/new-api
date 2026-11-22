@@ -198,10 +198,34 @@ func TestGetChannelRejectsRetryChannelByRequestedModel(t *testing.T) {
 		Retry:       common.GetPointer(0),
 	}
 
+	service.GetChannelConstraints(ctx).ImageInputModel = info.GetRequestedModelName()
 	selected, err := getChannel(ctx, info, retry)
-
 	assert.Nil(t, selected)
 	require.NotNil(t, err)
 	assert.Equal(t, types.ErrorCodeUnsupportedInputModality, err.GetErrorCode())
-	assert.Equal(t, channel.Id, common.GetContextKeyInt(ctx, constant.ContextKeyChannelId))
+	assert.Zero(t, common.GetContextKeyInt(ctx, constant.ContextKeyChannelId))
+
+	vision := &model.Channel{
+		Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled,
+		Name: "retry vision", Models: "source", Group: "default", Key: "fixture-vision-key",
+		Priority: common.GetPointer(int64(0)),
+	}
+	require.NoError(t, vision.Insert())
+	retry.PreferredChannelID = channel.Id
+	retry.SetRetry(1)
+	selected, err = getChannel(ctx, info, retry)
+	require.Nil(t, err)
+	require.NotNil(t, selected)
+	assert.Equal(t, vision.Id, selected.Id)
+
+	vision.Key = "fixture-key-first\nfixture-key-second"
+	vision.ChannelInfo = model.ChannelInfo{IsMultiKey: true, MultiKeySize: 2, MultiKeyMode: constant.MultiKeyModeRandom}
+	require.NoError(t, db.Model(vision).Select("key", "channel_info").Updates(vision).Error)
+	retry.PreferredChannelID = vision.Id
+	retry.ExcludeChannelKey(vision.Id, "fixture-key-first")
+	selected, err = getChannel(ctx, info, retry)
+	require.Nil(t, err)
+	require.NotNil(t, selected)
+	assert.Equal(t, vision.Id, selected.Id)
+	assert.Equal(t, "fixture-key-second", common.GetContextKeyString(ctx, constant.ContextKeyChannelKey))
 }

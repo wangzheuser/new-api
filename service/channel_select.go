@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -55,8 +57,42 @@ type RetryParam struct {
 	Retry                   *int
 	ExcludedChannelIDs      map[int]struct{}
 	PreferredChannelID      int
+	ContextFallbackSourceID int
 	ExcludedKeyFingerprints map[int]map[string]struct{}
 	resetNextTry            bool
+	imageCandidateModel     string
+}
+
+func (p *RetryParam) imageInputModel() string {
+	original := GetChannelConstraints(p.Ctx).ImageInputModel
+	if original == "" {
+		return ""
+	}
+	if strings.HasSuffix(p.RequestPath, "/responses/compact") && p.ModelName == ratio_setting.WithCompactModelSuffix(original) {
+		return original
+	}
+	return p.ModelName
+}
+
+// CheckChannelImageInput protects bound, preferred and explicitly configured channels.
+func CheckChannelImageInput(c *gin.Context, channel *model.Channel, modelName string) *types.NewAPIError {
+	if GetChannelConstraints(c).ImageInputModel == "" {
+		return nil
+	}
+	requestPath := ""
+	if c.Request != nil {
+		requestPath = c.Request.URL.Path
+	}
+	param := RetryParam{Ctx: c, ModelName: modelName, RequestPath: requestPath}
+	name := param.imageInputModel()
+	settings, err := channel.ReadSetting()
+	if err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+	}
+	if !model_setting.AllowsImageInput(name, settings) {
+		return types.UnsupportedImageInputError(name)
+	}
+	return nil
 }
 
 // AppendUsedChannel records a channel on the request for diagnostics and
@@ -159,6 +195,41 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 	selectGroup := param.TokenGroup
 	userGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyUserGroup)
 	filters := GetChannelConstraints(param.Ctx).Filters
+	imageModel := param.imageInputModel()
+	var candidateFilter model.ChannelCandidateFilter
+	sawTextOnly := false
+	if imageModel != "" {
+		defaultAllowsImage := model_setting.AllowsImageInput(imageModel, dto.ChannelSettings{})
+		_, _, _, textProtocol := ResolveClientTextProtocol(param.RequestPath)
+		checkProtocol := textProtocol && !slices.ContainsFunc(filters, func(filter dto.ChannelFilter) bool {
+			return filter.Kind == dto.FilterResponsesWebSocket
+		})
+		candidateFilter = func(channel *model.Channel) bool {
+			if channel.Status != common.ChannelStatusEnabled || channel.Id == param.ContextFallbackSourceID {
+				return false
+			}
+			settings, err := channel.ReadSetting()
+			if err != nil {
+				return false
+			}
+			if checkProtocol {
+				plan, err := planChannelProtocolRoute(channel.Type, settings, param.ModelName, param.RequestPath, param.IsStream)
+				if err != nil || plan == nil {
+					return false
+				}
+			}
+			allowsImage := defaultAllowsImage
+			if modalities, configured := settings.ModelInputModalities[imageModel]; configured {
+				allowsImage = slices.Contains(modalities, types.InputModalityImage)
+			}
+			if !allowsImage {
+				sawTextOnly = true
+				return false
+			}
+			param.imageCandidateModel = param.ModelName
+			return true
+		}
+	}
 	usedChannelIds := make(map[int]struct{})
 	for _, rawChannelId := range param.Ctx.GetStringSlice("use_channel") {
 		if channelId, parseErr := strconv.Atoi(rawChannelId); parseErr == nil {
@@ -199,7 +270,10 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, _ = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry, param.RequestPath, usedChannelIds, param.ExcludedChannelIDs, filters)
+			channel, err = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry, param.RequestPath, usedChannelIds, param.ExcludedChannelIDs, filters, candidateFilter)
+			if err != nil && candidateFilter != nil {
+				return nil, autoGroup, err
+			}
 			if channel == nil {
 				// Current group has no available channel for this model, try next group
 				// 当前分组没有该模型的可用渠道，尝试下一个分组
@@ -237,10 +311,13 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			break
 		}
 	} else {
-		channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry(), param.RequestPath, usedChannelIds, param.ExcludedChannelIDs, filters)
+		channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry(), param.RequestPath, usedChannelIds, param.ExcludedChannelIDs, filters, candidateFilter)
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}
+	}
+	if channel == nil && sawTextOnly && param.imageCandidateModel != param.ModelName {
+		return nil, selectGroup, types.UnsupportedImageInputError(imageModel)
 	}
 	return channel, selectGroup, nil
 }
@@ -271,16 +348,37 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 		if channel.Status != common.ChannelStatusEnabled {
 			return nil, "", pinnedChannelUnavailable(pin, http.StatusForbidden, i18n.MsgDistributorChannelDisabled)
 		}
-		if IsChannelRoutingBlocked(channel, modelName) {
+		if IsChannelRoutingBlocked(channel, modelName) && constraints.ImageInputModel == "" {
 			return nil, "", pinnedChannelUnavailable(pin, http.StatusServiceUnavailable, i18n.MsgDistributorChannelDisabled)
 		}
 		if ok, kind := model.ChannelSatisfiesFilters(channel, modelName, constraints.Filters); !ok {
 			return nil, "", &ChannelSelectError{StatusCode: http.StatusBadRequest, Code: types.ErrorCode(kind), MessageID: i18n.MsgDistributorNoAvailableChannel, Params: map[string]any{"Group": common.GetContextKeyString(c, constant.ContextKeyUsingGroup), "Model": modelName}, FilterKind: kind, Channel: channel}
 		}
+		if imageErr := CheckChannelImageInput(c, channel, modelName); imageErr != nil {
+			return nil, "", &ChannelSelectError{StatusCode: imageErr.StatusCode, Code: imageErr.GetErrorCode(), Message: imageErr.MaskSensitiveError()}
+		}
+		if constraints.ImageInputModel != "" && IsChannelRoutingBlocked(channel, modelName) {
+			return nil, "", pinnedChannelUnavailable(pin, http.StatusServiceUnavailable, i18n.MsgDistributorChannelDisabled)
+		}
 		return channel, "", nil
 	}
 
 	usingGroup := retry.TokenGroup
+	if preferredID := retry.PreferredChannelID; preferredID > 0 {
+		retry.PreferredChannelID = 0
+		preferred, err := model.CacheGetChannel(preferredID)
+		if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
+			!IsChannelRoutingBlocked(preferred, modelName) && CheckChannelImageInput(c, preferred, modelName) == nil {
+			group := usingGroup
+			if group == "auto" {
+				group = common.GetContextKeyString(c, constant.ContextKeyAutoGroup)
+			}
+			if ok, _ := model.ChannelSatisfiesFilters(preferred, modelName, constraints.Filters); ok &&
+				model.IsChannelEnabledForGroupModel(group, modelName, preferred.Id) {
+				return preferred, group, nil
+			}
+		}
+	}
 	var channel *model.Channel
 	selectGroup := ""
 	if retry.GetRetry() == 0 {
@@ -289,7 +387,11 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 			usable := err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
 				!IsChannelRoutingBlocked(preferred, modelName)
 			if usable {
-				usable, _ = model.ChannelSatisfiesFilters(preferred, modelName, constraints.Filters)
+				if _, excluded := retry.ExcludedChannelIDs[preferred.Id]; excluded {
+					usable = false
+				} else {
+					usable, _ = model.ChannelSatisfiesFilters(preferred, modelName, constraints.Filters)
+				}
 			}
 			if usable {
 				if usingGroup == "auto" {
@@ -305,17 +407,26 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 					for _, group := range autoGroups {
 						if model.IsChannelEnabledForGroupModel(group, modelName, preferred.Id) {
 							selectGroup, channel = group, preferred
-							common.SetContextKey(c, constant.ContextKeyAutoGroup, group)
-							MarkChannelAffinityUsed(c, group, preferred.Id)
 							break
 						}
 					}
 				} else if model.IsChannelEnabledForGroupModel(usingGroup, modelName, preferred.Id) {
 					selectGroup, channel = usingGroup, preferred
-					MarkChannelAffinityUsed(c, usingGroup, preferred.Id)
 				}
 			}
-			if channel == nil {
+			if channel != nil {
+				if imageErr := CheckChannelImageInput(c, channel, modelName); imageErr != nil {
+					if RequestPolicy(c).SessionMode == "strict" {
+						return nil, "", &ChannelSelectError{StatusCode: imageErr.StatusCode, Code: imageErr.GetErrorCode(), Message: imageErr.MaskSensitiveError()}
+					}
+					channel, selectGroup = nil, ""
+				} else {
+					if usingGroup == "auto" {
+						common.SetContextKey(c, constant.ContextKeyAutoGroup, selectGroup)
+					}
+					MarkChannelAffinityUsed(c, selectGroup, preferred.Id)
+				}
+			} else {
 				if !ShouldKeepChannelAffinityOnChannelDisabled() {
 					ClearCurrentChannelAffinityCache(c)
 				}
@@ -330,6 +441,9 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 			var err error
 			channel, selectGroup, err = CacheGetRandomSatisfiedChannel(retry)
 			if err != nil {
+				if imageErr, ok := err.(*types.NewAPIError); ok {
+					return nil, selectGroup, &ChannelSelectError{StatusCode: imageErr.StatusCode, Code: imageErr.GetErrorCode(), Message: imageErr.MaskSensitiveError()}
+				}
 				showGroup := usingGroup
 				if usingGroup == "auto" {
 					showGroup = fmt.Sprintf("auto(%s)", selectGroup)

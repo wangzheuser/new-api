@@ -34,6 +34,7 @@ import {
   parseModelInputModalitiesWithStatus,
   removeModelInputModalityDeclaration,
   resolveModelInputModalities,
+  setGlobalModelInputModalityDeclaration,
   stringifyModelInputModalities,
   type ModelInputModalities,
 } from './model-input-modalities'
@@ -194,6 +195,27 @@ describe('model input modality resolution', () => {
         configured: false,
         source: 'unconfigured',
       }
+    )
+  })
+
+  test('adds a global model with images enabled and restores the default after removal', () => {
+    const created = setGlobalModelInputModalityDeclaration('NEW', {
+      EXISTING: ['text'],
+    })
+    assert.deepEqual(created, { EXISTING: ['text'], NEW: ['text', 'image'] })
+    const saved = setGlobalModelInputModalityDeclaration('NEW', created, false)
+    assert.deepEqual(
+      parseModelInputModalities(stringifyModelInputModalities(saved)).NEW,
+      ['text']
+    )
+    const removed = removeModelInputModalityDeclaration('NEW', saved)
+    assert.deepEqual(
+      resolveModelInputModalities('NEW', {}, removed).modalities,
+      ['text', 'image']
+    )
+    assert.deepEqual(
+      resolveModelInputModalities('NEW', { NEW: ['text'] }, removed).modalities,
+      ['text']
     )
   })
 

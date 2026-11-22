@@ -17,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -129,6 +130,17 @@ func Distribute() func(c *gin.Context) {
 				}
 			}
 		}
+		relayFormat := inputModalityRelayFormat(c)
+		if relayFormat != "" && (pinned || shouldSelectChannel) {
+			if err := helper.PrepareInputModalityRouting(c, relayFormat, modelRequest.Model); err != nil {
+				status, code := http.StatusBadRequest, types.ErrorCodeInvalidRequest
+				if common.IsRequestBodyTooLargeError(err) || errors.Is(err, common.ErrRequestBodyTooLarge) {
+					status, code = http.StatusRequestEntityTooLarge, types.ErrorCodeReadRequestBodyFailed
+				}
+				abortWithRelayHTTPError(c, relayFormat, status, code, err.Error())
+				return
+			}
+		}
 		if pinned || shouldSelectChannel {
 			usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
 			channel, _, selectErr = service.SelectChannelForRequest(c, modelRequest.Model, &service.RetryParam{
@@ -145,7 +157,11 @@ func Distribute() func(c *gin.Context) {
 				} else if selectErr.MessageID != "" {
 					message = i18n.T(c, selectErr.MessageID, selectErr.Params)
 				}
-				abortWithOpenAiMessage(c, selectErr.StatusCode, message, selectErr.Code)
+				if relayFormat != "" && constraints.ImageInputModel != "" {
+					abortWithRelayHTTPError(c, relayFormat, selectErr.StatusCode, selectErr.Code, message)
+				} else {
+					abortWithOpenAiMessage(c, selectErr.StatusCode, message, selectErr.Code)
+				}
 				return
 			}
 		}
@@ -167,17 +183,24 @@ func Distribute() func(c *gin.Context) {
 			}
 			_, pinned, _ := constraints.ResolvedPin()
 			failedChannel := channel
+			imageRouting := constraints.ImageInputModel != ""
 			if setupErr.GetErrorCode() == types.ErrorCodeChannelNoAvailableKey && failedChannel != nil && !pinned &&
-				!service.ShouldSkipRetryAfterChannelAffinityFailure(c) && retryParam.GetRetry() < common.RetryTimes {
+				!service.ShouldSkipRetryAfterChannelAffinityFailure(c) && (imageRouting || retryParam.GetRetry() < common.RetryTimes) {
 				retryParam.ExcludedChannelIDs[failedChannel.Id] = struct{}{}
-				retryParam.IncreaseRetry()
+				if !imageRouting {
+					retryParam.IncreaseRetry()
+				}
 				channel, _, selectErr = service.SelectChannelForRequest(c, modelRequest.Model, retryParam)
 				if selectErr == nil {
 					continue
 				}
 			}
 			recordDistributorSetupError(c, failedChannel, setupErr)
-			abortWithOpenAiMessage(c, http.StatusServiceUnavailable, setupErr.Error(), types.ErrorCodeModelNotFound)
+			if relayFormat != "" && constraints.ImageInputModel != "" {
+				abortWithRelayHTTPError(c, relayFormat, http.StatusServiceUnavailable, types.ErrorCodeModelNotFound, setupErr.MaskSensitiveError())
+			} else {
+				abortWithOpenAiMessage(c, http.StatusServiceUnavailable, setupErr.Error(), types.ErrorCodeModelNotFound)
+			}
 			return
 		}
 		c.Next()
@@ -190,6 +213,37 @@ func Distribute() func(c *gin.Context) {
 			service.RecordChannelAffinity(c, channel.Id)
 		}
 	}
+}
+
+func inputModalityRelayFormat(c *gin.Context) types.RelayFormat {
+	if c.Request.Method != http.MethodPost {
+		return ""
+	}
+	if _, claimed := c.Get(jsplugin.ContextKeyPinnedEndpoint); claimed {
+		return ""
+	}
+	path := c.Request.URL.Path
+	switch path {
+	case "/v1/messages/count_tokens":
+		return types.RelayFormatClaude
+	case "/v1/responses/compact":
+		return types.RelayFormatOpenAIResponsesCompaction
+	}
+	if (strings.HasPrefix(path, "/v1beta/models/") || strings.HasPrefix(path, "/v1/models/")) &&
+		strings.HasSuffix(path, ":batchGenerateContent") {
+		return types.RelayFormatGemini
+	}
+	_, format, _, _ := service.ResolveClientTextProtocol(path)
+	return format
+}
+
+func abortWithRelayHTTPError(c *gin.Context, format types.RelayFormat, status int, code types.ErrorCode, message string) {
+	if code == "" {
+		code = types.ErrorCodeGetChannelFailed
+	}
+	apiErr := types.NewOpenAIError(errors.New(message), code, status, types.ErrOptionWithSkipRetry())
+	helper.WriteRelayHTTPError(c, format, apiErr, common.MessageWithRequestId(apiErr.MaskSensitiveError(), c.GetString(common.RequestIdKey)))
+	c.Abort()
 }
 
 // noAvailableChannelMessage explains a task-plugin routing miss without exposing plugin keys.

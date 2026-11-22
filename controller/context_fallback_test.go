@@ -219,6 +219,16 @@ func TestGetChannelContextFallbackSameChannelStaysOnSource(t *testing.T) {
 	require.Nil(t, apiErr)
 	require.NotNil(t, selected)
 	assert.Equal(t, source.Id, selected.Id)
+
+	settings.ModelInputModalities = projecttypes.ModelInputModalities{"MODEL_B": {projecttypes.InputModalityText}}
+	source.SetSetting(settings)
+	require.NoError(t, db.Model(source).Update("setting", source.Setting).Error)
+	service.GetChannelConstraints(c).ImageInputModel = "MODEL_A"
+	selected, apiErr = getChannel(c, info, &service.RetryParam{Ctx: c, ModelName: "MODEL_B", Retry: &retry})
+	assert.Nil(t, selected)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, projecttypes.ErrorCodeUnsupportedInputModality, apiErr.GetErrorCode())
+	assert.Contains(t, apiErr.Error(), "MODEL_B")
 }
 
 func TestPrepareContextFallbackCrossChannelUsesTargetPrompt(t *testing.T) {
@@ -272,6 +282,15 @@ func TestPrepareContextFallbackCrossChannelUsesTargetPrompt(t *testing.T) {
 	assert.Greater(t, info.ContextFallback.TargetPromptTokens, 0)
 	assert.Equal(t, target.Id, common.GetContextKeyInt(c, constant.ContextKeyChannelId))
 	assert.Equal(t, "MODEL_A", common.GetContextKeyString(c, constant.ContextKeyOriginalModel))
+
+	targetSettings.ModelInputModalities = projecttypes.ModelInputModalities{"MODEL_B": {projecttypes.InputModalityText}}
+	target.SetSetting(targetSettings)
+	require.NoError(t, db.Model(target).Update("setting", target.Setting).Error)
+	service.GetChannelConstraints(c).ImageInputModel = "MODEL_A"
+	selected, apiErr := selectContextFallbackTarget(c, info, &service.RetryParam{Ctx: c, ModelName: "MODEL_B"})
+	require.NotNil(t, apiErr)
+	assert.Nil(t, selected)
+	assert.Equal(t, projecttypes.ErrorCodeUnsupportedInputModality, apiErr.GetErrorCode())
 }
 
 func TestPrepareContextFallbackBelowThresholdKeepsSourceModel(t *testing.T) {

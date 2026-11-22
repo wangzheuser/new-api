@@ -36,6 +36,7 @@ import {
   normalizeModelInputModalities,
   removeModelInputModalityDeclaration,
   resolveModelInputModalities,
+  setGlobalModelInputModalityDeclaration,
   type ModelInputModalities,
   type ModelInputModalityNameError,
 } from '@/lib/model-input-modalities'
@@ -108,12 +109,9 @@ function GlobalInputModalityEditor(props: ScopedInputModalityEditorProps) {
     return ''
   }
 
-  const updateModel = (model: string, imageEnabled: boolean) => {
+  const updateModel = (model: string, imageEnabled?: boolean) => {
     props.onChange(
-      normalizeModelInputModalities({
-        ...props.value,
-        [model]: imageEnabled ? ['text', 'image'] : ['text'],
-      })
+      setGlobalModelInputModalityDeclaration(model, props.value, imageEnabled)
     )
   }
 
@@ -131,7 +129,7 @@ function GlobalInputModalityEditor(props: ScopedInputModalityEditorProps) {
       return
     }
 
-    updateModel(model, false)
+    updateModel(model)
     setDraftModel('')
     setDraftError('')
   }
@@ -472,7 +470,7 @@ function ChannelInputModalityRow(props: ChannelInputModalityRowProps) {
   const imageEnabled = effective.modalities.includes('image')
   const mappingTarget = props.mapping?.[props.model]
 
-  let sourceLabel = t('Unconfigured compatibility behavior')
+  let sourceLabel = t('Image input supported by default')
   if (effective.source === 'channel') {
     sourceLabel = t('Channel override')
   } else if (effective.source === 'global') {

@@ -348,7 +348,7 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
                   </div>
                   <FormDescription>
                     {t(
-                      'Declare image input capability by exact client-requested model name. Channel declarations take precedence.'
+                      'Models accept image input by default. Channel overrides take precedence.'
                     )}
                   </FormDescription>
                 </div>

@@ -1,14 +1,13 @@
 package helper
 
 import (
-	"fmt"
-	"net/http"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	rootdto "github.com/QuantumNous/new-api/dto"
 	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -27,24 +26,57 @@ func DetectInputModalities(request any) []types.InputModality {
 	return modalities
 }
 
+const inputModalityRequestKey = "validated_input_modality_request"
+
+type inputModalityRequest struct {
+	format   types.RelayFormat
+	request  kitdto.Request
+	hasImage bool
+}
+
+// PrepareInputModalityRouting validates the HTTP body once for both routing and the relay.
+func PrepareInputModalityRouting(c *gin.Context, format types.RelayFormat, modelName string) error {
+	request, err := GetAndValidateRequest(c, format)
+	if err != nil {
+		return err
+	}
+	hasImage := requestContainsImage(request)
+	c.Set(inputModalityRequestKey, inputModalityRequest{format: format, request: request, hasImage: hasImage})
+	if hasImage {
+		if compact, ok := request.(*kitdto.OpenAIResponsesCompactionRequest); ok {
+			modelName = compact.Model
+		}
+		service.GetChannelConstraints(c).ImageInputModel = modelName
+	}
+	return nil
+}
+
+// HasImageInput reuses the detection result when the request was prepared before selection.
+func HasImageInput(c *gin.Context, request kitdto.Request) bool {
+	if value, ok := c.Get(inputModalityRequestKey); ok {
+		if prepared := value.(inputModalityRequest); prepared.request == request {
+			return prepared.hasImage
+		}
+	}
+	return requestContainsImage(request)
+}
+
 // ValidateRequestInputModalities applies the selected channel and global capability declaration.
 func ValidateRequestInputModalities(c *gin.Context, requestedModel string, request any) *types.NewAPIError {
 	channelSettings, _ := common.GetContextKeyType[rootdto.ChannelSettings](c, constant.ContextKeyChannelSetting)
-	allowed, configured, _ := model_setting.ResolveModelInputModalities(requestedModel, channelSettings)
-	if !configured || !containsInputModality(DetectInputModalities(request), types.InputModalityImage) {
+	if model_setting.AllowsImageInput(requestedModel, channelSettings) {
 		return nil
 	}
-	if containsInputModality(allowed, types.InputModalityImage) {
-		return nil
+	hasImage := false
+	if parsed, ok := request.(kitdto.Request); ok {
+		hasImage = HasImageInput(c, parsed)
+	} else {
+		hasImage = requestContainsImage(request)
 	}
-
-	err := fmt.Errorf("model %s has no declared image input capability", requestedModel)
-	return types.NewOpenAIError(
-		err,
-		types.ErrorCodeUnsupportedInputModality,
-		http.StatusBadRequest,
-		types.ErrOptionWithSkipRetry(),
-	)
+	if hasImage {
+		return types.UnsupportedImageInputError(requestedModel)
+	}
+	return nil
 }
 
 func requestContainsImage(request any) bool {
@@ -96,11 +128,27 @@ func requestContainsImage(request any) bool {
 }
 
 func geminiRequestContainsImageKit(request *kitdto.GeminiChatRequest) bool {
+	if request.SystemInstructions != nil && geminiKitContentContainsImage(*request.SystemInstructions) {
+		return true
+	}
 	for _, content := range request.Contents {
-		for _, part := range content.Parts {
-			if part.InlineData != nil || part.FileData != nil {
-				return true
-			}
+		if geminiKitContentContainsImage(content) {
+			return true
+		}
+	}
+	for index := range request.Requests {
+		if geminiRequestContainsImageKit(&request.Requests[index]) {
+			return true
+		}
+	}
+	return false
+}
+
+func geminiKitContentContainsImage(content kitdto.GeminiChatContent) bool {
+	for _, part := range content.Parts {
+		if (part.InlineData != nil && isImageMIME(part.InlineData.MimeType)) ||
+			(part.FileData != nil && isImageMIME(part.FileData.MimeType)) {
+			return true
 		}
 	}
 	return false
@@ -120,13 +168,8 @@ func contentBlocksContainType(value any, target string) bool {
 	return false
 }
 
-func containsInputModality(modalities []types.InputModality, target types.InputModality) bool {
-	for _, modality := range modalities {
-		if modality == target {
-			return true
-		}
-	}
-	return false
+func isImageMIME(mimeType string) bool {
+	return strings.HasPrefix(strings.ToLower(mimeType), "image/")
 }
 
 func anyContainsType(value any, target string, depth int) bool {
@@ -201,10 +244,10 @@ func geminiRequestContainsImage(request *rootdto.GeminiChatRequest) bool {
 
 func geminiContentContainsImage(content rootdto.GeminiChatContent) bool {
 	for _, part := range content.Parts {
-		if part.InlineData != nil && strings.HasPrefix(strings.ToLower(part.InlineData.MimeType), "image/") {
+		if part.InlineData != nil && isImageMIME(part.InlineData.MimeType) {
 			return true
 		}
-		if part.FileData != nil && strings.HasPrefix(strings.ToLower(part.FileData.MimeType), "image/") {
+		if part.FileData != nil && isImageMIME(part.FileData.MimeType) {
 			return true
 		}
 	}

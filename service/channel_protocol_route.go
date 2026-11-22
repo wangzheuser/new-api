@@ -82,17 +82,24 @@ func PlanChannelProtocolRoute(channel *model.Channel, modelName string, clientPa
 	if channel == nil {
 		return nil, fmt.Errorf("channel is required")
 	}
+	if _, _, _, ok := ResolveClientTextProtocol(clientPath); !ok {
+		return nil, nil
+	}
+	settings, _ := channel.ReadSetting()
+	return planChannelProtocolRoute(channel.Type, settings, modelName, clientPath, stream)
+}
+
+func planChannelProtocolRoute(channelType int, settings dto.ChannelSettings, modelName string, clientPath string, stream bool) (*types.ChannelRoutePlan, error) {
 	clientEndpoint, clientFormat, clientMode, ok := ResolveClientTextProtocol(clientPath)
 	if !ok {
 		return nil, nil
 	}
 
-	settings := channel.GetSetting()
 	policy := settings.ProtocolPolicy
-	if policy == nil || channel.Type == constant.ChannelTypeAdvancedCustom {
+	if policy == nil || channelType == constant.ChannelTypeAdvancedCustom {
 		return newUnconvertedRoutePlan(clientEndpoint, clientFormat, clientMode, clientPath, stream, types.ChannelRouteModeLegacy, "legacy"), nil
 	}
-	apiType, _ := common.ChannelType2APIType(channel.Type)
+	apiType, _ := common.ChannelType2APIType(channelType)
 	if apiType != constant.APITypeOpenAI {
 		return nil, nil
 	}

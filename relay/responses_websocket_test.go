@@ -336,6 +336,51 @@ func TestSelectResponsesWSChannelHonorsStrictSessionBinding(t *testing.T) {
 	require.Nil(t, apiErr)
 	require.NotNil(t, channel)
 	assert.Equal(t, fallback.Id, channel.Id)
+
+	bound.Status = common.ChannelStatusEnabled
+	bound.SetSetting(appdto.ChannelSettings{
+		ResponsesWebSocketEnabled: true,
+		ModelInputModalities:      types.ModelInputModalities{"ws-model": {types.InputModalityText}},
+	})
+	require.NoError(t, database.Model(bound).Select("status", "setting").Updates(bound).Error)
+	require.NoError(t, database.Model(&model.Ability{}).Where("channel_id = ?", bound.Id).Update("enabled", true).Error)
+	model.InitChannelCache()
+	service.RecordChannelAffinity(seed, bound.Id)
+
+	strict = newSessionContext()
+	affinity.SessionMode = "strict"
+	service.GetChannelConstraints(strict).ImageInputModel = "ws-model"
+	channel, apiErr = selectResponsesWSChannel(strict, "ws-model", &service.RetryParam{Ctx: strict, ModelName: "ws-model", TokenGroup: "default"})
+	require.NotNil(t, apiErr)
+	assert.Equal(t, types.ErrorCodeUnsupportedInputModality, apiErr.GetErrorCode())
+	assert.Nil(t, channel)
+	boundID, found := service.GetPreferredChannelByAffinity(seed, "ws-model", "default")
+	assert.True(t, found)
+	assert.Equal(t, bound.Id, boundID)
+
+	prefer = newSessionContext()
+	affinity.SessionMode = "prefer"
+	service.GetChannelConstraints(prefer).ImageInputModel = "ws-model"
+	channel, apiErr = selectResponsesWSChannel(prefer, "ws-model", &service.RetryParam{Ctx: prefer, ModelName: "ws-model", TokenGroup: "default"})
+	require.Nil(t, apiErr)
+	require.NotNil(t, channel)
+	assert.Equal(t, fallback.Id, channel.Id)
+
+	locked := &responsesWSSession{
+		lockedModel: "ws-model", lockedChannelID: bound.Id, lockedKey: bound.Key, lockedGroup: "default",
+		lockedContext: map[constant.ContextKey]any{
+			constant.ContextKeyChannelBaseUrl:        bound.GetBaseURL(),
+			constant.ContextKeyChannelHeaderOverride: bound.GetHeaderOverride(),
+		},
+	}
+	lockedContext := newSessionContext()
+	common.SetContextKey(lockedContext, constant.ContextKeyUsingGroup, "default")
+	create, _, createErr := normalizeResponsesWSTestMessage([]byte(`{"type":"response.create","model":"ws-model","input":[{"type":"input_image","image_url":"fixture"}]}`))
+	require.NoError(t, createErr)
+	apiErr = locked.runCall(lockedContext, &responsesWSCallState{}, create)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, types.ErrorCodeUnsupportedInputModality, apiErr.GetErrorCode())
+	assert.Equal(t, bound.Id, locked.lockedChannelID)
 }
 
 func TestNormalizeResponsesWSCreateEventWrapper(t *testing.T) {

@@ -178,6 +178,10 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 	if c.Request.ContentLength > 0 {
 		relayInfo.IncomingRequestBodyBytes = c.Request.ContentLength
 	}
+	constraints := service.GetChannelConstraints(c)
+	if constraints.ImageInputModel == "" && helper.HasImageInput(c, request) {
+		constraints.ImageInputModel = relayInfo.GetRequestedModelName()
+	}
 	if modalityErr := helper.ValidateRequestInputModalities(c, relayInfo.GetRequestedModelName(), request); modalityErr != nil {
 		newAPIError = modalityErr
 		return
@@ -254,6 +258,7 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 		Retry:       common.GetPointer(0),
 	}
 	if relayInfo.IsContextFallbackActive() && relayInfo.ContextFallback.RouteMode == dto.ContextFallbackModeCross {
+		retryParam.ContextFallbackSourceID = relayInfo.ContextFallback.SourceChannelID
 		retryParam.ExcludedChannelIDs = map[int]struct{}{relayInfo.ContextFallback.SourceChannelID: {}}
 	}
 	relayInfo.RetryIndex = 0
@@ -477,7 +482,7 @@ func rootRequestForContextFallback(request dto.Request) taskdto.Request {
 // It deliberately skips upstream generation and billing; callers use this
 // endpoint to size prompts before creating a Message.
 func CountClaudeTokens(c *gin.Context) {
-	request, err := helper.GetAndValidateClaudeRequest(c)
+	parsed, err := helper.GetAndValidateRequest(c, types.RelayFormatClaude)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"type": "error",
@@ -488,6 +493,7 @@ func CountClaudeTokens(c *gin.Context) {
 		})
 		return
 	}
+	request := parsed.(*dto.ClaudeRequest)
 	if modalityErr := helper.ValidateRequestInputModalities(c, request.Model, request); modalityErr != nil {
 		clientError := relayClientClaudeError(modalityErr, nil)
 		clientError.Message = common.MessageWithRequestId(clientError.Message, c.GetString(common.RequestIdKey))
@@ -574,29 +580,7 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, ws *
 		return
 	}
 
-	if relayFormat == types.RelayFormatClaude {
-		prepareRelayErrorHeaders(c)
-		c.JSON(newAPIError.StatusCode, gin.H{
-			"type":  "error",
-			"error": relayClientClaudeError(newAPIError, relayInfo),
-		})
-		return
-	}
-	if relayFormat == types.RelayFormatGemini {
-		prepareRelayErrorHeaders(c)
-		c.JSON(newAPIError.StatusCode, dto.GeminiErrorResponse{
-			Error: dto.GeminiError{
-				Code:    newAPIError.StatusCode,
-				Message: relayClientOpenAIError(newAPIError, relayInfo).Message,
-				Status:  geminiCanonicalErrorStatus(newAPIError.StatusCode),
-			},
-		})
-		return
-	}
-	prepareRelayErrorHeaders(c)
-	c.JSON(newAPIError.StatusCode, gin.H{
-		"error": relayClientOpenAIError(newAPIError, relayInfo),
-	})
+	helper.WriteRelayHTTPError(c, relayFormat, newAPIError, relayClientOpenAIError(newAPIError, relayInfo).Message)
 }
 
 func relayClientOpenAIError(newAPIError *types.NewAPIError, relayInfo *relaycommon.RelayInfo) types.OpenAIError {
@@ -609,50 +593,6 @@ func relayClientClaudeError(newAPIError *types.NewAPIError, relayInfo *relaycomm
 	claudeError := newAPIError.ToClaudeError()
 	claudeError.Message = relaycommon.SanitizeClientModelErrorMessage(newAPIError.MaskSensitiveError(), relayInfo)
 	return claudeError
-}
-
-func geminiCanonicalErrorStatus(statusCode int) string {
-	switch statusCode {
-	case http.StatusBadRequest, http.StatusUnprocessableEntity:
-		return "INVALID_ARGUMENT"
-	case http.StatusUnauthorized:
-		return "UNAUTHENTICATED"
-	case http.StatusForbidden:
-		return "PERMISSION_DENIED"
-	case http.StatusNotFound, http.StatusGone:
-		return "NOT_FOUND"
-	case http.StatusRequestTimeout, http.StatusGatewayTimeout:
-		return "DEADLINE_EXCEEDED"
-	case http.StatusConflict:
-		return "ABORTED"
-	case http.StatusPreconditionFailed:
-		return "FAILED_PRECONDITION"
-	case http.StatusRequestEntityTooLarge, http.StatusTooManyRequests:
-		return "RESOURCE_EXHAUSTED"
-	case http.StatusRequestedRangeNotSatisfiable:
-		return "OUT_OF_RANGE"
-	case 499:
-		return "CANCELLED"
-	case http.StatusNotImplemented:
-		return "UNIMPLEMENTED"
-	case http.StatusBadGateway, http.StatusServiceUnavailable:
-		return "UNAVAILABLE"
-	default:
-		if statusCode >= http.StatusInternalServerError {
-			return "INTERNAL"
-		}
-		return "UNKNOWN"
-	}
-}
-
-func prepareRelayErrorHeaders(c *gin.Context) {
-	if c == nil || c.Writer == nil {
-		return
-	}
-	for _, key := range []string{"Content-Length", "Content-Encoding", "ETag", "Content-Range", "Transfer-Encoding"} {
-		c.Writer.Header().Del(key)
-	}
-	c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 }
 
 func addUsedChannel(c *gin.Context, channelId int) {
@@ -828,6 +768,9 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		if service.IsChannelRoutingBlocked(channel, modelName) {
 			return nil, types.NewError(errors.New("channel is temporarily disabled"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 		}
+		if imageErr := service.CheckChannelImageInput(c, channel, modelName); imageErr != nil {
+			return nil, imageErr
+		}
 		service.RequestPolicy(c).BeginAttempt(channel, info.UsingGroup)
 		return channel, nil
 	}
@@ -847,6 +790,9 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 			if service.IsChannelRoutingBlocked(snapshot, modelName) {
 				return nil, types.NewError(errors.New("channel is temporarily disabled"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 			}
+			if imageErr := service.CheckChannelImageInput(c, snapshot, modelName); imageErr != nil {
+				return nil, imageErr
+			}
 			service.RequestPolicy(c).BeginAttempt(snapshot, info.UsingGroup)
 			return snapshot, nil
 		}
@@ -861,6 +807,9 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 					if service.IsChannelRoutingBlocked(snapshot, modelName) {
 						return nil, types.NewError(errors.New("channel is temporarily disabled"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 					}
+					if imageErr := service.CheckChannelImageInput(c, snapshot, modelName); imageErr != nil {
+						return nil, imageErr
+					}
 					service.RequestPolicy(c).BeginAttempt(snapshot, info.UsingGroup)
 					return snapshot, nil
 				}
@@ -870,6 +819,9 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 				return nil, types.NewError(errors.New("channel is temporarily disabled"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 			}
 			if selected != nil {
+				if imageErr := service.CheckChannelImageInput(c, selected, modelName); imageErr != nil {
+					return nil, imageErr
+				}
 				if selected.ChannelInfo.IsMultiKey && retryParam.GetRetry() > 0 {
 					if setupErr := middleware.SetupContextForSelectedChannelWithKeyExclusions(c, selected, modelName, retryParam.ExcludedChannelKeys(channel.Id)); setupErr != nil {
 						return nil, setupErr
@@ -888,7 +840,8 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	retryParam.PreferredChannelID = 0
 	if preferredChannelID > 0 {
 		preferred, preferredErr := model.CacheGetChannel(preferredChannelID)
-		if preferredErr == nil && preferred != nil && !service.IsChannelRoutingBlocked(preferred, modelName) {
+		if preferredErr == nil && preferred != nil && !service.IsChannelRoutingBlocked(preferred, modelName) &&
+			service.CheckChannelImageInput(c, preferred, modelName) == nil {
 			channel = preferred
 			selectGroup = relayRetryGroup(info)
 		}
@@ -898,10 +851,17 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 			var err error
 			channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(retryParam)
 			if err != nil {
+				if imageErr, ok := err.(*types.NewAPIError); ok {
+					return nil, imageErr
+				}
 				return nil, types.NewError(errors.New(i18n.T(c, i18n.MsgRelayRetryGetChannelFailed, map[string]any{"Group": selectGroup, "Model": info.OriginModelName, "Error": err.Error()})), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 			}
 			if channel == nil {
-				return nil, types.NewError(errors.New(i18n.T(c, i18n.MsgRelayRetryNoAvailableChannel, map[string]any{"Group": selectGroup, "Model": info.OriginModelName})), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+				err := errors.New(i18n.T(c, i18n.MsgRelayRetryNoAvailableChannel, map[string]any{"Group": selectGroup, "Model": info.OriginModelName}))
+				if service.GetChannelConstraints(c).ImageInputModel != "" {
+					return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+				}
+				return nil, types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 			}
 			if !service.IsChannelRoutingBlocked(channel, modelName) {
 				break
@@ -915,23 +875,31 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 
 	info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
 
-	service.RequestPolicy(c).BeginAttempt(channel, selectGroup)
+	constraints := service.GetChannelConstraints(c)
+	imageRouting := constraints.ImageInputModel != ""
+	if !imageRouting {
+		service.RequestPolicy(c).BeginAttempt(channel, selectGroup)
+	}
 	newAPIError := middleware.SetupContextForSelectedChannelWithKeyExclusions(c, channel, modelName, retryParam.ExcludedChannelKeys(channel.Id))
 	if newAPIError != nil {
-		if preferredChannelID > 0 && newAPIError.GetErrorCode() == types.ErrorCodeChannelNoAvailableKey {
-			if _, pinned := c.Get("specific_channel_id"); pinned {
-				return nil, newAPIError
-			}
+		if newAPIError.GetErrorCode() != types.ErrorCodeChannelNoAvailableKey {
+			return nil, newAPIError
+		}
+		_, pinned, _ := constraints.ResolvedPin()
+		if !pinned && (preferredChannelID > 0 || imageRouting && !service.ShouldSkipRetryAfterChannelAffinityFailure(c)) {
 			if retryParam.ExcludedChannelIDs == nil {
 				retryParam.ExcludedChannelIDs = make(map[int]struct{})
 			}
 			retryParam.ExcludedChannelIDs[channel.Id] = struct{}{}
 			return getChannel(c, info, retryParam)
 		}
+		if imageRouting {
+			return nil, types.NewErrorWithStatusCode(newAPIError, newAPIError.GetErrorCode(), http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+		}
 		return nil, newAPIError
 	}
-	if modalityErr := helper.ValidateRequestInputModalities(c, modelName, info.Request); modalityErr != nil {
-		return nil, modalityErr
+	if imageRouting {
+		service.RequestPolicy(c).BeginAttempt(channel, selectGroup)
 	}
 	return channel, nil
 }

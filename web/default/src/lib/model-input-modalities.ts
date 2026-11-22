@@ -226,6 +226,18 @@ export function parseInputModalityModelMapping(
   return mapping
 }
 
+/** Save a global declaration. New declarations default to image input. */
+export function setGlobalModelInputModalityDeclaration(
+  model: string,
+  value: ModelInputModalities,
+  imageEnabled = true
+): ModelInputModalities {
+  return normalizeModelInputModalities({
+    ...value,
+    [model]: imageEnabled ? ['text', 'image'] : ['text'],
+  })
+}
+
 /** Enable one channel override, copying an exact global declaration when present. */
 export function enableChannelInputModalityOverride(
   model: string,

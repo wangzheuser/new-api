@@ -2,6 +2,7 @@ package model_setting
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -22,10 +23,19 @@ func ResolveModelInputModalities(requestedModel string, channelSettings dto.Chan
 	if modalities, exists := channelSettings.ModelInputModalities[requestedModel]; exists {
 		return modalities, true, InputModalitySourceChannel
 	}
-	if modalities, exists := globalSettings.ModelInputModalities[requestedModel]; exists {
+	common.OptionMapRWMutex.RLock()
+	modalities, exists := globalSettings.ModelInputModalities[requestedModel]
+	common.OptionMapRWMutex.RUnlock()
+	if exists {
 		return modalities, true, InputModalitySourceGlobal
 	}
 	return nil, false, InputModalitySourceUnconfigured
+}
+
+// AllowsImageInput applies the compatibility default when neither scope declares the model.
+func AllowsImageInput(requestedModel string, channelSettings dto.ChannelSettings) bool {
+	modalities, configured, _ := ResolveModelInputModalities(requestedModel, channelSettings)
+	return !configured || slices.Contains(modalities, types.InputModalityImage)
 }
 
 // ValidateModelInputModalitiesJSON validates one global option value before persistence.

@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -120,14 +121,20 @@ func getChannelQuery(group string, model string, retry int, excludedChannelIDs [
 
 // GetChannel 从数据库候选中选择渠道，重试时优先排除本次请求已使用的渠道。
 func GetChannel(group string, model string, retry int, args ...any) (*Channel, error) {
-	requestPath, usedChannelIds, excludedChannelIds, filters := parseChannelSelectionArgs(args)
+	requestPath, usedChannelIds, excludedChannelIds, filters, candidateFilter := parseChannelSelectionArgs(args)
 	var abilities []Ability
 	err := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true).
 		Order("priority DESC, weight DESC").Find(&abilities).Error
 	if err != nil {
 		return nil, err
 	}
-	abilities = filterAbilitiesByConstraints(abilities, model, filters)
+	if candidateFilter != nil && requestPath != "" {
+		filters = append(slices.Clone(filters), dto.ChannelFilter{Kind: dto.FilterRequestPath, RequestPath: requestPath})
+	}
+	abilities, err = filterAbilitiesByConstraints(abilities, model, filters, candidateFilter)
+	if err != nil {
+		return nil, err
+	}
 	if len(excludedChannelIds) > 0 {
 		filtered := abilities[:0]
 		for _, ability := range abilities {
@@ -159,7 +166,9 @@ func GetChannel(group string, model string, retry int, args ...any) (*Channel, e
 			return (ability.Priority == nil && targetPriority == 0) || (ability.Priority != nil && *ability.Priority == targetPriority)
 		})
 	}
-	abilities = filterAbilitiesByRequestPathAndModel(abilities, requestPath, model)
+	if candidateFilter == nil {
+		abilities = filterAbilitiesByRequestPathAndModel(abilities, requestPath, model)
+	}
 	candidateIds := make([]int, 0, len(abilities))
 	for _, ability := range abilities {
 		candidateIds = append(candidateIds, ability.ChannelId)
@@ -197,10 +206,14 @@ func GetChannel(group string, model string, retry int, args ...any) (*Channel, e
 	return &channel, err
 }
 
-func parseChannelSelectionArgs(args []any) (string, map[int]struct{}, map[int]struct{}, []dto.ChannelFilter) {
+// ChannelCandidateFilter checks request-specific eligibility before priority selection.
+type ChannelCandidateFilter func(*Channel) bool
+
+func parseChannelSelectionArgs(args []any) (string, map[int]struct{}, map[int]struct{}, []dto.ChannelFilter, ChannelCandidateFilter) {
 	var requestPath string
 	var usedChannelIds, excludedChannelIds map[int]struct{}
 	var filters []dto.ChannelFilter
+	var candidateFilter ChannelCandidateFilter
 	if len(args) >= 3 {
 		requestPath, _ = args[0].(string)
 		usedChannelIds, _ = args[1].(map[int]struct{})
@@ -219,9 +232,11 @@ func parseChannelSelectionArgs(args []any) (string, map[int]struct{}, map[int]st
 			}
 		case []dto.ChannelFilter:
 			filters = value
+		case ChannelCandidateFilter:
+			candidateFilter = value
 		}
 	}
-	return requestPath, usedChannelIds, excludedChannelIds, filters
+	return requestPath, usedChannelIds, excludedChannelIds, filters, candidateFilter
 }
 
 // filterExcludedChannelIds 永久排除本次路由不允许命中的渠道。
@@ -304,9 +319,9 @@ func filterAbilitiesByRequestPathAndModel(abilities []Ability, requestPath strin
 }
 
 // filterAbilitiesByConstraints applies the same channel constraints as the cache path.
-func filterAbilitiesByConstraints(abilities []Ability, modelName string, filters []dto.ChannelFilter) []Ability {
-	if len(abilities) == 0 || len(filters) == 0 {
-		return abilities
+func filterAbilitiesByConstraints(abilities []Ability, modelName string, filters []dto.ChannelFilter, candidateFilter ChannelCandidateFilter) ([]Ability, error) {
+	if len(abilities) == 0 || (len(filters) == 0 && candidateFilter == nil) {
+		return abilities, nil
 	}
 	channelIDs := make([]int, 0, len(abilities))
 	for _, ability := range abilities {
@@ -314,7 +329,7 @@ func filterAbilitiesByConstraints(abilities []Ability, modelName string, filters
 	}
 	var channels []Channel
 	if err := DB.Where("id IN ?", channelIDs).Find(&channels).Error; err != nil {
-		return nil
+		return nil, err
 	}
 	byID := make(map[int]*Channel, len(channels))
 	for i := range channels {
@@ -322,11 +337,13 @@ func filterAbilitiesByConstraints(abilities []Ability, modelName string, filters
 	}
 	filtered := make([]Ability, 0, len(abilities))
 	for _, ability := range abilities {
-		if ok, _ := ChannelSatisfiesFilters(byID[ability.ChannelId], modelName, filters); ok {
+		channel := byID[ability.ChannelId]
+		if ok, _ := ChannelSatisfiesFilters(channel, modelName, filters); ok &&
+			(candidateFilter == nil || candidateFilter(channel)) {
 			filtered = append(filtered, ability)
 		}
 	}
-	return filtered
+	return filtered, nil
 }
 
 func (channel *Channel) AddAbilities(tx *gorm.DB) error {

@@ -1297,15 +1297,22 @@ func validateChannelAutoDisableOverride(value dto.ChannelAutoDisableOverride) er
 	return nil
 }
 
-func (channel *Channel) GetSetting() dto.ChannelSettings {
+// ReadSetting decodes a snapshot for candidate checks, which can hold the cache read lock.
+func (channel *Channel) ReadSetting() (dto.ChannelSettings, error) {
 	setting := dto.ChannelSettings{}
-	if channel.Setting != nil && *channel.Setting != "" {
-		err := common.Unmarshal([]byte(*channel.Setting), &setting)
-		if err != nil {
-			common.SysLog(common.LogText("failed to unmarshal setting: channel_id=%d, error=%v", channel.Id, err))
-			channel.Setting = nil // 清空设置以避免后续错误
-			_ = DB.Model(&Channel{}).Where("id = ?", channel.Id).Update("setting", nil).Error
-		}
+	if channel.Setting == nil || *channel.Setting == "" {
+		return setting, nil
+	}
+	err := common.Unmarshal([]byte(*channel.Setting), &setting)
+	return setting, err
+}
+
+func (channel *Channel) GetSetting() dto.ChannelSettings {
+	setting, err := channel.ReadSetting()
+	if err != nil {
+		common.SysLog(common.LogText("failed to unmarshal setting: channel_id=%d, error=%v", channel.Id, err))
+		channel.Setting = nil // 清空设置以避免后续错误
+		_ = DB.Model(&Channel{}).Where("id = ?", channel.Id).Update("setting", nil).Error
 	}
 	return setting
 }
@@ -1320,14 +1327,21 @@ func (channel *Channel) SetSetting(setting any) {
 }
 
 func (channel *Channel) GetOtherSettings() dto.ChannelOtherSettings {
+	setting, err := channel.ReadOtherSettings()
+	if err != nil {
+		common.SysLog(common.LogText("failed to unmarshal setting: channel_id=%d, error=%v", channel.Id, err))
+		channel.OtherSettings = "{}" // 清空设置以避免后续错误
+		_ = DB.Model(&Channel{}).Where("id = ?", channel.Id).Update("settings", "{}").Error
+	}
+	return setting
+}
+
+// ReadOtherSettings applies any preset while leaving stored settings untouched.
+func (channel *Channel) ReadOtherSettings() (dto.ChannelOtherSettings, error) {
 	setting := dto.ChannelOtherSettings{}
+	var err error
 	if channel.OtherSettings != "" {
-		err := common.UnmarshalJsonStr(channel.OtherSettings, &setting)
-		if err != nil {
-			common.SysLog(common.LogText("failed to unmarshal setting: channel_id=%d, error=%v", channel.Id, err))
-			channel.OtherSettings = "{}" // 清空设置以避免后续错误
-			_ = DB.Model(&Channel{}).Where("id = ?", channel.Id).Update("settings", "{}").Error
-		}
+		err = common.UnmarshalJsonStr(channel.OtherSettings, &setting)
 	}
 	if preset := common.GetAdvancedCustomPreset(channel.Type); preset != nil {
 		// The model package keeps its API DTO independent from relaykit; copy the
@@ -1347,7 +1361,7 @@ func (channel *Channel) GetOtherSettings() dto.ChannelOtherSettings {
 		}
 		setting.AdvancedCustom = converted
 	}
-	return setting
+	return setting, err
 }
 
 func (channel *Channel) SetOtherSettings(setting any) {
