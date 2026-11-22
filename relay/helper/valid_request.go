@@ -21,7 +21,7 @@ import (
 func GetAndValidateRequest(c *gin.Context, format types.RelayFormat) (request dto.Request, err error) {
 	if value, ok := c.Get(inputModalityRequestKey); ok {
 		if prepared := value.(inputModalityRequest); prepared.format == format {
-			return prepared.request, nil
+			return prepared.request, prepared.err
 		}
 	}
 	relayMode := relayconstant.Path2RelayMode(c.Request.URL.Path)

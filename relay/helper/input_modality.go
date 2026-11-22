@@ -31,24 +31,21 @@ const inputModalityRequestKey = "validated_input_modality_request"
 type inputModalityRequest struct {
 	format   types.RelayFormat
 	request  kitdto.Request
+	err      error
 	hasImage bool
 }
 
-// PrepareInputModalityRouting validates the HTTP body once for both routing and the relay.
-func PrepareInputModalityRouting(c *gin.Context, format types.RelayFormat, modelName string) error {
+// PrepareInputModalityRouting detects images and leaves validation errors to the relay handler.
+func PrepareInputModalityRouting(c *gin.Context, format types.RelayFormat, modelName string) {
 	request, err := GetAndValidateRequest(c, format)
-	if err != nil {
-		return err
-	}
-	hasImage := requestContainsImage(request)
-	c.Set(inputModalityRequestKey, inputModalityRequest{format: format, request: request, hasImage: hasImage})
+	hasImage := err == nil && requestContainsImage(request)
+	c.Set(inputModalityRequestKey, inputModalityRequest{format: format, request: request, err: err, hasImage: hasImage})
 	if hasImage {
 		if compact, ok := request.(*kitdto.OpenAIResponsesCompactionRequest); ok {
 			modelName = compact.Model
 		}
 		service.GetChannelConstraints(c).ImageInputModel = modelName
 	}
-	return nil
 }
 
 // HasImageInput reuses the detection result when the request was prepared before selection.

@@ -347,7 +347,12 @@ func TestRelayRouterRoutesImageInputBeforePriority(t *testing.T) {
 			imageChannel.SetSetting(imageSettings)
 			refresh(imageChannel)
 
-			out := send(chat, textBody, fixture.unpinnedToken)
+			out := send(chat, `{"model":"source"}`, fixture.unpinnedToken)
+			require.Equal(t, http.StatusBadRequest, out.Code, out.Body.String())
+			assert.Empty(t, textCalls)
+			assert.Empty(t, imageCalls)
+
+			out = send(chat, textBody, fixture.unpinnedToken)
 			require.Equal(t, http.StatusOK, out.Code, out.Body.String())
 			require.Len(t, textCalls, 1)
 			assert.Contains(t, <-textCalls, "hello")

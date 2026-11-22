@@ -132,14 +132,7 @@ func Distribute() func(c *gin.Context) {
 		}
 		relayFormat := inputModalityRelayFormat(c)
 		if relayFormat != "" && (pinned || shouldSelectChannel) {
-			if err := helper.PrepareInputModalityRouting(c, relayFormat, modelRequest.Model); err != nil {
-				status, code := http.StatusBadRequest, types.ErrorCodeInvalidRequest
-				if common.IsRequestBodyTooLargeError(err) || errors.Is(err, common.ErrRequestBodyTooLarge) {
-					status, code = http.StatusRequestEntityTooLarge, types.ErrorCodeReadRequestBodyFailed
-				}
-				abortWithRelayHTTPError(c, relayFormat, status, code, err.Error())
-				return
-			}
+			helper.PrepareInputModalityRouting(c, relayFormat, modelRequest.Model)
 		}
 		if pinned || shouldSelectChannel {
 			usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
