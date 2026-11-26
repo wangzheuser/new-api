@@ -43,6 +43,7 @@ import {
 } from '../api'
 import { CHANNEL_STATUS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../constants'
 import type {
+  ChannelTestImage,
   ChannelTestOutcome,
   ChannelTestResponse,
   CopyChannelParams,
@@ -281,6 +282,7 @@ export async function handleTestChannel(
     endpointType?: string
     stream?: boolean
     userPrompt?: string
+    images?: ChannelTestImage[]
     silent?: boolean
   }
 ): Promise<ChannelTestOutcome> {
@@ -301,6 +303,7 @@ export async function handleTestChannel(
         ? await testChannelConnectionPrompt(id, {
             model: options.testModel,
             user_prompt: options.userPrompt,
+            ...(options.images?.length ? { images: options.images } : {}),
             ...(options.endpointType
               ? { endpoint_type: options.endpointType }
               : {}),

@@ -81,6 +81,7 @@ type channelTestOptions struct {
 	endpointType               string
 	isStream                   bool
 	userPrompt                 string
+	images                     []channelTestImage
 	maxOutputTokens            uint
 	applySystemPrompt          bool
 	requireSystemPromptSupport bool
@@ -104,10 +105,11 @@ type channelPromptTestRequest struct {
 }
 
 type channelConnectionTestRequest struct {
-	Model        string `json:"model"`
-	UserPrompt   string `json:"user_prompt"`
-	EndpointType string `json:"endpoint_type"`
-	Stream       bool   `json:"stream"`
+	Images       []channelTestImage `json:"images,omitempty"`
+	Model        string             `json:"model"`
+	UserPrompt   string             `json:"user_prompt"`
+	EndpointType string             `json:"endpoint_type"`
+	Stream       bool               `json:"stream"`
 }
 
 type channelNativeProbeRequest struct {
@@ -288,6 +290,10 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, op
 		}
 	}
 	effectiveEndpointType := resolveChannelTestEndpointType(requestPath)
+	if len(options.images) > 0 && !channelTestEndpointSupportsStream(effectiveEndpointType) {
+		err := errors.New("Image tests require a chat, Responses, Claude or Gemini endpoint.")
+		return testResult{localErr: err, newAPIError: types.NewError(err, types.ErrorCodeInvalidRequest), effectiveEndpointType: effectiveEndpointType}
+	}
 	if options.isStream && !channelTestEndpointSupportsStream(effectiveEndpointType) {
 		err := fmt.Errorf("%s endpoint only accepts non-streaming channel tests", effectiveEndpointType)
 		return testResult{
@@ -1105,7 +1111,7 @@ func detectErrorMessageFromJSONBytes(jsonBytes []byte) string {
 	return message
 }
 
-func buildTestRequest(model string, endpointType string, channel *model.Channel, rawOptions any) dto.Request {
+func buildTextTestRequest(model string, endpointType string, channel *model.Channel, rawOptions any) dto.Request {
 	options, _ := rawOptions.(channelTestOptions)
 	if stream, ok := rawOptions.(bool); ok {
 		options.isStream = stream
@@ -1587,6 +1593,7 @@ func testChannelConnectionPrompt(c *gin.Context, timeout time.Duration) {
 		return
 	}
 
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxChannelTestBodyBytes)
 	request := channelConnectionTestRequest{}
 	if err := c.ShouldBindJSON(&request); err != nil {
 		common.ApiError(c, err)
@@ -1617,6 +1624,15 @@ func testChannelConnectionPrompt(c *gin.Context, timeout time.Duration) {
 		}
 	}
 
+	if err := validateChannelTestImages(request.Images); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if len(request.Images) > 0 && request.EndpointType != "" && !channelTestEndpointSupportsStream(constant.EndpointType(request.EndpointType)) {
+		common.ApiError(c, errors.New("Image tests require a chat, Responses, Claude or Gemini endpoint."))
+		return
+	}
+
 	channel, err := model.CacheGetChannel(channelId)
 	if err != nil {
 		channel, err = model.GetChannelById(channelId, true)
@@ -1639,6 +1655,7 @@ func testChannelConnectionPrompt(c *gin.Context, timeout time.Duration) {
 		endpointType:      request.EndpointType,
 		isStream:          request.Stream,
 		userPrompt:        request.UserPrompt,
+		images:            request.Images,
 		maxOutputTokens:   getChannelConnectionTestMaxOutputTokens(request.UserPrompt),
 		applySystemPrompt: shouldApplySystemPromptForConnectionTest(channel),
 	})

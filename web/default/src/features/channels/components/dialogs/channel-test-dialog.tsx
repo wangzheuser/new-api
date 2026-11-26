@@ -108,6 +108,10 @@ import {
   resolveChannelTestResultProtocol,
 } from '../../lib'
 import {
+  channelTestSampleMatches,
+  type ChannelTestAttachment,
+} from '../../lib/channel-test-image'
+import {
   getSelectedChannelTestModels,
   getChannelTestModelsWithStatus,
 } from '../../lib/channel-test-models'
@@ -118,6 +122,7 @@ import type {
   SearchChannelsResponse,
 } from '../../types'
 import { useChannels } from '../channels-provider'
+import { ChannelTestImageAttachment } from './channel-test-image-attachment'
 
 type ChannelTestDialogProps = {
   open: boolean
@@ -135,6 +140,8 @@ type ModelRow = {
 type TestStatus = 'idle' | 'testing' | 'success' | 'error'
 
 type TestResult = {
+  hasImage?: boolean
+  sampleMatched?: boolean
   status: TestStatus
   responseTime?: number
   completedAt?: number
@@ -333,7 +340,7 @@ export function ChannelTestDialog({
 }: ChannelTestDialogProps) {
   const { currentRow } = useChannels()
 
-  if (!currentRow) {
+  if (!currentRow || !open) {
     return null
   }
 
@@ -364,6 +371,8 @@ function ChannelTestDialogContent({
   const [testPrompt, setTestPrompt] = useState(() =>
     readChannelTestPrompt(currentChannelId)
   )
+  const [testImage, setTestImage] = useState<ChannelTestAttachment | null>(null)
+  const [isReadingImage, setIsReadingImage] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({})
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
@@ -431,6 +440,7 @@ function ChannelTestDialogContent({
 
   const resetState = useCallback(() => {
     batchStopRequestedRef.current = true
+    setTestImage(null)
     setEndpointType('auto')
     setIsStreamTest(false)
     setSearchTerm('')
@@ -464,11 +474,18 @@ function ChannelTestDialogContent({
     }
     return undefined
   }, [t, testPrompt, testPromptByteLength])
-  const isTestPromptValid = testPromptError === undefined
+  const imageEndpointError =
+    testImage && streamDisabled
+      ? t('Image tests require a chat, Responses, Claude or Gemini endpoint.')
+      : undefined
+  const isTestPromptValid =
+    testPromptError === undefined && !imageEndpointError && !isReadingImage
 
   const handleTestPromptChange = useCallback(
     (event: ChangeEvent<HTMLTextAreaElement>) => {
       const prompt = event.target.value
+      setTestResults({})
+      setDetailsModel(null)
       setTestPrompt(prompt)
       writeChannelTestPrompt(currentChannelId, prompt)
     },
@@ -478,6 +495,8 @@ function ChannelTestDialogContent({
   const handleEndpointTypeChange = useCallback((value: string | null) => {
     if (value === null) return
 
+    setTestResults({})
+    setDetailsModel(null)
     setEndpointType(value)
     if (!channelTestEndpointSupportsStream(value)) {
       setIsStreamTest(false)
@@ -609,7 +628,8 @@ function ChannelTestDialogContent({
       model: string,
       silent = false,
       refreshList = true,
-      prompt = testPrompt
+      prompt = testPrompt,
+      image = testImage
     ): Promise<TestResult | undefined> => {
       if (
         !currentRow ||
@@ -632,6 +652,9 @@ function ChannelTestDialogContent({
           endpointType: endpointType === 'auto' ? undefined : endpointType,
           stream: effectiveStreamTest || undefined,
           userPrompt: prompt,
+          images: image
+            ? [{ mime_type: image.mime_type, data: image.data }]
+            : undefined,
           silent,
         })
         const resultProtocol = resolveChannelTestResultProtocol(
@@ -639,6 +662,10 @@ function ChannelTestDialogContent({
           outcome.details
         )
         finalResult = {
+          hasImage: !!image,
+          sampleMatched: image
+            ? channelTestSampleMatches(image, outcome.details?.content ?? '')
+            : false,
           status: outcome.success ? 'success' : 'error',
           responseTime: outcome.responseTime,
           completedAt: Date.now(),
@@ -680,6 +707,7 @@ function ChannelTestDialogContent({
       refreshChannelLists,
       t,
       testPrompt,
+      testImage,
       updateTestResult,
     ]
   )
@@ -698,6 +726,7 @@ function ChannelTestDialogContent({
       ]
       if (!uniqueModels.length) return
 
+      const imageSnapshot = testImage
       const promptSnapshot = testPrompt
       if (
         !promptSnapshot.trim() ||
@@ -766,7 +795,8 @@ function ChannelTestDialogContent({
                 modelName,
                 true,
                 false,
-                promptSnapshot
+                promptSnapshot,
+                imageSnapshot
               )
               const finalResult = result ?? createFallbackResult()
               if (!result) {
@@ -843,6 +873,7 @@ function ChannelTestDialogContent({
       endpointType,
       refreshChannelLists,
       t,
+      testImage,
       testPrompt,
       testSingleModel,
       updateTestResult,
@@ -980,7 +1011,8 @@ function ChannelTestDialogContent({
     [handleClose]
   )
 
-  const isAnyTesting = testingModels.size > 0 || isBatchTesting
+  const isAnyTesting =
+    testingModels.size > 0 || isBatchTesting || isReadingImage
   const isFilteringModels = searchTerm.trim().length > 0
   const testAllButtonLabel = isFilteringModels
     ? t('Test {{count}} matching models', { count: filteredModels.length })
@@ -1177,12 +1209,41 @@ function ChannelTestDialogContent({
             )}
           </div>
 
+          <ChannelTestImageAttachment
+            value={testImage}
+            disabled={isAnyTesting}
+            onReadingChange={setIsReadingImage}
+            onChange={(image) => {
+              setTestImage(image)
+              setTestResults({})
+              setDetailsModel(null)
+            }}
+            onSamplePrompt={() => {
+              if (
+                testPrompt.trim() &&
+                testPrompt !== DEFAULT_CHANNEL_TEST_PROMPT
+              ) {
+                return
+              }
+              const prompt =
+                'Describe the colors and shapes in the image and read its code. Reply in English.'
+              setTestPrompt(prompt)
+              writeChannelTestPrompt(currentChannelId, prompt)
+            }}
+          />
+          {imageEndpointError && (
+            <p role='alert' className='text-destructive text-xs'>
+              {imageEndpointError}
+            </p>
+          )}
+
           <div className='grid gap-4 md:grid-cols-2'>
             <div className='grid gap-2'>
               <Label htmlFor='endpoint-type'>{t('Endpoint Type')}</Label>
               <Select
                 items={endpointSelectItems}
                 value={endpointType}
+                disabled={isAnyTesting}
                 onValueChange={handleEndpointTypeChange}
               >
                 <SelectTrigger id='endpoint-type' className='w-full min-w-0'>
@@ -1222,15 +1283,20 @@ function ChannelTestDialogContent({
                 <Switch
                   id='stream-toggle'
                   checked={effectiveStreamTest}
-                  onCheckedChange={setIsStreamTest}
-                  disabled={streamDisabled}
+                  onCheckedChange={(value) => {
+                    setIsStreamTest(value)
+                    setTestResults({})
+                    setDetailsModel(null)
+                  }}
+                  disabled={streamDisabled || isAnyTesting}
                 />
                 <span className='text-sm'>
                   {effectiveStreamTest ? t('Enabled') : t('Disabled')}
                 </span>
               </div>
               <p className='text-muted-foreground text-xs'>
-                {t('Enable streaming mode for the test request.')}
+                {t('Enable streaming mode for the test request.')}{' '}
+                {t('Channel tests have a 100-second total timeout.')}
               </p>
             </div>
           </div>
@@ -1486,9 +1552,16 @@ function TestResultCell({ result }: { result?: TestResult }) {
 
   if (result.status === 'success') {
     return typeof result.responseTime === 'number' ? (
-      <span className='text-muted-foreground text-sm'>
-        {formatResponseTime(result.responseTime, t)}
-      </span>
+      <div className='text-muted-foreground space-y-1 text-sm'>
+        <span>{formatResponseTime(result.responseTime, t)}</span>
+        {result.hasImage && (
+          <p className='text-xs'>
+            {result.sampleMatched
+              ? t('Sample check passed')
+              : t('Review image response')}
+          </p>
+        )}
+      </div>
     ) : (
       <span className='text-muted-foreground text-sm'>-</span>
     )

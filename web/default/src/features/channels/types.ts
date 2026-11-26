@@ -281,7 +281,13 @@ export interface ChannelTestOutcome {
   details?: ChannelTestResponseDetails
 }
 
+export interface ChannelTestImage {
+  mime_type: string
+  data: string
+}
+
 export interface ChannelConnectionTestRequest {
+  images?: ChannelTestImage[]
   model: string
   user_prompt: string
   endpoint_type?: string

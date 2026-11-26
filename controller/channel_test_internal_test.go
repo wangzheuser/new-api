@@ -3,7 +3,11 @@ package controller
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
+	"image"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -31,6 +35,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestBuildTestRequestUsesCustomUserPromptAndOutputLimit(t *testing.T) {
@@ -1717,11 +1722,12 @@ func TestChannelTestSharesRelayWithoutCharging(t *testing.T) {
 			channel := model.Channel{Id: 100, Name: "channel-100-fixture", Type: constant.ChannelTypeAnthropic, Key: "fixture-upstream-key", Status: common.ChannelStatusEnabled, Group: "default", Models: "claude-sonnet-5", BaseURL: &upstream.URL, ModelMapping: common.GetPointer(`{"claude-sonnet-5":"workbuddy-ai/glm-5.3-flash@effort:high"}`)}
 			channel.SetSetting(dto.ChannelSettings{ModelSystemPrompts: map[string]string{"claude-sonnet-5": "shared model prompt"}})
 			require.NoError(t, db.Create(&channel).Error)
-			options := channelTestOptions{model: "claude-sonnet-5", endpointType: string(constant.EndpointTypeAnthropic), userPrompt: "hi", maxOutputTokens: 128, applySystemPrompt: true}
+			options := channelTestOptions{model: "claude-sonnet-5", endpointType: string(constant.EndpointTypeAnthropic), userPrompt: "hi", images: []channelTestImage{channelTestPNG(t)}, maxOutputTokens: 128, applySystemPrompt: true}
 			result := testChannel(t.Context(), &channel, user.Id, options)
 			require.NoError(t, result.localErr)
 			require.Nil(t, result.newAPIError)
 			testRequest := <-captured
+			assert.Contains(t, string(testRequest.Body), options.images[0].Data)
 			var payload map[string]any
 			require.NoError(t, common.Unmarshal(testRequest.Body, &payload))
 			assert.Equal(t, "workbuddy-ai/glm-5.3-flash", payload["model"])
@@ -1825,6 +1831,7 @@ func TestChannelConnectionGlobalSystemPrompt(t *testing.T) {
 	for _, tc := range []struct {
 		name, endpoint, policyKey string
 		kind                      int
+		image                     bool
 		settings                  dto.ChannelSettings
 		expected                  string
 	}{
@@ -1833,6 +1840,8 @@ func TestChannelConnectionGlobalSystemPrompt(t *testing.T) {
 		{name: "channel_model_overrides_global", kind: constant.ChannelTypeOpenAI, policyKey: "claude-sonnet-5", settings: dto.ChannelSettings{ModelSystemPrompts: map[string]string{"claude-sonnet-5": "CHANNEL_PROMPT"}}, expected: "CHANNEL_PROMPT"},
 		{name: "upstream_model_key_does_not_match_public_model", kind: constant.ChannelTypeOpenAI, policyKey: "upstream-model"},
 		{name: "passthrough_skips_global", kind: constant.ChannelTypeOpenAI, policyKey: "claude-sonnet-5", settings: dto.ChannelSettings{PassThroughBodyEnabled: true}},
+		{name: "image_chat_to_claude", image: true, kind: constant.ChannelTypeAnthropic, policyKey: "claude-sonnet-5", expected: marker},
+		{name: "image_chat_to_gemini", image: true, kind: constant.ChannelTypeGemini, policyKey: "claude-sonnet-5", expected: marker},
 		{name: "responses_global", kind: constant.ChannelTypeOpenAI, endpoint: string(constant.EndpointTypeOpenAIResponse), policyKey: "claude-sonnet-5", expected: marker},
 		{name: "chat_to_claude_global", kind: constant.ChannelTypeAnthropic, policyKey: "claude-sonnet-5", expected: marker},
 		{name: "chat_to_gemini_global", kind: constant.ChannelTypeGemini, policyKey: "claude-sonnet-5", expected: marker},
@@ -1866,7 +1875,11 @@ func TestChannelConnectionGlobalSystemPrompt(t *testing.T) {
 			mapping := `{"claude-sonnet-5":"upstream-model"}`
 			channel := &model.Channel{Id: 1, Type: tc.kind, Key: "fixture-key", Status: common.ChannelStatusEnabled, Name: "audit", BaseURL: &base, Models: "claude-sonnet-5", Group: "default", ModelMapping: &mapping, CreatedTime: common.GetTimestamp()}
 			channel.SetSetting(tc.settings)
-			result := testChannel(t.Context(), channel, 1, channelTestOptions{model: "claude-sonnet-5", endpointType: tc.endpoint, userPrompt: "你的模型？", maxOutputTokens: 1024, applySystemPrompt: shouldApplySystemPromptForConnectionTest(channel)})
+			options := channelTestOptions{model: "claude-sonnet-5", endpointType: tc.endpoint, userPrompt: "你的模型？", maxOutputTokens: 1024, applySystemPrompt: shouldApplySystemPromptForConnectionTest(channel)}
+			if tc.image {
+				options.images = []channelTestImage{channelTestPNG(t)}
+			}
+			result := testChannel(t.Context(), channel, 1, options)
 			require.NoError(t, result.localErr)
 			require.Nil(t, result.newAPIError)
 			var data string
@@ -1876,6 +1889,9 @@ func TestChannelConnectionGlobalSystemPrompt(t *testing.T) {
 				t.Fatal("no captured request")
 			}
 
+			if tc.image {
+				assert.Contains(t, data, options.images[0].Data)
+			}
 			if tc.expected != "" {
 				assert.Equal(t, 1, strings.Count(data, tc.expected))
 				details := buildChannelTestResponseDetails(result)
@@ -1902,4 +1918,83 @@ func TestChannelConnectionGlobalSystemPrompt(t *testing.T) {
 			}
 		})
 	}
+}
+
+func channelTestPNG(t *testing.T) channelTestImage {
+	t.Helper()
+	var buffer bytes.Buffer
+	require.NoError(t, png.Encode(&buffer, image.NewRGBA(image.Rect(0, 0, 2, 2))))
+	return channelTestImage{MimeType: "image/png", Data: base64.StdEncoding.EncodeToString(buffer.Bytes())}
+}
+
+func TestChannelTestImagesValidateAndPreserveProtocolContent(t *testing.T) {
+	input := channelTestPNG(t)
+	var jpegData bytes.Buffer
+	require.NoError(t, jpeg.Encode(&jpegData, image.NewRGBA(image.Rect(0, 0, 2, 2)), nil))
+	require.NoError(t, validateChannelTestImages([]channelTestImage{{MimeType: "image/jpeg", Data: base64.StdEncoding.EncodeToString(jpegData.Bytes())}}))
+	require.NoError(t, validateChannelTestImages([]channelTestImage{{MimeType: "image/webp", Data: "UklGRjoAAABXRUJQVlA4IC4AAACQAQCdASoCAAIAAUAmJaACdLoAA5gA/vtV4/+lwf/S4P/pcH/pcH8bss4bpAAA"}}))
+	var wide bytes.Buffer
+	require.NoError(t, png.Encode(&wide, image.NewRGBA(image.Rect(0, 0, 4097, 1))))
+	require.NoError(t, validateChannelTestImages(nil))
+	require.NoError(t, validateChannelTestImages([]channelTestImage{input}))
+	for _, tc := range []struct {
+		name   string
+		images []channelTestImage
+	}{
+		{"multiple", []channelTestImage{input, input}},
+		{"url", []channelTestImage{{MimeType: "image/png", Data: "https://example.com/image.png"}}},
+		{"corrupt", []channelTestImage{{MimeType: "image/png", Data: "aGVsbG8="}}},
+		{"truncated", []channelTestImage{{MimeType: "image/png", Data: input.Data[:len(input.Data)-16]}}},
+		{"dimensions", []channelTestImage{{MimeType: "image/png", Data: base64.StdEncoding.EncodeToString(wide.Bytes())}}},
+		{"spoofed MIME", []channelTestImage{{MimeType: "image/jpeg", Data: input.Data}}},
+		{"unsupported SVG", []channelTestImage{{MimeType: "image/svg+xml", Data: input.Data}}},
+		{"oversized", []channelTestImage{{MimeType: "image/png", Data: strings.Repeat("A", base64.StdEncoding.EncodedLen(maxChannelTestImageBytes)+4)}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Error(t, validateChannelTestImages(tc.images))
+			body, err := common.Marshal(channelConnectionTestRequest{Model: "vision-model", UserPrompt: "describe", Images: tc.images})
+			require.NoError(t, err)
+			rec := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(rec)
+			ctx.Params = gin.Params{{Key: "id", Value: "1"}}
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/api/channel/test/1/connection", bytes.NewReader(body))
+			ctx.Request.Header.Set("Content-Type", "application/json")
+			TestChannelConnectionPrompt(ctx)
+			assert.Contains(t, rec.Body.String(), `"success":false`)
+		})
+	}
+	for _, tc := range []struct{ endpoint, path, want string }{
+		{"openai", "messages.0.content.1.image_url.url", "data:image/png;base64," + input.Data},
+		{"openai-response", "input.0.content.1.image_url", "data:image/png;base64," + input.Data},
+		{"anthropic", "messages.0.content.0.source.data", input.Data},
+		{"gemini", "contents.0.parts.1.inlineData.data", input.Data},
+	} {
+		t.Run(tc.endpoint, func(t *testing.T) {
+			for _, stream := range []bool{false, true} {
+				for _, channel := range []*model.Channel{nil, {Type: constant.ChannelTypeOpenAI}} {
+					request := buildTestRequest("vision-model", tc.endpoint, channel, channelTestOptions{userPrompt: "describe this", images: []channelTestImage{input}, isStream: stream, maxOutputTokens: 1024})
+					body, err := common.Marshal(request)
+					require.NoError(t, err)
+					assert.Equal(t, tc.want, gjson.GetBytes(body, tc.path).String())
+					assert.Contains(t, string(body), "describe this")
+				}
+			}
+		})
+	}
+	for _, endpoint := range []string{"embeddings", "image-generation", "jina-rerank", "openai-response-compact"} {
+		t.Run("unsupported_"+endpoint, func(t *testing.T) {
+			result := testChannel(t.Context(), &model.Channel{Type: constant.ChannelTypeOpenAI}, 0, channelTestOptions{model: "test", endpointType: endpoint, images: []channelTestImage{input}})
+			require.ErrorContains(t, result.localErr, "Image tests require")
+		})
+	}
+}
+
+func TestChannelConnectionImageBodyLimit(t *testing.T) {
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Params = gin.Params{{Key: "id", Value: "1"}}
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/channel/test/1/connection", strings.NewReader(strings.Repeat(" ", maxChannelTestBodyBytes+1)+`{"model":"test","user_prompt":"hi"}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	TestChannelConnectionPrompt(ctx)
+	assert.Contains(t, rec.Body.String(), "request body too large")
 }
