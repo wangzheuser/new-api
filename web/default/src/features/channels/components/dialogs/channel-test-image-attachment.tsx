@@ -87,13 +87,18 @@ export function ChannelTestImageAttachment(props: Props) {
       className='rounded-lg border'
     >
       <CollapsibleTrigger
-        render={<Button variant='ghost' className='w-full justify-between' />}
+        render={
+          <Button
+            variant='ghost'
+            className='h-auto w-full min-w-0 flex-wrap justify-between gap-2 py-2 text-left whitespace-normal'
+          />
+        }
       >
-        <span className='flex items-center gap-2'>
+        <span className='flex min-w-0 items-center gap-2'>
           <ImagePlus className='size-4' />
           {t('Attach image (optional)')}
         </span>
-        <span className='text-muted-foreground flex items-center gap-2 text-xs'>
+        <span className='text-muted-foreground ml-auto flex min-w-0 items-center gap-2 text-xs'>
           {props.value
             ? t('1 image attached')
             : t('Text only without an image')}
