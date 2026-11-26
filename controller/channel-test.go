@@ -2501,6 +2501,10 @@ func runChannelTestWorkers(ctx context.Context, channels []*model.Channel, concu
 		go func() {
 			defer workers.Done()
 			for channel := range jobs {
+				// Dispatch can win select even when cancellation is already ready.
+				if ctx.Err() != nil {
+					return
+				}
 				results <- test(ctx, channel)
 			}
 		}()
