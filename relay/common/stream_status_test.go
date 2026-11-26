@@ -60,6 +60,37 @@ func TestStreamFirstPayloadBudget(t *testing.T) {
 	})
 }
 
+func TestStreamFirstPayloadRetryLifecycle(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		status := NewStreamStatus()
+		var writer sync.Mutex
+		first, cancelFirst := context.WithCancel(t.Context())
+		defer cancelFirst()
+		status.WatchFirstPayload(time.Now().Add(time.Second), &writer, cancelFirst)
+		time.Sleep(time.Second)
+		synctest.Wait()
+		require.ErrorIs(t, first.Err(), context.Canceled)
+		require.True(t, status.FinishFirstPayloadWait())
+		status.PrepareRetryAttempt()
+		second, cancelSecond := context.WithCancel(t.Context())
+		defer cancelSecond()
+		status.WatchFirstPayload(time.Now().Add(2*time.Second), &writer, cancelSecond)
+		time.Sleep(time.Second)
+		synctest.Wait()
+		require.NoError(t, second.Err())
+		time.Sleep(time.Second)
+		synctest.Wait()
+		require.ErrorIs(t, second.Err(), context.Canceled)
+		require.True(t, status.FinishFirstPayloadWait())
+		status.SetEndReason(StreamEndReasonPingFail, fmt.Errorf("closed"))
+		status.PrepareRetryAttempt()
+		assert.True(t, status.RetryBlocked(false), "a later client failure survives timeout and retry reset")
+		reason, err := status.End()
+		assert.Equal(t, StreamEndReasonTimeout, reason)
+		assert.ErrorIs(t, err, ErrFirstPayloadTimeout)
+	})
+}
+
 func TestStreamStatus_SetEndReason_FirstWins(t *testing.T) {
 	t.Parallel()
 	s := NewStreamStatus()

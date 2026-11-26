@@ -83,6 +83,7 @@ const MODELS_SECTIONS = [
     build: (settings: ModelSettings) => (
       <RoutingReliabilitySection
         defaultValues={{
+          RelayFirstPayloadTimeout: settings.RelayFirstPayloadTimeout,
           RetryTimes: settings.RetryTimes,
           ChannelDisableThreshold: settings.ChannelDisableThreshold,
           AutomaticDisableChannelEnabled:

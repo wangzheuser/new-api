@@ -4337,6 +4337,9 @@
     "Some models restricted": "Một số mô hình bị giới hạn",
     "Whole key cooldown": "Toàn bộ khóa đang tạm nghỉ",
     "Clear model cooldown": "Bỏ thời gian chờ của mô hình",
-    "Allow this model to use this key again?": "Cho phép mô hình này sử dụng lại khóa này?"
+    "Allow this model to use this key again?": "Cho phép mô hình này sử dụng lại khóa này?",
+    "First payload timeout per attempt (seconds)": "Thời gian chờ đầu ra đầu tiên mỗi lần thử (giây)",
+    "Maximum wait for the first meaningful output on each upstream attempt. 0 disables this timeout. Saved changes apply only to new requests.": "Thời gian tối đa chờ đầu ra có ý nghĩa đầu tiên trong mỗi lần thử. 0 tắt giới hạn này. Thay đổi đã lưu chỉ áp dụng cho yêu cầu mới.",
+    "Enter whole seconds between 0 and 9223372036": "Nhập số giây nguyên từ 0 đến 9223372036"
   }
 }

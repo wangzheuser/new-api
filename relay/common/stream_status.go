@@ -70,6 +70,7 @@ type StreamStatus struct {
 	appHTTPCommitted         bool
 	clientPayloadCommitted   bool
 	errorFrameWritten        bool
+	clientUnavailable        bool
 	streamPolicyVersion      string
 	retryCommitPolicy        StreamRetryCommitPolicy
 	billingFinalization      BillingFinalization
@@ -151,7 +152,7 @@ func (s *StreamStatus) MarkClientEventCommitted(meaningful bool) {
 	s.mu.Unlock()
 }
 
-// WatchFirstPayload bounds this attempt by the original deadline without cancelling the client.
+// WatchFirstPayload bounds one attempt without cancelling the client.
 func (s *StreamStatus) WatchFirstPayload(deadline time.Time, writer *sync.Mutex, cancel func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -185,7 +186,7 @@ func (s *StreamStatus) WatchFirstPayload(deadline time.Time, writer *sync.Mutex,
 	s.firstPayloadTimer = timer
 }
 
-// FinishFirstPayloadWait disarms this attempt and reports a request-level budget expiry.
+// FinishFirstPayloadWait disarms this attempt and reports its first-payload timeout.
 func (s *StreamStatus) FinishFirstPayloadWait() bool {
 	if s == nil {
 		return false
@@ -297,12 +298,11 @@ func (s *StreamStatus) RetryBlocked(httpCommitted bool) bool {
 	if s == nil {
 		return httpCommitted
 	}
-	reason, _ := s.End()
-	if reason == StreamEndReasonClientGone || reason == StreamEndReasonPingFail {
-		return true
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.clientUnavailable {
+		return true
+	}
 	payloadAware := s.retryCommitPolicy == StreamRetryCommitPolicyPayload || s.streamPolicyVersion == "progressive-v1"
 	if payloadAware {
 		return s.clientPayloadCommitted || s.errorFrameWritten
@@ -479,6 +479,9 @@ func (s *StreamStatus) SetEndReason(reason StreamEndReason, err error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if reason == StreamEndReasonClientGone || reason == StreamEndReasonPingFail {
+		s.clientUnavailable = true
+	}
 	if s.endSet {
 		return
 	}
@@ -487,13 +490,23 @@ func (s *StreamStatus) SetEndReason(reason StreamEndReason, err error) {
 	s.EndError = err
 }
 
+// ClientUnavailable reports a downstream failure even when an earlier timeout owns the terminal reason.
+func (s *StreamStatus) ClientUnavailable() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.clientUnavailable
+}
+
 // PrepareRetryAttempt clears attempt-local terminal state without replacing the request-level status object.
 func (s *StreamStatus) PrepareRetryAttempt() {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
-	if s.EndError == ErrFirstPayloadTimeout || s.EndReason == StreamEndReasonClientGone || s.EndReason == StreamEndReasonPingFail {
+	if s.clientUnavailable {
 		s.mu.Unlock()
 		return
 	}

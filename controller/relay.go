@@ -76,6 +76,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 // executeRelayRequest keeps channel tests on the client pipeline while pinning their channel snapshot.
 func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChannel *model.Channel) (relayInfo *relaycommon.RelayInfo, newAPIError *types.NewAPIError) {
+	firstPayloadTimeout := common.GetRelayFirstPayloadTimeout()
 	defer service.FinishChannelKeyProbe(c, false)
 	handlerStartedAt := time.Now()
 	common.SetContextKey(c, constant.ContextKeyRelayUpstreamSucceeded, false)
@@ -264,9 +265,8 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
 	relayStarted = true
-	if relayInfo.IsStream && common.RelayFirstPayloadTimeout > 0 {
-		// Channel selection and every retry share one clock; request upload isn't upstream wait.
-		relayInfo.FirstPayloadDeadline = time.Now().Add(common.RelayFirstPayloadTimeout)
+	if relayInfo.IsStream {
+		relayInfo.FirstPayloadTimeout = firstPayloadTimeout
 	}
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
@@ -341,13 +341,13 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 		}
 
 		if firstPayloadExpired {
-			// The budget belongs to the request, not the last channel. Do not replay or quarantine it.
-			newAPIError = types.NewErrorWithStatusCode(relaycommon.ErrFirstPayloadTimeout, types.ErrorCodeBadResponse, http.StatusGatewayTimeout, types.ErrOptionWithSkipRetry())
-			rawFinalError, relayInfo.LastError = newAPIError, newAPIError
-			service.RecordPolicyFailure(c, channel.Id, newAPIError, service.PolicyDecision{Action: "stop", Reason: "first_payload_timeout", Source: "system"})
-			return
+			newAPIError = types.NewErrorWithStatusCode(relaycommon.ErrFirstPayloadTimeout, types.ErrorCodeBadResponse, http.StatusGatewayTimeout)
+			rawFinalError = newAPIError
 		}
 
+		if !firstPayloadExpired {
+			rawFinalError = nil
+		}
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
 		relayInfo.LastError = newAPIError
 		// Tests report this exact channel/key; callers retain their existing health policy.
@@ -366,7 +366,17 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 		endpointMismatch := relayInfo.ProtocolEndpointMismatch &&
 			relayInfo.ChannelRoutePlan != nil &&
 			relayInfo.ChannelRoutePlan.RouteMode != hosttypes.ChannelRouteModeLegacy
-		if !localBillingError && endpointMismatch {
+		if firstPayloadExpired {
+			if decision.Action == "retry" {
+				if retryParam.ExcludedChannelIDs == nil {
+					retryParam.ExcludedChannelIDs = make(map[int]struct{})
+				}
+				retryParam.ExcludedChannelIDs[channel.Id] = struct{}{}
+				retryParam.SelectHighestRemainingPriority = true
+				retryParam.PreferredChannelID = 0
+				decision.Reason = "first_payload_timeout"
+			}
+		} else if !localBillingError && endpointMismatch {
 			if retryParam.ExcludedChannelIDs == nil {
 				retryParam.ExcludedChannelIDs = make(map[int]struct{})
 			}
@@ -617,9 +627,10 @@ func decideHTTPRelayRetry(c *gin.Context, relayInfo *relaycommon.RelayInfo, open
 	}
 	if retryBlockedByClientCommit(c, relayInfo) {
 		// Legacy Claude requests flush SSE headers before receiving the upstream HTTP status.
-		// Only a real HTTP failure before any stream event may bypass that header commit.
+		// HTTP failures and local first-payload timeouts may bypass headers before any protocol event.
 		upstreamStatus, real := openaiErr.GetUpstreamStatusCode()
-		if !real || upstreamStatus < http.StatusBadRequest || upstreamStatus > 599 ||
+		localTimeout := relayInfo != nil && relayInfo.StreamStatus != nil && errors.Is(openaiErr, relaycommon.ErrFirstPayloadTimeout)
+		if !(localTimeout || real && upstreamStatus >= http.StatusBadRequest && upstreamStatus <= 599) ||
 			relayInfo == nil || !relayInfo.IsStream || relayInfo.ChannelMeta == nil ||
 			relayInfo.ChannelType != constant.ChannelTypeAnthropic ||
 			relayInfo.ChannelRoutePlan == nil || relayInfo.ChannelRoutePlan.RouteMode != hosttypes.ChannelRouteModeLegacy ||
@@ -628,8 +639,9 @@ func decideHTTPRelayRetry(c *gin.Context, relayInfo *relaycommon.RelayInfo, open
 			return service.PolicyDecision{Action: "stop", Reason: "client_response_committed", Source: "system"}
 		}
 		status := relayInfo.StreamStatus
-		endReason, _ := status.End()
-		if c.Request.Context().Err() != nil || endReason != relaycommon.StreamEndReasonNone ||
+		endReason, endErr := status.End()
+		localTimeout = localTimeout && endReason == relaycommon.StreamEndReasonTimeout && endErr == relaycommon.ErrFirstPayloadTimeout
+		if c.Request.Context().Err() != nil || status.ClientUnavailable() || (endReason != relaycommon.StreamEndReasonNone && !localTimeout) ||
 			status.ClientPayloadIsCommitted() || status.ErrorFrameIsWritten() {
 			return service.PolicyDecision{Action: "stop", Reason: "client_response_committed", Source: "system"}
 		}
@@ -681,6 +693,9 @@ func retryBlockedByClientCommit(c *gin.Context, relayInfo *relaycommon.RelayInfo
 }
 
 func resolveConfiguredFinalRelayError(c *gin.Context, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
+	if relayInfo != nil && errors.Is(relayInfo.LastError, relaycommon.ErrFirstPayloadTimeout) {
+		return relayInfo.LastError
+	}
 	if relayInfo != nil && types.IsLocalBillingError(relayInfo.LastError) {
 		// 本地额度和数据故障保留各自状态码，避免被渠道 final_error 覆盖。
 		return relayInfo.LastError

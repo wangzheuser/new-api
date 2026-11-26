@@ -64,6 +64,7 @@ const defaultModelSettings: ModelSettings = {
   AutoGroups: '',
   DefaultUseAutoGroup: false,
   'group_ratio_setting.group_special_usable_group': '{}',
+  RelayFirstPayloadTimeout: 180,
   RetryTimes: 0,
   ChannelDisableThreshold: '',
   AutomaticDisableChannelEnabled: false,

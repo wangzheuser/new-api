@@ -3797,6 +3797,9 @@
     "Some models restricted": "部分模型受限",
     "Whole key cooldown": "整把金鑰冷卻",
     "Clear model cooldown": "解除模型冷卻",
-    "Allow this model to use this key again?": "允許此模型再次使用該金鑰？"
+    "Allow this model to use this key again?": "允許此模型再次使用該金鑰？",
+    "First payload timeout per attempt (seconds)": "單次首包逾時（秒）",
+    "Maximum wait for the first meaningful output on each upstream attempt. 0 disables this timeout. Saved changes apply only to new requests.": "每次上游嘗試等待首個有效輸出的最長時間。0 表示停用此逾時。儲存後僅對新請求生效。",
+    "Enter whole seconds between 0 and 9223372036": "請輸入 0 到 9223372036 之間的整數秒數"
   }
 }

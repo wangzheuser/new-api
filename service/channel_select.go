@@ -47,20 +47,21 @@ func AppendTaskPluginIdentityFilter(c *gin.Context, pluginKey string) {
 }
 
 type RetryParam struct {
-	Ctx                     *gin.Context
-	TokenGroup              string
-	ModelName               string
-	RequestPath             string
-	EndpointType            constant.EndpointType
-	RelayFormat             types.RelayFormat
-	IsStream                bool
-	Retry                   *int
-	ExcludedChannelIDs      map[int]struct{}
-	PreferredChannelID      int
-	ContextFallbackSourceID int
-	ExcludedKeyFingerprints map[int]map[string]struct{}
-	resetNextTry            bool
-	imageCandidateModel     string
+	Ctx                            *gin.Context
+	TokenGroup                     string
+	ModelName                      string
+	RequestPath                    string
+	EndpointType                   constant.EndpointType
+	RelayFormat                    types.RelayFormat
+	IsStream                       bool
+	Retry                          *int
+	ExcludedChannelIDs             map[int]struct{}
+	SelectHighestRemainingPriority bool
+	PreferredChannelID             int
+	ContextFallbackSourceID        int
+	ExcludedKeyFingerprints        map[int]map[string]struct{}
+	resetNextTry                   bool
+	imageCandidateModel            string
 }
 
 func (p *RetryParam) imageInputModel() string {
@@ -270,7 +271,11 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, err = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry, param.RequestPath, usedChannelIds, param.ExcludedChannelIDs, filters, candidateFilter)
+			selectionRetry := priorityRetry
+			if param.SelectHighestRemainingPriority {
+				selectionRetry = 0
+			}
+			channel, err = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, selectionRetry, param.RequestPath, usedChannelIds, param.ExcludedChannelIDs, filters, candidateFilter)
 			if err != nil && candidateFilter != nil {
 				return nil, autoGroup, err
 			}
@@ -311,13 +316,20 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			break
 		}
 	} else {
-		channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry(), param.RequestPath, usedChannelIds, param.ExcludedChannelIDs, filters, candidateFilter)
+		selectionRetry := param.GetRetry()
+		if param.SelectHighestRemainingPriority {
+			selectionRetry = 0
+		}
+		channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, selectionRetry, param.RequestPath, usedChannelIds, param.ExcludedChannelIDs, filters, candidateFilter)
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}
 	}
 	if channel == nil && sawTextOnly && param.imageCandidateModel != param.ModelName {
 		return nil, selectGroup, types.UnsupportedImageInputError(imageModel)
+	}
+	if channel != nil {
+		param.SelectHighestRemainingPriority = false
 	}
 	return channel, selectGroup, nil
 }

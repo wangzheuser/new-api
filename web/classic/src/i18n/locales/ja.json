@@ -3773,6 +3773,9 @@
     "Some models restricted": "一部のモデルが制限されています",
     "Whole key cooldown": "キー全体の待機",
     "Clear model cooldown": "モデルの待機を解除",
-    "Allow this model to use this key again?": "このモデルでこのキーを再度使用しますか？"
+    "Allow this model to use this key again?": "このモデルでこのキーを再度使用しますか？",
+    "First payload timeout per attempt (seconds)": "試行ごとの初回出力タイムアウト（秒）",
+    "Maximum wait for the first meaningful output on each upstream attempt. 0 disables this timeout. Saved changes apply only to new requests.": "各上流試行で最初の有効な出力を待つ最長時間です。0 で無効になります。保存した変更は新しいリクエストにのみ適用されます。",
+    "Enter whole seconds between 0 and 9223372036": "0 から 9223372036 までの整数の秒数を入力してください"
   }
 }

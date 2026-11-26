@@ -51,6 +51,7 @@ export default function GeneralSettings(props) {
     'general_setting.custom_currency_symbol': '¤',
     'general_setting.custom_currency_exchange_rate': '',
     QuotaPerUnit: '',
+    RelayFirstPayloadTimeout: 180,
     RetryTimes: '',
     USDExchangeRate: '',
     DisplayTokenStatEnabled: false,
@@ -69,6 +70,10 @@ export default function GeneralSettings(props) {
   }
 
   function onSubmit() {
+    const timeout = String(inputs.RelayFirstPayloadTimeout);
+    if (!/^\d+$/.test(timeout) || Number(timeout) > 9223372036) {
+      return showError(t('Enter whole seconds between 0 and 9223372036'));
+    }
     const updateArray = compareObjects(inputs, inputsRow);
     if (!updateArray.length) return showWarning(t('你似乎并没有修改什么'));
     const requestQueue = updateArray.map((item) => {
@@ -91,6 +96,9 @@ export default function GeneralSettings(props) {
         } else if (requestQueue.length > 1) {
           if (res.includes(undefined))
             return showError(t('部分保存失败，请重试'));
+        }
+        if (res.some((result) => !result?.data?.success)) {
+          return showError(t('保存失败，请重试'));
         }
         showSuccess(t('保存成功'));
         props.refresh();
@@ -265,6 +273,21 @@ export default function GeneralSettings(props) {
               {/* 单位美元额度已合入汇率组合控件（TOKENS 模式下编辑），不再单独展示 */}
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.Input
+                  field='RelayFirstPayloadTimeout'
+                  label={t('First payload timeout per attempt (seconds)')}
+                  initValue={180}
+                  type='number'
+                  min={0}
+                  max={9223372036}
+                  step={1}
+                  extraText={t(
+                    'Maximum wait for the first meaningful output on each upstream attempt. 0 disables this timeout. Saved changes apply only to new requests.',
+                  )}
+                  onChange={handleFieldChange('RelayFirstPayloadTimeout')}
+                />
+              </Col>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Form.Input
                   field={'RetryTimes'}
                   label={t('失败重试次数')}
                   initValue={''}
@@ -282,12 +305,8 @@ export default function GeneralSettings(props) {
                     'general_setting.quota_display_type',
                   )}
                 >
-                  <Form.Select.Option value='USD'>
-                    USD ($)
-                  </Form.Select.Option>
-                  <Form.Select.Option value='CNY'>
-                    CNY (¥)
-                  </Form.Select.Option>
+                  <Form.Select.Option value='USD'>USD ($)</Form.Select.Option>
+                  <Form.Select.Option value='CNY'>CNY (¥)</Form.Select.Option>
                   {showTokensOption && (
                     <Form.Select.Option value='TOKENS'>
                       Tokens
@@ -398,7 +417,9 @@ export default function GeneralSettings(props) {
                   field={'token_setting.max_user_tokens'}
                   step={1}
                   min={1}
-                  extraText={t('每个用户最多可创建的令牌数量，默认 1000，设置过大可能会影响性能')}
+                  extraText={t(
+                    '每个用户最多可创建的令牌数量，默认 1000，设置过大可能会影响性能',
+                  )}
                   placeholder={'1000'}
                   onChange={handleFieldChange('token_setting.max_user_tokens')}
                 />

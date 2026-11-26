@@ -3824,6 +3824,9 @@
     "Some models restricted": "Некоторые модели ограничены",
     "Whole key cooldown": "Ожидание для всего ключа",
     "Clear model cooldown": "Снять ограничение модели",
-    "Allow this model to use this key again?": "Разрешить модели снова использовать этот ключ?"
+    "Allow this model to use this key again?": "Разрешить модели снова использовать этот ключ?",
+    "First payload timeout per attempt (seconds)": "Ожидание первого вывода на попытку (секунды)",
+    "Maximum wait for the first meaningful output on each upstream attempt. 0 disables this timeout. Saved changes apply only to new requests.": "Максимальное ожидание первого значимого вывода в каждой попытке. 0 отключает этот тайм-аут. Сохранённые изменения действуют только для новых запросов.",
+    "Enter whole seconds between 0 and 9223372036": "Введите целое число секунд от 0 до 9223372036"
   }
 }

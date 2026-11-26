@@ -39,14 +39,16 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
 	for _, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAI} {
 		for _, scenario := range []struct {
-			name        string
-			status      int
-			message     string
-			recover     bool
-			backup      bool
-			wantKeys    []string
-			dialFailure bool
-			stop        string
+			name          string
+			status        int
+			message       string
+			recover       bool
+			backup        bool
+			wantKeys      []string
+			dialFailure   bool
+			headerTimeout bool
+			cache         bool
+			stop          string
 		}{
 			{name: "key quota recovery", status: 429, message: "quota exceeded", recover: true, wantKeys: []string{"KEY_A", "KEY_B"}},
 			{name: "key quota budget exhausted", status: 429, message: "quota exceeded", wantKeys: []string{"KEY_A", "KEY_B", "KEY_C"}},
@@ -54,6 +56,14 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 			{name: "channel unavailable", status: 500, message: "upstream failed", wantKeys: []string{"KEY_A"}},
 			{name: "protocol event", wantKeys: []string{"KEY_A"}},
 			{name: "metadata without payload", stop: "payload", wantKeys: []string{"KEY_A"}},
+			{name: "first payload recovery", headerTimeout: true, recover: true, backup: true, wantKeys: []string{"KEY_A", "BACKUP_A"}},
+			{name: "first payload cached recovery", headerTimeout: true, cache: true, recover: true, backup: true, wantKeys: []string{"KEY_A", "BACKUP_A"}},
+			{name: "first payload all timeout", headerTimeout: true, backup: true, wantKeys: []string{"KEY_A", "BACKUP_A", "BACKUP_B"}},
+			{name: "first payload no backup", headerTimeout: true, wantKeys: []string{"KEY_A"}},
+			{name: "first payload budget", headerTimeout: true, backup: true, stop: "budget", wantKeys: []string{"KEY_A"}},
+			{name: "first payload pinned", headerTimeout: true, stop: "pin", wantKeys: []string{"KEY_A"}},
+			{name: "first payload strict", headerTimeout: true, stop: "session", wantKeys: []string{"KEY_A"}},
+			{name: "first payload excluded", headerTimeout: true, stop: "status", wantKeys: []string{"KEY_A"}},
 			{name: "client cancels before headers", stop: "client", wantKeys: []string{"KEY_A"}},
 			{name: "dial recovery", dialFailure: true, recover: true, backup: true, wantKeys: []string{"KEY_A", "BACKUP_A"}},
 			{name: "dial budget exhausted", dialFailure: true, backup: true, wantKeys: []string{"KEY_A", "BACKUP_A", "BACKUP_B"}},
@@ -96,10 +106,10 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 				if scenario.stop == "status" {
 					operation_setting.AutomaticRetryStatusCodeRanges = []operation_setting.StatusCodeRange{{Start: 503, End: 503}}
 				}
-				if scenario.stop == "payload" {
-					previous := common.RelayFirstPayloadTimeout
-					common.RelayFirstPayloadTimeout = 150 * time.Millisecond
-					t.Cleanup(func() { common.RelayFirstPayloadTimeout = previous })
+				if scenario.stop == "payload" || scenario.headerTimeout {
+					previous := common.GetRelayFirstPayloadTimeout()
+					common.SetRelayFirstPayloadTimeout(150 * time.Millisecond)
+					t.Cleanup(func() { common.SetRelayFirstPayloadTimeout(previous) })
 				}
 				var mu sync.Mutex
 				var attempts []string
@@ -107,6 +117,18 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 				defer cancel()
 				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					key := r.Header.Get("X-Api-Key")
+					if scenario.headerTimeout && (key == "KEY_A" || !scenario.recover) {
+						if key == "KEY_A" {
+							common.SetRelayFirstPayloadTimeout(time.Hour)
+						}
+						_, _ = io.Copy(io.Discard, r.Body)
+						select {
+						case <-r.Context().Done():
+						case <-time.After(3 * time.Second):
+							t.Error("upstream header wait was not cancelled")
+						}
+						return
+					}
 					failed := scenario.status != 0
 					if scenario.recover {
 						failed = key == "KEY_A"
@@ -177,13 +199,17 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 					backup := channel.Snapshot()
 					backup.Id, backup.Name, backup.Key = 0, "backup-fixture", "BACKUP_A\nBACKUP_B"
 					backup.ChannelInfo.MultiKeySize = 2
+					if scenario.headerTimeout {
+						backup.Key = "BACKUP_A"
+						backup.ChannelInfo = model.ChannelInfo{}
+					}
 					backup.Priority = common.GetPointer(int64(2))
 					if scenario.recover {
 						backup.BaseURL = &upstream.URL
 					}
 					require.NoError(t, db.Create(backup).Error)
 					require.NoError(t, backup.AddAbilities(nil))
-					if scenario.name == "dial budget exhausted" {
+					if scenario.name == "dial budget exhausted" || scenario.name == "first payload all timeout" || (scenario.headerTimeout && scenario.recover) {
 						last := backup.Snapshot()
 						last.Id, last.Name, last.Key = 0, "last-fixture", "BACKUP_B"
 						last.Priority = common.GetPointer(int64(1))
@@ -191,6 +217,10 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 						require.NoError(t, db.Create(last).Error)
 						require.NoError(t, last.AddAbilities(nil))
 					}
+				}
+				if scenario.cache {
+					common.MemoryCacheEnabled = true
+					model.InitChannelCache()
 				}
 				path := "/v1/messages"
 				if format == types.RelayFormatOpenAI {
@@ -234,7 +264,7 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 					assert.Contains(t, body, "first stream payload")
 					events := service.RequestPolicy(requestContext).Events()
 					require.NotEmpty(t, events)
-					assert.Equal(t, "first_payload_timeout", events[len(events)-1].Decision.Reason)
+					assert.Equal(t, "client_response_committed", events[len(events)-1].Decision.Reason)
 				}
 				if scenario.dialFailure {
 					events := service.RequestPolicy(requestContext).Events()

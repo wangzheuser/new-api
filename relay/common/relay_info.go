@@ -170,7 +170,8 @@ type RelayInfo struct {
 	RequestUploadDuration    time.Duration
 	IncomingRequestBodyBytes int64
 	FirstResponseTime        time.Time
-	FirstPayloadDeadline     time.Time // Shared by all attempts after initial request validation.
+	FirstPayloadTimeout      time.Duration // Request snapshot, shared by all attempts.
+	FirstPayloadDeadline     time.Time     // Deadline of the current upstream attempt.
 	isFirstResponse          bool
 	//SendLastReasoningResponse bool
 	IsStream                 bool
@@ -608,7 +609,7 @@ func (info *RelayInfo) resetAttemptState(c *gin.Context) {
 	}
 	// Response model declarations belong to one channel attempt only.
 	info.ResponseModel = nil
-	if info.IsStream && info.RetryIndex > 0 && info.StreamStatus != nil {
+	if info.IsStream && info.StreamStatus != nil && !info.StreamStatus.ClientPayloadIsCommitted() && !info.StreamStatus.ErrorFrameIsWritten() {
 		// Clear attempt-local terminal state; the request-level pinger, status object, and writer lock remain stable.
 		info.StreamStatus.PrepareRetryAttempt()
 	}

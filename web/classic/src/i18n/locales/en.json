@@ -3950,6 +3950,9 @@
     "Some models restricted": "Some models restricted",
     "Whole key cooldown": "Whole key cooldown",
     "Clear model cooldown": "Clear model cooldown",
-    "Allow this model to use this key again?": "Allow this model to use this key again?"
+    "Allow this model to use this key again?": "Allow this model to use this key again?",
+    "First payload timeout per attempt (seconds)": "First payload timeout per attempt (seconds)",
+    "Maximum wait for the first meaningful output on each upstream attempt. 0 disables this timeout. Saved changes apply only to new requests.": "Maximum wait for the first meaningful output on each upstream attempt. 0 disables this timeout. Saved changes apply only to new requests.",
+    "Enter whole seconds between 0 and 9223372036": "Enter whole seconds between 0 and 9223372036"
   }
 }

@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
-import { useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -56,8 +56,8 @@ import {
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
-import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
+import { firstPayloadTimeoutSchema } from '../utils/first-payload-timeout'
 import { safeNumberFieldProps } from '../utils/numeric-field'
 
 const numericString = z.string().refine((value) => {
@@ -71,6 +71,7 @@ type ChannelTestMode = (typeof channelTestModes)[number]
 
 const routingReliabilitySchema = z
   .object({
+    RelayFirstPayloadTimeout: firstPayloadTimeoutSchema,
     RetryTimes: z.coerce.number().min(0).max(10),
     ChannelDisableThreshold: numericString,
     AutomaticDisableChannelEnabled: z.boolean(),
@@ -203,6 +204,7 @@ type RoutingReliabilityFormInput = z.input<typeof routingReliabilitySchema>
 
 type RoutingReliabilitySectionProps = {
   defaultValues: {
+    RelayFirstPayloadTimeout: number
     RetryTimes: number
     ChannelDisableThreshold: string
     AutomaticDisableChannelEnabled: boolean
@@ -229,6 +231,7 @@ function normalizeLineEndings(value: string) {
 }
 
 type NormalizedRoutingReliabilityValues = {
+  RelayFirstPayloadTimeout: number
   RetryTimes: number
   ChannelDisableThreshold: string
   AutomaticDisableChannelEnabled: boolean
@@ -256,6 +259,7 @@ function normalizeChannelTestMode(value?: string): ChannelTestMode {
 const buildFormDefaults = (
   defaults: RoutingReliabilitySectionProps['defaultValues']
 ): RoutingReliabilityFormInput => ({
+  RelayFirstPayloadTimeout: defaults.RelayFirstPayloadTimeout ?? 180,
   RetryTimes: defaults.RetryTimes ?? 0,
   ChannelDisableThreshold: defaults.ChannelDisableThreshold ?? '',
   AutomaticDisableChannelEnabled: defaults.AutomaticDisableChannelEnabled,
@@ -301,6 +305,7 @@ const buildFormDefaults = (
 const normalizeDefaults = (
   defaults: RoutingReliabilitySectionProps['defaultValues']
 ): NormalizedRoutingReliabilityValues => ({
+  RelayFirstPayloadTimeout: defaults.RelayFirstPayloadTimeout ?? 180,
   RetryTimes: defaults.RetryTimes ?? 0,
   ChannelDisableThreshold: (defaults.ChannelDisableThreshold ?? '').trim(),
   AutomaticDisableChannelEnabled: defaults.AutomaticDisableChannelEnabled,
@@ -348,6 +353,7 @@ const normalizeDefaults = (
 const normalizeFormValues = (
   values: RoutingReliabilityFormValues
 ): NormalizedRoutingReliabilityValues => ({
+  RelayFirstPayloadTimeout: values.RelayFirstPayloadTimeout,
   RetryTimes: values.RetryTimes,
   ChannelDisableThreshold: values.ChannelDisableThreshold.trim(),
   AutomaticDisableChannelEnabled: values.AutomaticDisableChannelEnabled,
@@ -418,7 +424,16 @@ export function RoutingReliabilitySection({
     defaultValues: formDefaults,
   })
 
-  useResetForm(form, formDefaults)
+  const lastDefaults = useRef('')
+  const dirtyFields = form.formState.dirtyFields
+  useEffect(() => {
+    const serialized = JSON.stringify(formDefaults)
+    if (serialized === lastDefaults.current) return
+    // Partial-save refreshes must preserve fields that have not saved yet.
+    baselineRef.current = normalizeDefaults(defaultValues)
+    form.reset(formDefaults, { keepDirtyValues: true })
+    lastDefaults.current = serialized
+  }, [form, formDefaults, defaultValues, dirtyFields])
 
   const autoDisableStatusCodes = form.watch('AutomaticDisableStatusCodes')
   const statisticalDisableStatusCodes = form.watch(
@@ -454,51 +469,45 @@ export function RoutingReliabilitySection({
   )
 
   const onSubmit = async (values: RoutingReliabilityFormValues) => {
-    const normalized = normalizeFormValues(values)
-    let updates = (
-      Object.keys(normalized) as Array<keyof NormalizedRoutingReliabilityValues>
-    ).filter((key) => normalized[key] !== baselineRef.current[key])
+    try {
+      const normalized = normalizeFormValues(values)
+      let updates = (
+        Object.keys(normalized) as Array<
+          keyof NormalizedRoutingReliabilityValues
+        >
+      ).filter((key) => normalized[key] !== baselineRef.current[key])
 
-    if (updates.length === 0) {
-      toast.info(t('No changes to save'))
-      return
-    }
+      if (updates.length === 0) {
+        toast.info(t('No changes to save'))
+        return
+      }
 
-    const temporaryKey =
-      'multi_key_auto_disable_setting.temporary_status_codes' as const
-    const persistentKey =
-      'multi_key_auto_disable_setting.persistent_status_codes' as const
-    if (updates.includes(temporaryKey) && updates.includes(persistentKey)) {
-      const oldTemporary = parseHttpStatusCodeRules(
-        baselineRef.current[temporaryKey]
-      )
-      const oldPersistent = parseHttpStatusCodeRules(
-        baselineRef.current[persistentKey]
-      )
-      const newTemporary = parseHttpStatusCodeRules(normalized[temporaryKey])
-      const newPersistent = parseHttpStatusCodeRules(normalized[persistentKey])
+      const temporaryKey =
+        'multi_key_auto_disable_setting.temporary_status_codes' as const
+      const persistentKey =
+        'multi_key_auto_disable_setting.persistent_status_codes' as const
+      if (updates.includes(temporaryKey) && updates.includes(persistentKey)) {
+        const oldTemporary = parseHttpStatusCodeRules(
+          baselineRef.current[temporaryKey]
+        )
+        const oldPersistent = parseHttpStatusCodeRules(
+          baselineRef.current[persistentKey]
+        )
+        const newTemporary = parseHttpStatusCodeRules(normalized[temporaryKey])
+        const newPersistent = parseHttpStatusCodeRules(
+          normalized[persistentKey]
+        )
 
-      if (!statusCodeRulesOverlap(newTemporary, oldPersistent)) {
-        await updateOption.mutateAsync({
-          key: temporaryKey,
-          value: normalized[temporaryKey],
-        })
-        await updateOption.mutateAsync({
-          key: persistentKey,
-          value: normalized[persistentKey],
-        })
-      } else if (!statusCodeRulesOverlap(oldTemporary, newPersistent)) {
-        await updateOption.mutateAsync({
-          key: persistentKey,
-          value: normalized[persistentKey],
-        })
-        await updateOption.mutateAsync({
-          key: temporaryKey,
-          value: normalized[temporaryKey],
-        })
-      } else {
-        await updateOption.mutateAsync({ key: temporaryKey, value: '' })
-        try {
+        if (!statusCodeRulesOverlap(newTemporary, oldPersistent)) {
+          await updateOption.mutateAsync({
+            key: temporaryKey,
+            value: normalized[temporaryKey],
+          })
+          await updateOption.mutateAsync({
+            key: persistentKey,
+            value: normalized[persistentKey],
+          })
+        } else if (!statusCodeRulesOverlap(oldTemporary, newPersistent)) {
           await updateOption.mutateAsync({
             key: persistentKey,
             value: normalized[persistentKey],
@@ -507,49 +516,63 @@ export function RoutingReliabilitySection({
             key: temporaryKey,
             value: normalized[temporaryKey],
           })
-        } catch (error) {
-          await updateOption.mutateAsync({
-            key: persistentKey,
-            value: baselineRef.current[persistentKey],
-          })
-          await updateOption.mutateAsync({
-            key: temporaryKey,
-            value: baselineRef.current[temporaryKey],
-          })
-          throw error
+        } else {
+          await updateOption.mutateAsync({ key: temporaryKey, value: '' })
+          try {
+            await updateOption.mutateAsync({
+              key: persistentKey,
+              value: normalized[persistentKey],
+            })
+            await updateOption.mutateAsync({
+              key: temporaryKey,
+              value: normalized[temporaryKey],
+            })
+          } catch (error) {
+            await updateOption.mutateAsync({
+              key: persistentKey,
+              value: baselineRef.current[persistentKey],
+            })
+            await updateOption.mutateAsync({
+              key: temporaryKey,
+              value: baselineRef.current[temporaryKey],
+            })
+            throw error
+          }
         }
+        updates = updates.filter(
+          (key) => key !== temporaryKey && key !== persistentKey
+        )
       }
-      updates = updates.filter(
-        (key) => key !== temporaryKey && key !== persistentKey
-      )
-    }
 
-    const sampleSizeKey =
-      'channel_auto_disable_setting.sample_size' as const
-    const minimumSampleSizeKey =
-      'channel_auto_disable_setting.minimum_sample_size' as const
-    if (updates.includes(sampleSizeKey) && updates.includes(minimumSampleSizeKey)) {
-      const thresholdOrder =
-        normalized[sampleSizeKey] < baselineRef.current[sampleSizeKey]
-          ? [minimumSampleSizeKey, sampleSizeKey]
-          : [sampleSizeKey, minimumSampleSizeKey]
-      updates = [
-        ...thresholdOrder,
-        ...updates.filter(
-          (key) => key !== sampleSizeKey && key !== minimumSampleSizeKey
-        ),
-      ]
-    }
+      const sampleSizeKey = 'channel_auto_disable_setting.sample_size' as const
+      const minimumSampleSizeKey =
+        'channel_auto_disable_setting.minimum_sample_size' as const
+      if (
+        updates.includes(sampleSizeKey) &&
+        updates.includes(minimumSampleSizeKey)
+      ) {
+        const thresholdOrder =
+          normalized[sampleSizeKey] < baselineRef.current[sampleSizeKey]
+            ? [minimumSampleSizeKey, sampleSizeKey]
+            : [sampleSizeKey, minimumSampleSizeKey]
+        updates = [
+          ...thresholdOrder,
+          ...updates.filter(
+            (key) => key !== sampleSizeKey && key !== minimumSampleSizeKey
+          ),
+        ]
+      }
 
-    for (const key of updates) {
-      const value = normalized[key]
-      await updateOption.mutateAsync({
-        key,
-        value,
-      })
-    }
+      for (const key of updates) {
+        const value = normalized[key]
+        await updateOption.mutateAsync({ key, value })
+      }
 
-    baselineRef.current = normalized
+      baselineRef.current = normalized
+      form.reset(buildFormDefaults(normalized))
+    } catch {
+      // The mutation reports failures; retain the draft for a later save.
+    }
   }
 
   return (
@@ -565,7 +588,41 @@ export function RoutingReliabilitySection({
             <div className='flex flex-col gap-1'>
               <h4 className='text-sm font-medium'>{t('Request retry')}</h4>
             </div>
-            <div className='grid min-w-0 gap-6 xl:grid-cols-[minmax(12rem,24rem)_minmax(0,1fr)]'>
+            <div className='grid min-w-0 gap-6 xl:grid-cols-[minmax(12rem,20rem)_minmax(12rem,20rem)_minmax(0,1fr)]'>
+              <FormField
+                control={form.control}
+                name='RelayFirstPayloadTimeout'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      {t('First payload timeout per attempt (seconds)')}
+                    </FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min='0'
+                        max='9223372036'
+                        step='1'
+                        {...safeNumberFieldProps(field)}
+                        onChange={(event) =>
+                          field.onChange(
+                            event.target.value === ''
+                              ? ''
+                              : event.target.valueAsNumber
+                          )
+                        }
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Maximum wait for the first meaningful output on each upstream attempt. 0 disables this timeout. Saved changes apply only to new requests.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
               <FormField
                 control={form.control}
                 name='RetryTimes'
@@ -894,7 +951,9 @@ export function RoutingReliabilitySection({
                       />
                     </FormControl>
                     <FormDescription>
-                      {t('Keep the latest N valid upstream outcomes for health evaluation.')}
+                      {t(
+                        'Keep the latest N valid upstream outcomes for health evaluation.'
+                      )}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -917,7 +976,9 @@ export function RoutingReliabilitySection({
                       />
                     </FormControl>
                     <FormDescription>
-                      {t('Start error-rate evaluation after this many valid outcomes.')}
+                      {t(
+                        'Start error-rate evaluation after this many valid outcomes.'
+                      )}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>

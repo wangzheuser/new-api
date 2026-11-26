@@ -185,7 +185,6 @@ var RelayIdleConnTimeout int // unit is second
 // ResponseHeaderTimeout only bounds the wait for the response headers; once the
 // headers arrive, streaming is unaffected.
 var RelayResponseHeaderTimeout int // unit is second
-var RelayFirstPayloadTimeout time.Duration
 var RelayMaxIdleConns int
 var RelayMaxIdleConnsPerHost int
 

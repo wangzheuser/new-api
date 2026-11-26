@@ -1,9 +1,11 @@
 package model
 
 import (
+	"errors"
 	"maps"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -18,6 +20,8 @@ import (
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"gorm.io/gorm"
 )
+
+var relayFirstPayloadOptionMutex sync.Mutex
 
 type Option struct {
 	Key   string `json:"key" gorm:"primaryKey"`
@@ -34,6 +38,8 @@ func AllOption() ([]*Option, error) {
 func InitOptionMap() {
 	common.OptionMapRWMutex.Lock()
 	common.OptionMap = make(map[string]string)
+
+	common.OptionMap[common.RelayFirstPayloadTimeoutOption] = strconv.FormatInt(int64(common.GetRelayFirstPayloadTimeout()/time.Second), 10)
 
 	// 添加原有的系统配置
 	common.OptionMap["FileUploadPermission"] = strconv.Itoa(common.FileUploadPermission)
@@ -216,6 +222,9 @@ func loadOptionsFromDatabase() {
 	}
 	passkeyOptions := make(map[string]string)
 	for key, value := range operation_setting.MigrateChannelAutoDisableOptions(values) {
+		if key == common.RelayFirstPayloadTimeoutOption {
+			continue
+		}
 		if IsPasskeyDomainOption(key) {
 			passkeyOptions[key] = value
 			continue
@@ -224,6 +233,17 @@ func loadOptionsFromDatabase() {
 			common.SysLog("failed to update option map: " + err.Error())
 		}
 	}
+	// Re-read under the save lock so an older polling snapshot cannot undo a completed save.
+	relayFirstPayloadOptionMutex.Lock()
+	var timeoutOption Option
+	if err := DB.Where(map[string]any{"key": common.RelayFirstPayloadTimeoutOption}).First(&timeoutOption).Error; err == nil {
+		if err := updateOptionMap(timeoutOption.Key, timeoutOption.Value); err != nil {
+			common.SysError(err.Error())
+		}
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		common.SysError("failed to reload first payload timeout")
+	}
+	relayFirstPayloadOptionMutex.Unlock()
 	applyPasskeyDomainOptions(passkeyOptions)
 }
 
@@ -236,6 +256,10 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	if key == common.RelayFirstPayloadTimeoutOption {
+		_, err := common.ParseRelayFirstPayloadTimeout(value)
+		return err
+	}
 	if key == legacyAccessTokenRetireAtKey {
 		return errLegacyRetireAtReadOnly
 	}
@@ -255,6 +279,9 @@ func validateOptionValue(key string, value string) error {
 }
 
 func UpdateOption(key string, value string) error {
+	if key == common.RelayFirstPayloadTimeoutOption {
+		return UpdateOptionsBulk(map[string]string{key: value})
+	}
 	if key == "channel_auto_disable_setting.min_requests" {
 		key = "channel_auto_disable_setting.minimum_sample_size"
 	}
@@ -299,6 +326,10 @@ func UpdateOption(key string, value string) error {
 // is touched — safe for callers that must commit a set of related options
 // atomically (e.g. payment gateway binding).
 func UpdateOptionsBulk(values map[string]string) error {
+	if _, ok := values[common.RelayFirstPayloadTimeoutOption]; ok {
+		relayFirstPayloadOptionMutex.Lock()
+		defer relayFirstPayloadOptionMutex.Unlock()
+	}
 	values = operation_setting.MigrateChannelAutoDisableOptions(values)
 	for k, v := range values {
 		if err := model_setting.ValidateInputPolicyOption(k, v); err != nil {
@@ -367,6 +398,13 @@ func UpdateOptionsBulk(values map[string]string) error {
 }
 
 func updateOptionMap(key string, value string) (err error) {
+	var firstPayloadTimeout time.Duration
+	if key == common.RelayFirstPayloadTimeoutOption {
+		firstPayloadTimeout, err = common.ParseRelayFirstPayloadTimeout(value)
+		if err != nil {
+			return err
+		}
+	}
 	if key == retiredThemeOptionKey || key == legacyAccessTokenRetireAtKey {
 		common.OptionMapRWMutex.Lock()
 		delete(common.OptionMap, key)
@@ -381,6 +419,9 @@ func updateOptionMap(key string, value string) (err error) {
 	common.OptionMap[key] = value
 
 	switch key {
+	case common.RelayFirstPayloadTimeoutOption:
+		common.SetRelayFirstPayloadTimeout(firstPayloadTimeout)
+		return nil
 	case model_setting.SystemPromptOption:
 		return model_setting.SetSystemPrompt(value)
 	case model_setting.ContextTruncationOption:

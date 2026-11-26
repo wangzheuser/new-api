@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -44,6 +45,7 @@ func TestRequestPolicyDatabaseMatrix(t *testing.T) {
 			sqlDB, err := db.DB()
 			require.NoError(t, err)
 			sqlDB.SetMaxOpenConns(1)
+			previousTimeout := common.GetRelayFirstPayloadTimeout()
 			previousDB, previousType, previousSnapshot := DB, common.MainDatabaseType(), CurrentRequestPolicy()
 			common.OptionMapRWMutex.Lock()
 			previousOptions := maps.Clone(common.OptionMap)
@@ -61,12 +63,54 @@ func TestRequestPolicyDatabaseMatrix(t *testing.T) {
 				common.OptionMapRWMutex.Lock()
 				common.OptionMap = previousOptions
 				common.OptionMapRWMutex.Unlock()
+				common.SetRelayFirstPayloadTimeout(previousTimeout)
 				DB = previousDB
 				common.SetMainDatabaseType(previousType)
 				initCol()
 				require.NoError(t, sqlDB.Close())
 			})
 			require.NoError(t, db.AutoMigrate(&Option{}))
+			require.NoError(t, UpdateOption(common.RelayFirstPayloadTimeoutOption, "180"))
+			assert.Equal(t, 180*time.Second, common.GetRelayFirstPayloadTimeout())
+			for _, invalid := range []string{"", "-1", "1.5", "bad", "9223372037"} {
+				assert.Error(t, UpdateOption(common.RelayFirstPayloadTimeoutOption, invalid))
+				assert.Equal(t, 180*time.Second, common.GetRelayFirstPayloadTimeout())
+			}
+			snapshotRead, resumeSync, syncDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			require.NoError(t, db.Callback().Query().After("gorm:query").Register("timeout_old_snapshot", func(tx *gorm.DB) {
+				if _, batch := tx.Statement.Dest.(*[]*Option); batch {
+					close(snapshotRead)
+					<-resumeSync
+				}
+			}))
+			go func() { defer close(syncDone); loadOptionsFromDatabase() }()
+			<-snapshotRead
+			require.NoError(t, UpdateOption(common.RelayFirstPayloadTimeoutOption, "60"))
+			close(resumeSync)
+			<-syncDone
+			require.NoError(t, db.Callback().Query().Remove("timeout_old_snapshot"))
+			assert.Equal(t, time.Minute, common.GetRelayFirstPayloadTimeout(), "an old polling snapshot cannot overwrite a completed save")
+			common.SetRelayFirstPayloadTimeout(time.Second)
+			loadOptionsFromDatabase()
+			loadOptionsFromDatabase()
+			assert.Equal(t, time.Minute, common.GetRelayFirstPayloadTimeout())
+			require.NoError(t, db.Callback().Update().Before("gorm:update").Register("timeout_fail", func(tx *gorm.DB) { tx.AddError(errors.New("save rejected")) }))
+			assert.Error(t, UpdateOption(common.RelayFirstPayloadTimeoutOption, "90"))
+			assert.Equal(t, time.Minute, common.GetRelayFirstPayloadTimeout())
+			require.NoError(t, db.Callback().Update().Remove("timeout_fail"))
+			var savedTimeout Option
+			require.NoError(t, db.Where(map[string]any{"key": common.RelayFirstPayloadTimeoutOption}).First(&savedTimeout).Error)
+			assert.Equal(t, "60", savedTimeout.Value)
+			require.NoError(t, db.Where(map[string]any{"key": common.RelayFirstPayloadTimeoutOption}).Delete(&Option{}).Error)
+			require.NoError(t, db.Callback().Update().Before("gorm:update").Register("timeout_create_fail", func(tx *gorm.DB) { tx.AddError(errors.New("save rejected")) }))
+			assert.Error(t, UpdateOption(common.RelayFirstPayloadTimeoutOption, "90"))
+			var timeoutRows int64
+			require.NoError(t, db.Model(&Option{}).Where(map[string]any{"key": common.RelayFirstPayloadTimeoutOption}).Count(&timeoutRows).Error)
+			assert.Zero(t, timeoutRows, "a failed initial save does not leave an empty option")
+			require.NoError(t, db.Callback().Update().Remove("timeout_create_fail"))
+
+			require.NoError(t, UpdateOption(common.RelayFirstPayloadTimeoutOption, "0"))
+			assert.Zero(t, common.GetRelayFirstPayloadTimeout())
 			var version string
 			query := "SELECT version()"
 			if dialect == "sqlite" {

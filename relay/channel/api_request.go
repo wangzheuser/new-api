@@ -572,6 +572,9 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 
 	var connectionRequested, connectionObtained atomic.Bool
 	if info.IsStream {
+		if info.FirstPayloadTimeout > 0 {
+			info.FirstPayloadDeadline = time.Now().Add(info.FirstPayloadTimeout)
+		}
 		upstreamCtx, upstreamCancel := context.WithCancel(req.Context())
 		req = req.WithContext(upstreamCtx)
 		req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{

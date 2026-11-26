@@ -43,7 +43,13 @@ export function useUpdateOption() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (request: UpdateOptionRequest) => updateSystemOption(request),
+    mutationFn: async (request: UpdateOptionRequest) => {
+      const data = await updateSystemOption(request)
+      if (!data.success) {
+        throw new Error(i18next.t(data.message || 'Failed to update setting'))
+      }
+      return data
+    },
     onSuccess: (data, variables) => {
       if (data.success) {
         // Always refresh system-options
