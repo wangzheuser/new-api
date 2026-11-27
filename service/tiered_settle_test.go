@@ -1092,3 +1092,42 @@ func TestSamePriceCacheReadsRemainInInput(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildTieredTokenParamsOpenAICacheWriteLifetimes(t *testing.T) {
+	const expression = `tier("base", p * 2 + cr * 0.1 + cc * 2.5 + cc12h * 5 + c * 10)`
+	for _, tc := range []struct {
+		name           string
+		expression     string
+		details        *dto.CacheWriteTokenDetails
+		cc, long, cost float64
+	}{
+		{"mixed lifetimes", expression, &dto.CacheWriteTokenDetails{TTL30mTokens: 3000, TTL12hTokens: 4000}, 3000, 4000, 29900},
+		{"explicit zero long writes", expression, &dto.CacheWriteTokenDetails{TTL30mTokens: 7000}, 7000, 0, 19900},
+		{"missing split keeps aggregate", expression, nil, 7000, 0, 19900},
+		{"negative split keeps aggregate", expression, &dto.CacheWriteTokenDetails{TTL30mTokens: 8000, TTL12hTokens: -1000}, 7000, 0, 19900},
+		{"oversized split keeps aggregate", expression, &dto.CacheWriteTokenDetails{TTL12hTokens: 8000}, 7000, 0, 19900},
+		{"inconsistent split keeps aggregate", expression, &dto.CacheWriteTokenDetails{TTL30mTokens: 1, TTL12hTokens: 4000}, 7000, 0, 19900},
+		{"old expression unchanged", `tier("base", p * 2 + cr * 0.1 + cc * 2.5)`, &dto.CacheWriteTokenDetails{TTL30mTokens: 3000, TTL12hTokens: 4000}, 7000, 0, 19900},
+		{"unpriced short writes remain ordinary input", `tier("base", p * 2 + cr * 0.1 + cc12h * 5)`, &dto.CacheWriteTokenDetails{TTL30mTokens: 3000, TTL12hTokens: 4000}, 3000, 4000, 28400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := &dto.Usage{InputTokens: 12000, InputTokensDetails: &dto.InputTokenDetails{CachedTokens: 4000, CacheWriteTokens: 7000, CacheWriteTokensDetails: tc.details}}
+			raw.BillingUsage = dto.NewOpenAIResponsesBillingUsage(raw)
+			canonical := effectiveBillingUsage(raw)
+			params := BuildTieredTokenParams(relayUsage(rootUsage(canonical)), false, billingexpr.UsedVars(tc.expression))
+			assert.Equal(t, float64(12000), params.Len)
+			assert.Equal(t, tc.cc, params.CC)
+			assert.Equal(t, tc.long, params.CC12h)
+			cost, _, err := billingexpr.RunExpr(tc.expression, params)
+			require.NoError(t, err)
+			assert.Equal(t, tc.cost, cost)
+			if tc.long > 0 {
+				snap := &billingexpr.BillingSnapshot{ExprString: tc.expression, ExprHash: billingexpr.ExprHashString(tc.expression), QuotaPerUnit: 500000, GroupRatio: 1, ExprVersion: 1}
+				result, err := billingexpr.ComputeTieredQuota(snap, params)
+				require.NoError(t, err)
+				require.NotNil(t, result.BillingTokens)
+				assert.Equal(t, tc.long, result.BillingTokens.CC12h)
+			}
+		})
+	}
+}

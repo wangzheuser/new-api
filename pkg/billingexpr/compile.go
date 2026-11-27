@@ -8,6 +8,8 @@ import (
 
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/ast"
+	"github.com/expr-lang/expr/checker"
+	"github.com/expr-lang/expr/conf"
 	"github.com/expr-lang/expr/parser"
 	"github.com/expr-lang/expr/vm"
 )
@@ -132,6 +134,7 @@ var compileEnvPrototypeV1 = map[string]any{
 	"cr":          float64(0),
 	"cc":          float64(0),
 	"cc1h":        float64(0),
+	"cc12h":       float64(0),
 	"img":         float64(0),
 	"img_cr":      float64(0),
 	"img_o":       float64(0),
@@ -197,6 +200,10 @@ func compileEntryFromCacheByHash(exprStr, hash string) (*cachedEntry, error) {
 	// bypass validation or a host's unsupported-protocol checks.
 	tree, err := parser.Parse(body)
 	if err != nil {
+		return nil, fmt.Errorf("expr compile error: %w", err)
+	}
+	// Check the original tree before patchers or optimization can hide a branch.
+	if _, err := checker.Check(tree, conf.New(getCompileEnv(version))); err != nil {
 		return nil, fmt.Errorf("expr compile error: %w", err)
 	}
 	fixedPricing := ast.Find(tree.Node, func(node ast.Node) bool {

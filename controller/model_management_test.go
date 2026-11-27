@@ -1668,3 +1668,44 @@ export function parseTaskResult(){return {};}
 		})
 	}
 }
+
+func TestModelPricingSyncDatabaseMatrix(t *testing.T) {
+	for _, dialect := range []struct{ kind, env string }{{"sqlite", ""}, {"mysql", "TEST_MYSQL_DSN"}, {"postgres", "TEST_POSTGRES_DSN"}} {
+		t.Run(dialect.kind, func(t *testing.T) {
+			if dialect.env != "" && os.Getenv(dialect.env) == "" {
+				t.Skip("set " + dialect.env)
+			}
+			db := modelManagementDB(t, dialect.kind, os.Getenv(dialect.env))
+			before, err := model.GetModelPricingSnapshot([]string{"sync-cache-model", "sync-other-model"})
+			require.NoError(t, err)
+			expression := `len <= 272000 ? tier("short", p * 2 + cr * 0.1 + cc * 2.5 + cc12h * 5 + c * 10) : tier("long", p * 4 + cr * 0.2 + cc * 5 + cc12h * 10 + c * 15)`
+			changes := []model.ModelPricingChange{
+				{ModelName: "sync-cache-model", ExpectedVersion: before.EmptyVersion, Pricing: model.PricingValues{"billing_setting.billing_mode": "tiered_expr", "billing_setting.billing_expr": expression}},
+				{ModelName: "sync-other-model", ExpectedVersion: before.EmptyVersion, Pricing: model.PricingValues{"billing_setting.billing_mode": "tiered_expr", "billing_setting.billing_expr": `false ? tier("hidden", unknown_cache * 5) : tier("base", p * 2)`}},
+			}
+			var response struct {
+				Success bool
+				Message string
+			}
+			recorder := modelManagementRequest(t, UpdateModelPricingConfig, http.MethodPatch, "/api/option/model_pricing", map[string]any{"changes": changes}, &response)
+			assert.Equal(t, http.StatusBadRequest, recorder.Code)
+			assert.False(t, response.Success)
+			assert.Contains(t, response.Message, "unknown_cache")
+			after, err := model.GetModelPricingSnapshot([]string{"sync-cache-model", "sync-other-model"})
+			require.NoError(t, err)
+			assert.Equal(t, before, after, "failed batch must leave both models unchanged")
+			changes[1].Pricing = model.PricingValues{"billing_setting.billing_mode": "ratio", "ModelRatio": float64(0)}
+			recorder = modelManagementRequest(t, UpdateModelPricingConfig, http.MethodPatch, "/api/option/model_pricing", map[string]any{"changes": changes}, &response)
+			assert.Equal(t, http.StatusOK, recorder.Code)
+			require.True(t, response.Success)
+			var option model.Option
+			require.NoError(t, db.Where(&model.Option{Key: "billing_setting.billing_expr"}).First(&option).Error)
+			var expressions map[string]string
+			require.NoError(t, common.UnmarshalJsonStr(option.Value, &expressions))
+			assert.Equal(t, expression, expressions["sync-cache-model"])
+			recorder = modelManagementRequest(t, UpdateModelPricingConfig, http.MethodPatch, "/api/option/model_pricing", map[string]any{"changes": changes}, &response)
+			assert.Equal(t, http.StatusConflict, recorder.Code)
+			assert.False(t, response.Success)
+		})
+	}
+}

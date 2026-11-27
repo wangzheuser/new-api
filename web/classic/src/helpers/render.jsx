@@ -2327,6 +2327,7 @@ export function renderTieredModelPrice(opts) {
 
   const lines = [
     buildBillingText('命中档位：{{tier}}', { tier: matchedTier || tier.label }),
+    ...(opts.cache_creation_tokens_12h > 0 ? [buildBillingText('12h缓存创建 Token (cc12h)：{{count}}', { count: opts.cache_creation_tokens_12h })] : []),
     ...priceLines
         .filter(([field]) => tier[field] > 0)
         .map(([field, label]) =>

@@ -1,3 +1,5 @@
+import { t } from 'i18next'
+
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -18,6 +20,10 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
 
+import type {
+  PricingSyncChange,
+  PricingSyncSnapshot,
+} from '../../../../shared/model-pricing-sync'
 import type {
   ConfirmPaymentComplianceResponse,
   FetchUpstreamRatiosRequest,
@@ -104,4 +110,27 @@ export async function fetchUpstreamRatios(request: FetchUpstreamRatiosRequest) {
     request
   )
   return res.data
+}
+
+export async function getPricingSyncSnapshot() {
+  const res = await api.get<{
+    success: boolean
+    message: string
+    data: PricingSyncSnapshot
+  }>('/api/option/model_pricing', {
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
+  return res.data
+}
+
+export async function savePricingSyncChanges(changes: PricingSyncChange[]) {
+  const res = await api.patch<{ success: boolean; message: string }>(
+    '/api/option/model_pricing',
+    { changes },
+    { skipBusinessError: true, skipErrorHandler: true }
+  )
+  if (!res.data.success) {
+    throw new Error(res.data.message || t('Failed to sync prices'))
+  }
 }

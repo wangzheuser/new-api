@@ -380,11 +380,13 @@ const CACHE_FIELDS_TIMED = [
   { field: 'cache_read_unit_cost', labelKey: '缓存读取价格' },
   { field: 'cache_create_unit_cost', labelKey: '缓存创建价格（5分钟）' },
   { field: 'cache_create_1h_unit_cost', labelKey: '缓存创建价格（1小时）' },
+  { field: 'cache_create_12h_unit_cost', labelKey: '缓存创建价格（12小时）' },
 ];
 
 const CACHE_FIELDS_GENERIC = [
   { field: 'cache_read_unit_cost', labelKey: '缓存读取价格' },
   { field: 'cache_create_unit_cost', labelKey: '缓存创建价格' },
+  { field: 'cache_create_12h_unit_cost', labelKey: '缓存创建价格（12小时）' },
 ];
 
 function ExtendedPriceBlock({ tier, index, onUpdate, t }) {
@@ -974,7 +976,7 @@ function evalExprLocally(exprStr, p, c, extraTokenValues) {
     const cacheReadTokens = extraTokenValues.cacheReadTokens || 0;
     const cacheCreateTokens = extraTokenValues.cacheCreateTokens || 0;
     const cacheCreate1hTokens = extraTokenValues.cacheCreate1hTokens || 0;
-    const len = p + cacheReadTokens + cacheCreateTokens + cacheCreate1hTokens;
+    const len = p + cacheReadTokens + cacheCreateTokens + cacheCreate1hTokens + (extraTokenValues.cacheCreate12hTokens || 0);
     const env = { p, c, len, tier: tierFn, max: Math.max, min: Math.min, abs: Math.abs, ceil: Math.ceil, floor: Math.floor };
     for (const field of EXTRA_ESTIMATOR_FIELDS) {
       env[field.var] = extraTokenValues[field.stateKey] || 0;
@@ -1245,6 +1247,7 @@ const LLM_PROMPT_TEMPLATE = `你是一个 AI API 计费表达式设计助手。�
 - cr — 缓存命中（读取）token 数
 - cc — 缓存创建 token 数（5分钟 TTL）
 - cc1h — 缓存创建 token 数（1小时 TTL，Claude 专用）
+- cc12h — 缓存创建 token 数（12小时 TTL，OpenAI 专用）
 - img — 图片输入 token 数
 - ai — 音频输入 token 数
 
@@ -1382,6 +1385,7 @@ export default function TieredPricingEditor({ model, onExprChange, requestRuleEx
   const [cacheReadTokens, setCacheReadTokens] = useState(0);
   const [cacheCreateTokens, setCacheCreateTokens] = useState(0);
   const [cacheCreate1hTokens, setCacheCreate1hTokens] = useState(0);
+  const [cacheCreate12hTokens, setCacheCreate12hTokens] = useState(0);
   const [imageTokens, setImageTokens] = useState(0);
   const [imageOutputTokens, setImageOutputTokens] = useState(0);
   const [audioInputTokens, setAudioInputTokens] = useState(0);
@@ -1493,12 +1497,12 @@ export default function TieredPricingEditor({ model, onExprChange, requestRuleEx
   );
 
   const extraTokenValues = {
-    cacheReadTokens, cacheCreateTokens, cacheCreate1hTokens,
+    cacheReadTokens, cacheCreateTokens, cacheCreate1hTokens, cacheCreate12hTokens,
     imageTokens, imageOutputTokens, audioInputTokens, audioOutputTokens,
   };
   const extraTokenSetters = {
     cacheReadTokens: setCacheReadTokens, cacheCreateTokens: setCacheCreateTokens,
-    cacheCreate1hTokens: setCacheCreate1hTokens, imageTokens: setImageTokens,
+    cacheCreate1hTokens: setCacheCreate1hTokens, cacheCreate12hTokens: setCacheCreate12hTokens, imageTokens: setImageTokens,
     imageOutputTokens: setImageOutputTokens, audioInputTokens: setAudioInputTokens,
     audioOutputTokens: setAudioOutputTokens,
   };
@@ -1511,7 +1515,7 @@ export default function TieredPricingEditor({ model, onExprChange, requestRuleEx
       return result;
     },
     [effectiveExpr, promptTokens, completionTokens,
-      cacheReadTokens, cacheCreateTokens, cacheCreate1hTokens,
+      cacheReadTokens, cacheCreateTokens, cacheCreate1hTokens, cacheCreate12hTokens,
       imageTokens, imageOutputTokens, audioInputTokens, audioOutputTokens],
   );
 

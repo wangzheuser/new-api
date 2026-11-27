@@ -35,6 +35,7 @@ Powered by [expr-lang/expr](https://github.com/expr-lang/expr). Expressions are 
 | `cr` | 缓存命中（读取）token 数 |
 | `cc` | 缓存创建 token 数（Claude 5分钟 TTL / 通用） |
 | `cc1h` | 缓存创建 token 数 — 1小时 TTL（Claude 专用） |
+| `cc12h` | 缓存创建 token 数 — 12小时 TTL（OpenAI 专用） |
 | `img` | 图片输入 token 数 |
 | `img_cr` | 图片缓存读取 token 数；只有表达式显式引用且上游提供有效缓存模态明细时才单独拆分 |
 | `ai` | 音频输入 token 数 |
@@ -69,6 +70,17 @@ Powered by [expr-lang/expr](https://github.com/expr-lang/expr). Expressions are 
 |--------|---------|------|
 | `p * 3 + c * 15` | 500 | 没用 `ao`，音频输出包含在 `c` 里按 $15 计费 |
 | `p * 3 + c * 15 + ao * 50` | 400 | 用了 `ao`，音频 100 从 `c` 中扣除按 $50 计费 |
+
+#### 缓存写入时长
+
+OpenAI 的 `cache_write_tokens_details` 将缓存写入总量拆分为互不交叠的
+`ttl_30m_tokens` 和 `ttl_12h_tokens`。表达式引用 `cc12h` 时，12 小时写入进入
+`cc12h`，其余写入进入 `cc`；两类只在独立计价时从 `p` 中各扣除一次，`len` 不变。
+没有引用 `cc12h` 的旧表达式继续把全部写入放入 `cc`，不自动引入额外倍率。
+缺少 TTL 明细时保留原聚合计费，`cc12h=0`；负数、超出总量或与总量不一致的明细
+记录诊断并回退聚合规则，不根据请求 TTL 推测上游用量。
+引用 `cc12h` 的成功结算在消费日志保存 `cache_creation_tokens_12h` 和 `billing_tokens`。
+表达式在优化和请求规则插桩之前执行类型检查，未执行分支中的未知变量也无法保存。
 
 #### 图片缓存与兼容性
 

@@ -87,6 +87,7 @@ func HasOpenAIUsageTokens(usage *Usage) bool {
 		return true
 	}
 	if usage.PromptTokensDetails.CachedTokens != 0 ||
+		usage.PromptTokensDetails.CacheWriteTokensDetails.HasTokens() ||
 		usage.PromptTokensDetails.CachedCreationTokens != 0 ||
 		usage.PromptTokensDetails.CacheWriteTokens != 0 ||
 		usage.PromptTokensDetails.TextTokens != 0 ||
@@ -155,8 +156,16 @@ func cloneOpenAIUsage(usage *Usage) *Usage {
 	}
 	clone := *usage
 	clone.BillingUsage = nil
+	if writes := usage.PromptTokensDetails.CacheWriteTokensDetails; writes != nil {
+		copy := *writes
+		clone.PromptTokensDetails.CacheWriteTokensDetails = &copy
+	}
 	if usage.InputTokensDetails != nil {
 		inputTokensDetails := *usage.InputTokensDetails
+		if writes := inputTokensDetails.CacheWriteTokensDetails; writes != nil {
+			copy := *writes
+			inputTokensDetails.CacheWriteTokensDetails = &copy
+		}
 		clone.InputTokensDetails = &inputTokensDetails
 	}
 	return &clone

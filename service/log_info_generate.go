@@ -536,13 +536,20 @@ func InjectTieredBillingInfo(other *model.LogOther, relayInfo *relaycommon.Relay
 	other.SetPublic("expr_b64", base64.StdEncoding.EncodeToString([]byte(snap.ExprString)))
 	if result != nil {
 		if tokens := result.BillingTokens; tokens != nil && result.BillingUnit == billingexpr.BillingUnitToken {
-			other.SetPublic("image_cache_tokens", tokens.ImgCR)
-			other.SetPublic("billing_tokens", map[string]float64{
+			if billingexpr.UsedVarsByHash(snap.ExprString, snap.ExprHash)["img_cr"] {
+				other.SetPublic("image_cache_tokens", tokens.ImgCR)
+			}
+			tokensForLog := map[string]float64{
 				"p": tokens.P, "c": tokens.C, "len": tokens.Len,
 				"cr": tokens.CR, "cc": tokens.CC, "cc1h": tokens.CC1h,
 				"img": tokens.Img, "img_cr": tokens.ImgCR, "img_o": tokens.ImgO,
 				"ai": tokens.AI, "ao": tokens.AO,
-			})
+			}
+			if billingexpr.UsedVarsByHash(snap.ExprString, snap.ExprHash)["cc12h"] {
+				tokensForLog["cc12h"] = tokens.CC12h
+				other.SetPublic("cache_creation_tokens_12h", tokens.CC12h)
+			}
+			other.SetPublic("billing_tokens", tokensForLog)
 		}
 		if result.ImageCount != nil {
 			other.SetPublic("image_count", *result.ImageCount)

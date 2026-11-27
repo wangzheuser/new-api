@@ -50,7 +50,7 @@ func MergeUsageNonZero(current *Usage, incoming *Usage) *Usage {
 			details.CacheWriteTokens > 0 ||
 			details.TextTokens > 0 ||
 			details.AudioTokens > 0 ||
-			details.ImageTokens > 0 || details.CachedTokensDetails != nil {
+			details.ImageTokens > 0 || details.CachedTokensDetails != nil || details.CacheWriteTokensDetails != nil {
 			if current.InputTokensDetails == nil {
 				current.InputTokensDetails = &InputTokenDetails{}
 			}
@@ -318,6 +318,11 @@ func mergeInputTokenDetails(current *InputTokenDetails, incoming InputTokenDetai
 	}
 	if incoming.CacheWriteTokens > 0 {
 		current.CacheWriteTokens = incoming.CacheWriteTokens
+	}
+	if incoming.CacheWriteTokensDetails != nil {
+		// Lifetime counts form one snapshot, including an explicitly zero count.
+		writes := *incoming.CacheWriteTokensDetails
+		current.CacheWriteTokensDetails = &writes
 	}
 	if incoming.TextTokens > 0 {
 		current.TextTokens = incoming.TextTokens

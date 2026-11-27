@@ -3776,6 +3776,13 @@
     "Allow this model to use this key again?": "このモデルでこのキーを再度使用しますか？",
     "First payload timeout per attempt (seconds)": "試行ごとの初回出力タイムアウト（秒）",
     "Maximum wait for the first meaningful output on each upstream attempt. 0 disables this timeout. Saved changes apply only to new requests.": "各上流試行で最初の有効な出力を待つ最長時間です。0 で無効になります。保存した変更は新しいリクエストにのみ適用されます。",
-    "Enter whole seconds between 0 and 9223372036": "0 から 9223372036 までの整数の秒数を入力してください"
+    "Enter whole seconds between 0 and 9223372036": "0 から 9223372036 までの整数の秒数を入力してください",
+    "12h缓存创建": "キャッシュ書き込み（12時間）",
+    "12h缓存创建 Token (cc12h)": "12時間キャッシュ書き込みトークン（cc12h）",
+    "12h缓存创建 Token (cc12h)：{{count}}": "12時間キャッシュ書き込みトークン（cc12h）: {{count}}",
+    "12h缓存创建价格": "キャッシュ作成価格（12時間）",
+    "12h缓存创建价格：{{symbol}}{{price}} / 1M tokens": "キャッシュ作成価格（12時間）: {{symbol}}{{price}} / 1M tokens",
+    "缓存创建-12小时": "キャッシュ作成-12時間",
+    "缓存创建价格（12小时）": "キャッシュ作成価格（12時間）"
   }
 }

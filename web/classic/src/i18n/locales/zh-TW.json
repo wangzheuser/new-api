@@ -3800,6 +3800,13 @@
     "Allow this model to use this key again?": "允許此模型再次使用該金鑰？",
     "First payload timeout per attempt (seconds)": "單次首包逾時（秒）",
     "Maximum wait for the first meaningful output on each upstream attempt. 0 disables this timeout. Saved changes apply only to new requests.": "每次上游嘗試等待首個有效輸出的最長時間。0 表示停用此逾時。儲存後僅對新請求生效。",
-    "Enter whole seconds between 0 and 9223372036": "請輸入 0 到 9223372036 之間的整數秒數"
+    "Enter whole seconds between 0 and 9223372036": "請輸入 0 到 9223372036 之間的整數秒數",
+    "12h缓存创建": "快取寫入（12小時）",
+    "12h缓存创建 Token (cc12h)": "12小時快取寫入 Token（cc12h）",
+    "12h缓存创建 Token (cc12h)：{{count}}": "12小時快取寫入 Token（cc12h）: {{count}}",
+    "12h缓存创建价格": "快取建立（12小時）價格",
+    "12h缓存创建价格：{{symbol}}{{price}} / 1M tokens": "快取建立（12小時）價格: {{symbol}}{{price}} / 1M tokens",
+    "缓存创建-12小时": "快取建立-12小時",
+    "缓存创建价格（12小时）": "快取建立價格（12小時）"
   }
 }

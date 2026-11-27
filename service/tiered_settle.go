@@ -33,10 +33,24 @@ func BuildTieredTokenParams(rawUsage any, isClaudeUsageSemantic bool, usedVars m
 	cr := float64(usage.PromptTokensDetails.CachedTokens)
 	cc5m := float64(usage.PromptTokensDetails.CacheCreationTokensTotal())
 	cc1h := float64(0)
+	cc12h := float64(0)
 
 	if usage.UsageSemantic == "anthropic" {
 		cc1h = float64(usage.ClaudeCacheCreation1hTokens)
 		cc5m = float64(usage.ClaudeCacheCreation5mTokens)
+	}
+	if usedVars["cc12h"] && !isClaudeUsageSemantic {
+		if writes := usage.PromptTokensDetails.CacheWriteTokensDetails; writes != nil {
+			total := usage.PromptTokensDetails.CacheCreationTokensTotal()
+			valid := writes.TTL30mTokens >= 0 && writes.TTL12hTokens >= 0 &&
+				writes.TTL12hTokens <= total && writes.TTL30mTokens == total-writes.TTL12hTokens
+			if valid {
+				cc12h = float64(writes.TTL12hTokens)
+				cc5m -= cc12h
+			} else {
+				common.SysError(common.LogText("invalid cache write lifetime breakdown; using aggregate cache billing"))
+			}
+		}
 	}
 
 	img := float64(usage.PromptTokensDetails.ImageTokens)
@@ -99,6 +113,9 @@ func BuildTieredTokenParams(rawUsage any, isClaudeUsageSemantic bool, usedVars m
 		if usedVars["cc1h"] {
 			p -= cc1h
 		}
+		if usedVars["cc12h"] {
+			p -= cc12h
+		}
 		if usedVars["img"] {
 			p -= img
 		}
@@ -132,6 +149,7 @@ func BuildTieredTokenParams(rawUsage any, isClaudeUsageSemantic bool, usedVars m
 		CR:    cr,
 		CC:    cc5m,
 		CC1h:  cc1h,
+		CC12h: cc12h,
 		Img:   img,
 		ImgCR: imgCR,
 		ImgO:  imgO,

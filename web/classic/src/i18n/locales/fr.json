@@ -3807,6 +3807,13 @@
     "Allow this model to use this key again?": "Autoriser ce modèle à réutiliser cette clé ?",
     "First payload timeout per attempt (seconds)": "Délai du premier contenu par tentative (secondes)",
     "Maximum wait for the first meaningful output on each upstream attempt. 0 disables this timeout. Saved changes apply only to new requests.": "Attente maximale du premier contenu utile pour chaque tentative. 0 désactive ce délai. Les modifications enregistrées s’appliquent uniquement aux nouvelles requêtes.",
-    "Enter whole seconds between 0 and 9223372036": "Saisissez un nombre entier de secondes entre 0 et 9223372036"
+    "Enter whole seconds between 0 and 9223372036": "Saisissez un nombre entier de secondes entre 0 et 9223372036",
+    "12h缓存创建": "Écriture du cache (12 h)",
+    "12h缓存创建 Token (cc12h)": "Tokens écrits en cache sur 12 h (cc12h)",
+    "12h缓存创建 Token (cc12h)：{{count}}": "Tokens écrits en cache sur 12 h (cc12h): {{count}}",
+    "12h缓存创建价格": "Prix de création du cache (12 h)",
+    "12h缓存创建价格：{{symbol}}{{price}} / 1M tokens": "Prix de création du cache (12 h): {{symbol}}{{price}} / 1M tokens",
+    "缓存创建-12小时": "Écriture du cache (12 heures)",
+    "缓存创建价格（12小时）": "Prix de création du cache (12 heures)"
   }
 }

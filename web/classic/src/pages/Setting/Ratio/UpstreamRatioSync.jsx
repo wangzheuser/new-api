@@ -49,6 +49,7 @@ import {
   IllustrationNoResultDark,
 } from '@douyinfe/semi-illustrations';
 import ChannelSelectorModal from '../../../components/settings/ChannelSelectorModal';
+import { buildModelPricingSyncChanges } from '../../../../../shared/model-pricing-sync';
 
 const OFFICIAL_RATIO_PRESET_ID = -100;
 const OFFICIAL_RATIO_PRESET_NAME = '官方倍率预设';
@@ -114,6 +115,7 @@ export default function UpstreamRatioSync(props) {
   const [channelEndpoints, setChannelEndpoints] = useState({}); // { channelId: endpoint }
 
   // 差异数据和测试结果
+  const [pricingBaseline, setPricingBaseline] = useState(null);
   const [differences, setDifferences] = useState({});
   const [resolutions, setResolutions] = useState({});
 
@@ -229,6 +231,9 @@ export default function UpstreamRatioSync(props) {
     };
 
     try {
+      setPricingBaseline(null);
+      const baseline = await API.get('/api/option/model_pricing');
+      if (!baseline.data.success) throw new Error(baseline.data.message || t('后端请求失败'));
       const res = await API.post('/api/ratio_sync/fetch', payload);
 
       if (!res.data.success) {
@@ -247,6 +252,7 @@ export default function UpstreamRatioSync(props) {
         );
       }
 
+      setPricingBaseline(baseline.data.data);
       setDifferences(differences);
       setResolutions({});
       setHasSynced(true);
@@ -271,7 +277,6 @@ export default function UpstreamRatioSync(props) {
     'audio_completion_ratio',
   ];
 
-  const numericSyncFields = new Set([...ratioSyncFields, 'model_price']);
   const syncFieldOrder = [
     ...ratioSyncFields,
     'model_price',
@@ -326,18 +331,6 @@ export default function UpstreamRatioSync(props) {
       return 'tiered';
     }
     return 'ratio';
-  }
-
-  function optionKeyBySyncField(ratioType) {
-    const explicit = {
-      billing_mode: 'billing_setting.billing_mode',
-      billing_expr: 'billing_setting.billing_expr',
-    };
-    if (explicit[ratioType]) return explicit[ratioType];
-    return ratioType
-      .split('_')
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-      .join('');
   }
 
   function getUpstreamValue(model, ratioType, sourceName) {
@@ -512,70 +505,19 @@ export default function UpstreamRatioSync(props) {
       return;
     }
 
-    await performSync(currentRatios);
+    await performSync();
   };
 
   const performSync = useCallback(
-    async (currentRatios) => {
-      const finalRatios = {
-        ModelRatio: { ...currentRatios.ModelRatio },
-        CompletionRatio: { ...currentRatios.CompletionRatio },
-        CacheRatio: { ...currentRatios.CacheRatio },
-        CreateCacheRatio: { ...currentRatios.CreateCacheRatio },
-        ImageRatio: { ...currentRatios.ImageRatio },
-        AudioRatio: { ...currentRatios.AudioRatio },
-        AudioCompletionRatio: { ...currentRatios.AudioCompletionRatio },
-        ModelPrice: { ...currentRatios.ModelPrice },
-        'billing_setting.billing_mode': {
-          ...currentRatios['billing_setting.billing_mode'],
-        },
-        'billing_setting.billing_expr': {
-          ...currentRatios['billing_setting.billing_expr'],
-        },
-      };
-
-      Object.entries(resolutions).forEach(([model, ratios]) => {
-        const selectedTypes = Object.keys(ratios);
-        const hasPrice = selectedTypes.includes('model_price');
-        const hasRatio = selectedTypes.some((rt) =>
-          ratioSyncFields.includes(rt),
-        );
-
-        if (hasPrice) {
-          delete finalRatios.ModelRatio[model];
-          delete finalRatios.CompletionRatio[model];
-          delete finalRatios.CacheRatio[model];
-          delete finalRatios.CreateCacheRatio[model];
-          delete finalRatios.ImageRatio[model];
-          delete finalRatios.AudioRatio[model];
-          delete finalRatios.AudioCompletionRatio[model];
-        }
-        if (hasRatio) {
-          delete finalRatios.ModelPrice[model];
-        }
-
-        Object.entries(ratios).forEach(([ratioType, value]) => {
-          const optionKey = optionKeyBySyncField(ratioType);
-          finalRatios[optionKey][model] = numericSyncFields.has(ratioType)
-            ? parseFloat(value)
-            : value;
-        });
-      });
-
+    async () => {
       setLoading(true);
       showInfo(t('正在同步价格，请稍候'));
       let success = false;
       try {
-        const updates = Object.entries(finalRatios).map(([key, value]) =>
-          API.put('/api/option/', {
-            key,
-            value: JSON.stringify(value, null, 2),
-          }),
-        );
-
-        const results = await Promise.all(updates);
-
-        if (results.every((res) => res.data.success)) {
+        if (!pricingBaseline) throw new Error(t('后端请求失败'));
+        const changes = buildModelPricingSyncChanges(pricingBaseline, resolutions);
+        const response = await API.patch('/api/option/model_pricing', { changes });
+        if (response.data.success) {
           showSuccess(t('同步成功'));
           props.refresh();
 
@@ -600,16 +542,16 @@ export default function UpstreamRatioSync(props) {
           setResolutions({});
           success = true;
         } else {
-          showError(t('部分保存失败'));
+          showError(response.data.message || t('部分保存失败'));
         }
       } catch (error) {
-        showError(t('保存失败'));
+        showError(error.response?.data?.message || error.message || t('保存失败'));
       } finally {
         setLoading(false);
       }
       return success;
     },
-    [resolutions, props.options, props.refresh],
+    [resolutions, pricingBaseline, props.refresh],
   );
 
   const getCurrentPageData = (dataSource) => {

@@ -8,6 +8,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestOpenAICacheWriteLifetimesSurviveBillingSnapshotsAndStreamMerge(t *testing.T) {
+	var usage Usage
+	require.NoError(t, kitutil.Unmarshal([]byte(`{"input_tokens":12000,"input_tokens_details":{"cached_tokens":4000,"cache_write_tokens":7000,"cache_write_tokens_details":{"ttl_30m_tokens":3000,"ttl_12h_tokens":4000}}}`), &usage))
+	billing := NewOpenAIResponsesBillingUsage(&usage)
+	require.NotNil(t, billing)
+	usage.InputTokensDetails.CacheWriteTokensDetails.TTL12hTokens = 99
+	canonical, ok := billing.CanonicalUsage()
+	require.True(t, ok)
+	require.NotNil(t, canonical)
+	require.NotNil(t, canonical.PromptTokensDetails.CacheWriteTokensDetails)
+	assert.Equal(t, 4000, canonical.PromptTokensDetails.CacheWriteTokensDetails.TTL12hTokens)
+	encoded, err := kitutil.Marshal(canonical)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"ttl_12h_tokens":4000`)
+	updated := MergeUsageNonZero(canonical, &Usage{PromptTokensDetails: InputTokenDetails{
+		CacheWriteTokens:        7000,
+		CacheWriteTokensDetails: &CacheWriteTokenDetails{TTL30mTokens: 7000, TTL12hTokens: 0},
+	}})
+	assert.Equal(t, 0, updated.PromptTokensDetails.CacheWriteTokensDetails.TTL12hTokens)
+	assert.Equal(t, 7000, updated.PromptTokensDetails.CacheWriteTokensDetails.TTL30mTokens)
+	assert.Nil(t, NewOpenAIResponsesBillingUsage(&Usage{InputTokensDetails: &InputTokenDetails{CacheWriteTokensDetails: &CacheWriteTokenDetails{}}}))
+}
+
 func TestNewGeminiChatBillingUsageRequiresTokenContent(t *testing.T) {
 	require.Nil(t, NewGeminiChatBillingUsage(nil))
 	require.Nil(t, NewGeminiChatBillingUsage(&GeminiUsageMetadata{}))

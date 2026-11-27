@@ -3953,6 +3953,13 @@
     "Allow this model to use this key again?": "Allow this model to use this key again?",
     "First payload timeout per attempt (seconds)": "First payload timeout per attempt (seconds)",
     "Maximum wait for the first meaningful output on each upstream attempt. 0 disables this timeout. Saved changes apply only to new requests.": "Maximum wait for the first meaningful output on each upstream attempt. 0 disables this timeout. Saved changes apply only to new requests.",
-    "Enter whole seconds between 0 and 9223372036": "Enter whole seconds between 0 and 9223372036"
+    "Enter whole seconds between 0 and 9223372036": "Enter whole seconds between 0 and 9223372036",
+    "12h缓存创建": "Cache Write (12h)",
+    "12h缓存创建 Token (cc12h)": "Cache Write (12h) Token (cc12h)",
+    "12h缓存创建 Token (cc12h)：{{count}}": "Cache Write (12h) Token (cc12h): {{count}}",
+    "12h缓存创建价格": "Cache create (12h) price",
+    "12h缓存创建价格：{{symbol}}{{price}} / 1M tokens": "Cache create (12h) price: {{symbol}}{{price}} / 1M tokens",
+    "缓存创建-12小时": "Cache write (12 hours)",
+    "缓存创建价格（12小时）": "Cache create price (12 hours)"
   }
 }

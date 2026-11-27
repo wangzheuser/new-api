@@ -11,6 +11,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCacheWrite12hExpressionAndUnknownVariables(t *testing.T) {
+	const expression = `len <= 272000 ? tier("0_272k", p * 2 + cr * 0.1 + cc * 2.5 + cc12h * 5 + c * 10) : tier("272k_plus", p * 4 + cr * 0.2 + cc * 5 + cc12h * 10 + c * 15)`
+	for _, tc := range []struct {
+		params billingexpr.TokenParams
+		cost   float64
+		tier   string
+	}{
+		{billingexpr.TokenParams{}, 0, "0_272k"},
+		{billingexpr.TokenParams{P: 1000, C: 100, Len: 272000, CC12h: 100}, 3500, "0_272k"},
+		{billingexpr.TokenParams{P: 1000, C: 100, Len: 272001, CC12h: 100}, 6500, "272k_plus"},
+	} {
+		cost, trace, err := billingexpr.RunExpr(expression, tc.params)
+		require.NoError(t, err)
+		assert.Equal(t, tc.cost, cost)
+		assert.Equal(t, tc.tier, trace.MatchedTier)
+	}
+	for _, expression := range []string{
+		`tier("base", cache_typo * 5)`,
+		`false ? tier("hidden", cache_typo * 5) : tier("base", p * 2)`,
+		`param("fast") == true ? tier("hidden", cache_typo * 5) : tier("base", p * 2)`,
+	} {
+		_, err := billingexpr.CompileFromCache(expression)
+		require.ErrorContains(t, err, "unknown name cache_typo")
+	}
+	_, err := billingexpr.CompileFromCache(`let price = 2; tier("base", p * price + max(c, 0))`)
+	require.NoError(t, err)
+}
+
 func TestFixedPriceBranches(t *testing.T) {
 	const expression = `(len <= 32000 ? tier("short", fixed(0.01)) : tier("long", p * 2 + c * 8)) * (param("fast") == true ? 2 : 1)`
 	for _, tc := range []struct {

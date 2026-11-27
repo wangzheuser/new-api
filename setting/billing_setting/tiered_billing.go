@@ -211,6 +211,7 @@ func smokeTestExpr(exprStr string) error {
 		{P: 1000000, C: 1000000, Len: 1000000},
 		{P: 300, C: 100, Len: 1000, CR: 100, Img: 400, ImgCR: 200},
 		{P: 800, C: 50, Len: 1000, AI: 200, AO: 50},
+		{P: 1000, C: 100, Len: 12000, CR: 4000, CC: 3000, CC12h: 4000},
 		{Len: math.MaxInt32, ImgCR: math.MaxInt32},
 	}
 

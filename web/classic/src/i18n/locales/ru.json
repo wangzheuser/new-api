@@ -3827,6 +3827,13 @@
     "Allow this model to use this key again?": "Разрешить модели снова использовать этот ключ?",
     "First payload timeout per attempt (seconds)": "Ожидание первого вывода на попытку (секунды)",
     "Maximum wait for the first meaningful output on each upstream attempt. 0 disables this timeout. Saved changes apply only to new requests.": "Максимальное ожидание первого значимого вывода в каждой попытке. 0 отключает этот тайм-аут. Сохранённые изменения действуют только для новых запросов.",
-    "Enter whole seconds between 0 and 9223372036": "Введите целое число секунд от 0 до 9223372036"
+    "Enter whole seconds between 0 and 9223372036": "Введите целое число секунд от 0 до 9223372036",
+    "12h缓存创建": "Запись в кэш (12 ч)",
+    "12h缓存创建 Token (cc12h)": "Токены записи в кэш на 12 ч (cc12h)",
+    "12h缓存创建 Token (cc12h)：{{count}}": "Токены записи в кэш на 12 ч (cc12h): {{count}}",
+    "12h缓存创建价格": "Цена записи в кэш (12 ч)",
+    "12h缓存创建价格：{{symbol}}{{price}} / 1M tokens": "Цена записи в кэш (12 ч): {{symbol}}{{price}} / 1M tokens",
+    "缓存创建-12小时": "Запись в кэш (12 часов)",
+    "缓存创建价格（12小时）": "Цена записи в кэш (12 часов)"
   }
 }
