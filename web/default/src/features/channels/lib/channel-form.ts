@@ -16,9 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { validateInputPolicies } from '@/features/input-policies/policy'
 import { z } from 'zod'
 
+import { validateInputPolicies } from '@/features/input-policies/policy'
 import { parseHttpStatusCodeRules } from '@/lib/http-status-code-rules'
 import {
   filterModelInputModalitiesForModels,
@@ -44,6 +44,7 @@ import {
   stringifyAdvancedCustomConfig,
   validateAdvancedCustomConfig,
 } from './advanced-custom'
+import { parseAgentHeaderDefaults } from './agent-header-presets'
 import { parseContextFallbackValue } from './model-context-fallback'
 
 // ============================================================================
@@ -295,7 +296,10 @@ export const channelFormSchema = z
       .string()
       .optional()
       .refine(isOptionalJsonObject, ERROR_MESSAGES.INVALID_JSON)
-      .refine(value => validateInputPolicies(value || '{}'), 'Invalid input policy. Check model budgets and percentages.'),
+      .refine(
+        (value) => validateInputPolicies(value || '{}'),
+        'Invalid input policy. Check model budgets and percentages.'
+      ),
     advanced_custom: z.string().optional(),
     other: z.string().optional(),
     // Multi-key options (not sent to backend directly)
@@ -304,6 +308,14 @@ export const channelFormSchema = z
     batch_add_set_key_prefix_2_name: z.boolean().optional(),
     key_mode: z.enum(['append', 'replace']).optional(), // For editing multi-key channels
     // Channel extra settings (stored in setting JSON, not sent directly)
+    agent_header_preset: z.enum(['', 'codex', 'claude']).optional(),
+    agent_header_defaults: z
+      .string()
+      .optional()
+      .refine(
+        (value) => parseAgentHeaderDefaults(value) !== null,
+        ERROR_MESSAGES.INVALID_JSON
+      ),
     force_format: z.boolean().optional(),
     thinking_to_content: z.boolean().optional(),
     proxy: z.string().optional(),
@@ -336,8 +348,7 @@ export const channelFormSchema = z
   })
   .superRefine((values, ctx) => {
     if (
-      values.auto_disable_minimum_sample_size >
-      values.auto_disable_sample_size
+      values.auto_disable_minimum_sample_size > values.auto_disable_sample_size
     ) {
       addRequiredIssue(
         ctx,
@@ -347,6 +358,23 @@ export const channelFormSchema = z
     }
   })
   .superRefine((data, ctx) => {
+    if (data.agent_header_preset) {
+      const headers = parseAgentHeaderDefaults(data.agent_header_defaults)
+      if (
+        !headers ||
+        !Object.entries(headers).some(
+          ([name, value]) =>
+            name.trim().toLowerCase() === 'user-agent' && value.trim()
+        )
+      ) {
+        addRequiredIssue(
+          ctx,
+          'agent_header_defaults',
+          'Default client headers must include User-Agent'
+        )
+      }
+    }
+
     if (!data.multi_key_auto_disable_use_global) {
       const temporaryRules = parseHttpStatusCodeRules(
         data.multi_key_temporary_status_codes
@@ -680,6 +708,8 @@ export function transformChannelToFormDefaults(
 ): ChannelFormValues {
   // Parse channel extra settings from setting field
   let extraSettings = {
+    agent_header_preset: '' as '' | 'codex' | 'claude',
+    agent_header_defaults: '',
     force_format: false,
     thinking_to_content: false,
     proxy: '',
@@ -707,6 +737,14 @@ export function transformChannelToFormDefaults(
         Object.hasOwn(parsed, 'system_prompt_override') &&
         typeof parsed.system_prompt_override === 'boolean'
       extraSettings = {
+        agent_header_preset: ['codex', 'claude'].includes(
+          parsed.agent_header_preset?.client
+        )
+          ? parsed.agent_header_preset.client
+          : '',
+        agent_header_defaults: parsed.agent_header_preset?.headers
+          ? JSON.stringify(parsed.agent_header_preset.headers, null, 2)
+          : '',
         force_format: parsed.force_format || false,
         thinking_to_content: parsed.thinking_to_content || false,
         proxy: parsed.proxy || '',
@@ -908,6 +946,12 @@ function buildSettingJSON(formData: ChannelFormValues): string {
     pass_through_body_enabled: formData.pass_through_body_enabled || false,
     system_prompt: formData.system_prompt || '',
     system_prompt_override: formData.system_prompt_override || false,
+  }
+  if (formData.agent_header_preset) {
+    settingObj.agent_header_preset = {
+      client: formData.agent_header_preset,
+      headers: parseAgentHeaderDefaults(formData.agent_header_defaults) || {},
+    }
   }
   if (Object.keys(formData.model_system_prompts || {}).length > 0) {
     settingObj.model_system_prompts = formData.model_system_prompts

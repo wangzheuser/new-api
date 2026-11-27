@@ -322,6 +322,7 @@ func applyFetchModelsHeaderOverrides(channel *model.Channel, key string, headers
 			HeadersOverride: channel.GetHeaderOverride(),
 		},
 	}
+	info.ChannelSetting.AgentHeaderPreset = channel.GetSetting().AgentHeaderPreset
 	overrides, err := relaychannel.ResolveHeaderOverride(info, nil)
 	if err != nil {
 		return err

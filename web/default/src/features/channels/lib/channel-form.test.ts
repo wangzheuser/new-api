@@ -520,3 +520,53 @@ describe('channel model input modality persistence', () => {
     assert.equal(updateDraft.channel.base_url, 'https://draft.example.com')
   })
 })
+
+describe('agent header presets', () => {
+  test('editing a channel preserves its customized preset and unrelated header override', () => {
+    const channel = createChannel({
+      agent_header_preset: {
+        client: 'codex',
+        headers: {
+          'User-Agent': 'codex_cli_rs/0.180.0',
+          originator: 'codex_cli_rs',
+        },
+      },
+    })
+    channel.header_override = '{"X-Custom":"kept"}'
+    const values = transformChannelToFormDefaults(channel)
+    assert.equal(values.agent_header_preset, 'codex')
+    assert.equal(values.header_override, '{"X-Custom":"kept"}')
+    const payload = transformFormDataToUpdatePayload(values, channel.id)
+    assert.deepEqual(
+      JSON.parse(payload.setting || '{}').agent_header_preset,
+      JSON.parse(channel.setting || '{}').agent_header_preset
+    )
+    values.agent_header_preset = ''
+    const cleared = transformFormDataToUpdatePayload(values, channel.id)
+    assert.equal(
+      JSON.parse(cleared.setting || '{}').agent_header_preset,
+      undefined
+    )
+    assert.equal(cleared.header_override, '{"X-Custom":"kept"}')
+  })
+  test('selected presets reject missing identity and invalid JSON drafts', () => {
+    for (const defaults of ['{}', '{', '{"User-Agent":5}']) {
+      const result = channelFormSchema.safeParse({
+        ...CHANNEL_FORM_DEFAULT_VALUES,
+        name: 'Preset channel',
+        key: 'key',
+        models: 'model',
+        agent_header_preset: 'codex',
+        agent_header_defaults: defaults,
+      })
+      assert.equal(result.success, false)
+      if (!result.success) {
+        assert.ok(
+          result.error.issues.some(
+            (issue) => issue.path[0] === 'agent_header_defaults'
+          )
+        )
+      }
+    }
+  })
+})

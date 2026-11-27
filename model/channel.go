@@ -1185,6 +1185,9 @@ func (channel *Channel) ValidateSettings() error {
 	if err := channelParams.ValidateHTTPTransport(); err != nil {
 		return err
 	}
+	if err := channelParams.ValidateAgentHeaderPreset(); err != nil {
+		return err
+	}
 	if err := channelParams.ValidateSystemPrompts(); err != nil {
 		return err
 	}

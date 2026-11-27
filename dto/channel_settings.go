@@ -79,6 +79,7 @@ func (r ModelContextFallback) ThresholdTokens() int64 {
 }
 
 type ChannelSettings struct {
+	AgentHeaderPreset         *AgentHeaderPreset              `json:"agent_header_preset,omitempty"`
 	TaskPluginKey             string                          `json:"task_plugin_key,omitempty"`
 	TaskExtendPluginKeys      []string                        `json:"task_extend_plugin_keys,omitempty"`
 	ForceFormat               bool                            `json:"force_format,omitempty"`

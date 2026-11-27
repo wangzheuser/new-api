@@ -181,6 +181,7 @@ import {
   collectNewDisallowedStatusCodeRedirects,
 } from '../../lib/status-code-risk-guard'
 import type { Channel } from '../../types'
+import { AgentHeaderPresetFields } from '../agent-header-preset-fields'
 import { useChannels } from '../channels-provider'
 import { AdvancedCustomEditorDialog } from '../dialogs/advanced-custom-editor-dialog'
 import { FetchModelsDialog } from '../dialogs/fetch-models-dialog'
@@ -353,6 +354,7 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     parseSettingsRecord(values.settings).cache_usage_simulation ||
     hasConfiguredOverrideValue(values.param_override) ||
     hasConfiguredOverrideValue(values.header_override) ||
+    Boolean(values.agent_header_preset) ||
     values.advanced_custom?.trim() ||
     hasConfiguredOverrideValue(values.status_code_mapping) ||
     values.tag?.trim() ||
@@ -4844,6 +4846,9 @@ export function ChannelMutateDrawer({
                                 )}
                               />
 
+                              <AgentHeaderPresetFields
+                                disabled={sensitiveLocked || isSubmitting}
+                              />
                               <FormField
                                 control={form.control}
                                 name='header_override'

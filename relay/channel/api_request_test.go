@@ -2,8 +2,12 @@ package channel
 
 import (
 	"context"
+	"github.com/QuantumNous/new-api/dto"
+	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -216,4 +220,119 @@ func TestToWebSocketURL(t *testing.T) {
 	} {
 		assert.Equal(t, want, toWebSocketURL(input), input)
 	}
+}
+
+// The embedded interface supplies unused adaptor methods for the real HTTP request path.
+type agentPresetTestAdaptor struct {
+	Adaptor
+	url string
+}
+
+func (a agentPresetTestAdaptor) GetRequestURL(_ *relaycommon.RelayInfo) (string, error) {
+	return a.url, nil
+}
+func (a agentPresetTestAdaptor) SetupRequestHeader(_ *gin.Context, headers *http.Header, _ *relaycommon.RelayInfo) error {
+	headers.Set("Authorization", "Bearer upstream-key")
+	headers.Set("Content-Type", "application/json")
+	return nil
+}
+
+func TestAgentHeaderPresetUpstreamRequests(t *testing.T) {
+	for _, tc := range []struct {
+		name, client, ua, originator, beta string
+		testRequest                        bool
+		overrides                          map[string]any
+		wantUA, wantOriginator, wantBeta   string
+	}{
+		{name: "curl uses codex defaults despite wildcard", client: "codex", ua: "curl/8.0", overrides: map[string]any{"*": true}, wantUA: "codex_cli_rs/0.172.0", wantOriginator: "codex_cli_rs"},
+		{name: "native codex retains matching identity", client: "codex", ua: "codex-tui/0.180.0", originator: "codex-tui", wantUA: "codex-tui/0.180.0", wantOriginator: "codex-tui"},
+		{name: "mismatched codex identity falls back as a group", client: "codex", ua: "codex-tui/0.180.0", originator: "codex_cli_rs", wantUA: "codex_cli_rs/0.172.0", wantOriginator: "codex_cli_rs"},
+		{name: "other client uses target preset", client: "codex", ua: "claude-cli/2.1.332 (external, cli)", wantUA: "codex_cli_rs/0.172.0", wantOriginator: "codex_cli_rs"},
+		{name: "native claude does not regain omitted beta", client: "claude", ua: "claude-cli/2.1.340 (external, cli)", wantUA: "claude-cli/2.1.340 (external, cli)"},
+		{name: "sdk retains requested beta with default identity", client: "claude", ua: "Anthropic/Python 1.0", beta: "requested-capability", wantUA: "claude-cli/2.1.332 (external, cli)", wantBeta: "requested-capability"},
+		{name: "channel test uses defaults without browser headers", client: "codex", ua: "codex-tui/0.180.0", originator: "codex-tui", testRequest: true, wantUA: "codex_cli_rs/0.172.0", wantOriginator: "codex_cli_rs"},
+		{name: "explicit override wins", client: "codex", ua: "curl/8.0", overrides: map[string]any{"User-Agent": "operator-agent"}, wantUA: "operator-agent", wantOriginator: "codex_cli_rs"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, bodyPassthrough := range []bool{false, true} {
+				preset := &dto.AgentHeaderPreset{Client: tc.client, Headers: map[string]string{"user-agent": "codex_cli_rs/0.172.0", "originator": "codex_cli_rs", "version": "0.172.0"}}
+				if tc.client == "claude" {
+					preset.Headers = map[string]string{"user-agent": "claude-cli/2.1.332 (external, cli)", "x-app": "cli", "anthropic-beta": "preset-beta"}
+				}
+				require.NoError(t, (dto.ChannelSettings{AgentHeaderPreset: preset}).ValidateAgentHeaderPreset())
+				var received http.Header
+				var body string
+				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					received = r.Header.Clone()
+					raw, err := io.ReadAll(r.Body)
+					if err != nil {
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					body = string(raw)
+					w.WriteHeader(http.StatusOK)
+				}))
+				ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+				ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+				ctx.Request.Header.Set("User-Agent", tc.ua)
+				ctx.Request.Header.Set("originator", tc.originator)
+				ctx.Request.Header.Set("anthropic-beta", tc.beta)
+				ctx.Request.Header.Set("Authorization", "Bearer caller-key")
+				ctx.Request.Header.Set("Cookie", "session=caller")
+				ctx.Request.Header.Set("Session_id", "thread-A")
+				overrides := map[string]any{"X-Operator": "kept"}
+				for k, v := range tc.overrides {
+					overrides[k] = v
+				}
+				info := &relaycommon.RelayInfo{IsChannelTest: tc.testRequest, ChannelMeta: &relaycommon.ChannelMeta{HeadersOverride: overrides, ChannelSetting: kitdto.ChannelSettings{AgentHeaderPreset: preset, PassThroughBodyEnabled: bodyPassthrough}}}
+				response, err := DoApiRequest(agentPresetTestAdaptor{url: upstream.URL}, ctx, info, strings.NewReader(`{"model":"example"}`))
+				require.NoError(t, err)
+				require.NoError(t, response.Body.Close())
+				upstream.Close()
+				assert.Equal(t, http.StatusOK, response.StatusCode)
+				assert.Equal(t, tc.wantUA, received.Get("User-Agent"))
+				assert.Equal(t, tc.wantOriginator, received.Get("originator"))
+				assert.Equal(t, tc.wantBeta, received.Get("anthropic-beta"))
+				if tc.name == "native codex retains matching identity" {
+					assert.Equal(t, "thread-A", received.Get("Session_id"))
+				}
+				assert.Equal(t, "Bearer upstream-key", received.Get("Authorization"))
+				assert.Empty(t, received.Get("Cookie"))
+				assert.Equal(t, "kept", received.Get("X-Operator"))
+				assert.Equal(t, `{"model":"example"}`, body)
+			}
+		})
+	}
+}
+
+func TestAgentHeaderPresetValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		preset dto.AgentHeaderPreset
+	}{
+		{"unknown client", dto.AgentHeaderPreset{Client: "unknown"}},
+		{"credential header", dto.AgentHeaderPreset{Client: "codex", Headers: map[string]string{"Authorization": "secret"}}},
+		{"header injection", dto.AgentHeaderPreset{Client: "codex", Headers: map[string]string{"User-Agent": "client\r\nX-Extra: injected"}}},
+		{"duplicate casing", dto.AgentHeaderPreset{Client: "codex", Headers: map[string]string{"User-Agent": "a", "user-agent": "b"}}},
+		{"missing identity", dto.AgentHeaderPreset{Client: "claude", Headers: map[string]string{"x-app": "cli"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Error(t, (dto.ChannelSettings{AgentHeaderPreset: &tc.preset}).ValidateAgentHeaderPreset())
+		})
+	}
+}
+
+func TestAgentHeaderPresetAttemptIsolation(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	ctx.Request.Header.Set("User-Agent", "curl/8.0")
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: kitdto.ChannelSettings{AgentHeaderPreset: &dto.AgentHeaderPreset{Client: "codex", Headers: map[string]string{"user-agent": "codex_cli_rs/0.172.0"}}}}}
+	first, err := processHeaderOverride(info, ctx)
+	require.NoError(t, err)
+	info.ChannelSetting.AgentHeaderPreset = &dto.AgentHeaderPreset{Client: "claude", Headers: map[string]string{"user-agent": "claude-cli/2.1.332 (external, cli)"}}
+	second, err := processHeaderOverride(info, ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "codex_cli_rs/0.172.0", first["user-agent"])
+	assert.Equal(t, "claude-cli/2.1.332 (external, cli)", second["user-agent"])
+	assert.Equal(t, "curl/8.0", ctx.Request.UserAgent())
 }
