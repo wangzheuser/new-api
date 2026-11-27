@@ -60,7 +60,12 @@ import { Label } from '@/components/ui/label'
 import { DynamicPricingBreakdown } from '@/features/pricing/components/dynamic-pricing-breakdown'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
-import { formatLogQuota, formatTokens, formatUseTime } from '@/lib/format'
+import {
+  formatLogQuota,
+  formatNumber,
+  formatTokens,
+  formatUseTime,
+} from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import type { UsageLog } from '../../data/schema'
@@ -441,7 +446,7 @@ function TokenBreakdown(props: { log: UsageLog; other: LogOtherData }) {
   if (cacheWrite > 0 && cacheWrite5m === 0 && cacheWrite1h === 0) {
     rows.push({
       label: t('Cache Write'),
-      value: Math.max(cacheWrite - cacheWrite12h, 0).toLocaleString(),
+      value: formatNumber(Math.max(cacheWrite - cacheWrite12h, 0)),
     })
   }
 
@@ -462,7 +467,7 @@ function TokenBreakdown(props: { log: UsageLog; other: LogOtherData }) {
   if (cacheWrite12h > 0) {
     rows.push({
       label: t('Cache Write (12h)'),
-      value: cacheWrite12h.toLocaleString(),
+      value: formatNumber(cacheWrite12h),
     })
   }
 

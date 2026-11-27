@@ -205,6 +205,11 @@ cp -R "$CLASSIC_TREE/web/classic/dist"/. "$DEFAULT_TREE/web/classic/dist"/
 mkdir -p "$DEFAULT_TREE/web/dist"
 cp -R "$DEFAULT_TREE/web/default/dist"/. "$DEFAULT_TREE/web/dist"/
 
+# Go skips underscore-prefixed directories; frontend dependencies are no longer needed.
+for dependency_dir in "$DEFAULT_TREE/web/node_modules" "$DEFAULT_TREE/web/default/node_modules" "$DEFAULT_TREE/web/classic/node_modules"; do
+  [[ ! -d "$dependency_dir" ]] || mv "$dependency_dir" "${dependency_dir%/*}/_node_modules"
+done
+
 go_start="$(date +%s)"
 export GOCACHE="$WORK/go-cache"
 (cd "$DEFAULT_TREE" && "$GO_BIN" list ./... | grep -vE '/(artifacts/merge-verification|web/node_modules)(/|$)' | xargs "$GO_BIN" test) >"$OUTPUT/logs/go-test.log" 2>&1
