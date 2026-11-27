@@ -138,6 +138,14 @@ export interface LogOtherData {
     is_multi_key?: boolean
     multi_key_index?: number
     use_channel?: (number | string)[]
+    protocol_route?: {
+      capability_source?: string
+      selection_reason?: string
+      upstream_endpoint_type?: string
+      mode?: string
+      quality?: string
+      request_normalizer?: string
+    }
     request_policy?: {
       attempt?: number
       decision?: { action?: string; reason?: string; source?: string }

@@ -90,6 +90,10 @@ func PlanChannelProtocolRoute(channel *model.Channel, modelName string, clientPa
 }
 
 func planChannelProtocolRoute(channelType int, settings dto.ChannelSettings, modelName string, clientPath string, stream bool) (*types.ChannelRoutePlan, error) {
+	return planChannelProtocolRouteExcluding(channelType, settings, modelName, clientPath, stream, nil)
+}
+
+func planChannelProtocolRouteExcluding(channelType int, settings dto.ChannelSettings, modelName string, clientPath string, stream bool, excluded map[constant.EndpointType]bool) (*types.ChannelRoutePlan, error) {
 	clientEndpoint, clientFormat, clientMode, ok := ResolveClientTextProtocol(clientPath)
 	if !ok {
 		return nil, nil
@@ -106,7 +110,7 @@ func planChannelProtocolRoute(channelType int, settings dto.ChannelSettings, mod
 
 	native, source := policy.NativeForModel(modelName)
 	clientCapability := native[clientEndpoint]
-	if protocolCapabilitySupports(clientCapability, stream) {
+	if !excluded[clientEndpoint] && protocolCapabilitySupports(clientCapability, stream) {
 		routeMode := types.ChannelRouteModeNative
 		requestNormalizer := ""
 		switch clientCapability.EffectiveMode() {
@@ -137,7 +141,7 @@ func planChannelProtocolRoute(channelType int, settings dto.ChannelSettings, mod
 
 	candidates := make([]protocolRouteCandidate, 0, len(textProtocolDescriptors))
 	for _, descriptor := range textProtocolDescriptors {
-		if !protocolCapabilitySupports(native[descriptor.EndpointType], stream) {
+		if excluded[descriptor.EndpointType] || !protocolCapabilitySupports(native[descriptor.EndpointType], stream) {
 			continue
 		}
 		route, exists := relayconvert.ResolveRoute(clientFormat, descriptor.RelayFormat, stream)

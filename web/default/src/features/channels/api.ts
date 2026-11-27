@@ -711,3 +711,13 @@ export async function getPrefillGroups(
   const res = await api.get('/api/prefill_group', { params: { type } })
   return res.data
 }
+
+export async function clearChannelProtocolObservations(
+  id: number
+): Promise<{ success: boolean; message?: string }> {
+  const res = await api.delete(
+    `/api/channel/${id}/protocol_observations`,
+    channelActionConfig()
+  )
+  return res.data
+}

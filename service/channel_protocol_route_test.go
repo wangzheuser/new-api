@@ -1,6 +1,13 @@
 package service
 
 import (
+	"context"
+	"fmt"
+	"github.com/gin-gonic/gin"
+	"github.com/go-redis/redis/v8"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -261,4 +268,134 @@ func TestResolveClientTextProtocolExcludesNonGenerationSubpaths(t *testing.T) {
 		_, _, _, ok := ResolveClientTextProtocol(path)
 		assert.False(t, ok, path)
 	}
+}
+
+func TestObservedProtocolRoutesKeepConfigurationAndCredentialsIsolated(t *testing.T) {
+	oldRedis := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = oldRedis })
+	channel := protocolTestChannel(t, dto.ChannelSettings{ProtocolPolicy: &dto.ChannelProtocolPolicy{
+		Native:      map[constant.EndpointType]dto.ProtocolCapability{constant.EndpointTypeOpenAI: {NonStream: true, Stream: true}, constant.EndpointTypeOpenAIResponse: {NonStream: true, Stream: true}},
+		AutoConvert: true, RuntimeFallback: true,
+	}})
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	plan, key, err := PlanObservedProtocolRoute(c, channel, "model", "key-a", false)
+	require.NoError(t, err)
+	require.NotNil(t, plan)
+	assert.Equal(t, constant.EndpointTypeOpenAI, plan.UpstreamEndpointType)
+	MarkProtocolAttempt(c, key, plan.UpstreamEndpointType)
+	RecordProtocolObservation(key, plan.UpstreamEndpointType, false)
+	next, _, err := PlanObservedProtocolRoute(c, channel, "model", "key-a", false)
+	require.NoError(t, err)
+	require.NotNil(t, next)
+	assert.Equal(t, constant.EndpointTypeOpenAIResponse, next.UpstreamEndpointType)
+	assert.Equal(t, "protocol_fallback", next.SelectionReason)
+	fresh, _ := gin.CreateTestContext(httptest.NewRecorder())
+	fresh.Request = c.Request
+	cached, _, err := PlanObservedProtocolRoute(fresh, channel, "model", "key-a", false)
+	require.NoError(t, err)
+	require.NotNil(t, cached)
+	assert.Equal(t, constant.EndpointTypeOpenAIResponse, cached.UpstreamEndpointType)
+	assert.Equal(t, "protocol_observation", cached.SelectionReason)
+	for _, tc := range []struct {
+		model, key string
+		stream     bool
+	}{{"model", "key-b", false}, {"model", "key-a", true}, {"other", "key-a", false}} {
+		separate, _, err := PlanObservedProtocolRoute(fresh, channel, tc.model, tc.key, tc.stream)
+		require.NoError(t, err)
+		require.NotNil(t, separate)
+		assert.Equal(t, constant.EndpointTypeOpenAI, separate.UpstreamEndpointType)
+	}
+	MarkProtocolAttempt(c, key, next.UpstreamEndpointType)
+	exhausted, _, err := PlanObservedProtocolRoute(c, channel, "model", "key-a", false)
+	require.NoError(t, err)
+	assert.Nil(t, exhausted)
+	require.NoError(t, ClearProtocolObservations(context.Background(), channel.Id))
+	restored, _, err := PlanObservedProtocolRoute(fresh, channel, "model", "key-a", false)
+	require.NoError(t, err)
+	require.NotNil(t, restored)
+	assert.Equal(t, constant.EndpointTypeOpenAI, restored.UpstreamEndpointType)
+
+	original, err := common.Marshal(channel.GetSetting())
+	require.NoError(t, err)
+	channel.ModelMapping = common.GetPointer(`{"alias-a":"actual","alias-b":"actual"}`)
+	assert.Equal(t, ProtocolObservationKey(channel, "alias-a", "key-a", false), ProtocolObservationKey(channel, "alias-b", "key-a", false))
+	before := ProtocolObservationKey(channel, "alias-a", "key-a", false)
+	channel.HeaderOverride = common.GetPointer(`{"X-Wire":"new"}`)
+	assert.NotEqual(t, before, ProtocolObservationKey(channel, "alias-a", "key-a", false))
+	channel.HeaderOverride = common.GetPointer(`{"X-Account":"{client_header:X-Account}"}`)
+	assert.NotEqual(t, ProtocolObservationKey(channel, "alias-a", "key-a", false, http.Header{"X-Account": {"one"}}), ProtocolObservationKey(channel, "alias-a", "key-a", false, http.Header{"X-Account": {"two"}}))
+	after, err := common.Marshal(channel.GetSetting())
+	require.NoError(t, err)
+	assert.Equal(t, string(original), string(after), "observations never rewrite static capability configuration")
+	settings := channel.GetSetting()
+	settings.ProtocolPolicy.RuntimeFallback = false
+	channel.SetSetting(settings)
+	disabled, disabledKey, err := PlanObservedProtocolRoute(fresh, channel, "model", "key-a", false)
+	require.NoError(t, err)
+	assert.Nil(t, disabled)
+	assert.Empty(t, disabledKey)
+	settings.ProtocolPolicy.RuntimeFallback = true
+	settings.PassThroughBodyEnabled = true
+	channel.SetSetting(settings)
+	passthrough, _, err := PlanObservedProtocolRoute(fresh, channel, "model", "key-a", false)
+	require.NoError(t, err)
+	assert.Nil(t, passthrough)
+	settings.PassThroughBodyEnabled = false
+	channel.SetSetting(settings)
+	fresh.Request = httptest.NewRequest("POST", "/v1/images/generations", nil)
+	nonText, nonTextKey, err := PlanObservedProtocolRoute(fresh, channel, "model", "key-a", false)
+	require.NoError(t, err)
+	assert.Nil(t, nonText)
+	assert.Empty(t, nonTextKey)
+	for _, body := range []string{`{"previous_response_id":"resp_1"}`, `{"input":[{"encrypted_content":"sealed"}]}`, `{"conversation":{"id":"one"}}`} {
+		var request any
+		require.NoError(t, common.UnmarshalJsonStr(body, &request))
+		assert.False(t, ProtocolRequestReplayable(request))
+	}
+	assert.True(t, ProtocolRequestReplayable(map[string]any{"messages": []any{map[string]any{"role": "user", "content": "hello"}}}))
+	for _, tc := range []struct {
+		status  int
+		message string
+		want    bool
+	}{
+		{400, "This model is only supported on /v1/responses", true},
+		{404, "Model not supported on this endpoint", true},
+		{404, "model does not exist", false}, {401, "unsupported_endpoint", false},
+		{429, "unsupported_endpoint", false}, {503, "unsupported_endpoint", false},
+		{400, "tools not supported on this endpoint", false},
+	} {
+		apiErr := types.NewErrorWithStatusCode(fmt.Errorf("%s", tc.message), types.ErrorCodeBadResponseStatusCode, tc.status, types.ErrOptionWithUpstreamStatusCode(tc.status))
+		assert.Equal(t, tc.want, ProtocolEndpointRefused(apiErr), tc.message)
+	}
+}
+
+func TestProtocolObservationRedisIsolationAndReset(t *testing.T) {
+	addr := os.Getenv("TEST_PROTOCOL_REDIS")
+	if addr == "" {
+		t.Skip("TEST_PROTOCOL_REDIS not configured")
+	}
+	oldRedis, oldRDB := common.RedisEnabled, common.RDB
+	client := redis.NewClient(&redis.Options{Addr: addr})
+	common.RedisEnabled, common.RDB = true, client
+	t.Cleanup(func() { common.RedisEnabled, common.RDB = oldRedis, oldRDB; require.NoError(t, client.Close()) })
+	require.NoError(t, client.Ping(context.Background()).Err())
+	key := "newapi:protocol-observation:v1:900001:test"
+	other := "newapi:protocol-observation:v1:900002:test"
+	RecordProtocolObservation(key, constant.EndpointTypeOpenAI, false)
+	RecordProtocolObservation(other, constant.EndpointTypeOpenAI, true)
+	observation, found := readProtocolObservation(key + ":openai")
+	require.True(t, found)
+	assert.False(t, observation.Supported)
+	ttl, err := client.TTL(context.Background(), key+":openai").Result()
+	require.NoError(t, err)
+	assert.Positive(t, ttl)
+	require.NoError(t, ClearProtocolObservations(context.Background(), 900001))
+	_, found = readProtocolObservation(key + ":openai")
+	assert.False(t, found)
+	observation, found = readProtocolObservation(other + ":openai")
+	require.True(t, found)
+	assert.True(t, observation.Supported)
+	require.NoError(t, ClearProtocolObservations(context.Background(), 900002))
 }

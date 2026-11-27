@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type {
+  ChannelProtocolPolicy,
   ChannelProtocolProbeResponse,
   ModelProtocolProfile,
   ProtocolCapability,
@@ -53,6 +54,11 @@ export const PROTOCOL_PROBE_CLASSIFICATION_LABEL_KEYS = {
 
 export type ProtocolProbeCase = (typeof PROTOCOL_PROBE_CASES)[number]
 export type ProtocolCapabilityState = 'unavailable' | 'native' | 'normalized'
+export const PROTOCOL_CAPABILITY_LABEL_KEYS = {
+  unavailable: 'Unavailable',
+  native: 'Native passthrough',
+  normalized: 'Compatible normalization',
+} as const
 export type ProtocolRequestMode = 'non_stream' | 'stream'
 
 export type ProtocolProbeResultMap = Record<
@@ -65,6 +71,8 @@ export type ProtocolProbeBatch = {
   probeCases: readonly ProtocolProbeCase[]
   expectedResultKeys: readonly string[]
   capabilityLevel: 'endpoint' | 'semantic'
+  protocols?: readonly TextEndpointType[]
+  streams?: readonly boolean[]
   stopped: boolean
 }
 
@@ -211,14 +219,16 @@ export function protocolProbeKey(
  */
 export function createProtocolProbeBatch(
   models: readonly string[],
-  capabilityLevel: 'endpoint' | 'semantic'
+  capabilityLevel: 'endpoint' | 'semantic',
+  protocols: readonly TextEndpointType[] = TEXT_PROTOCOLS,
+  streams: readonly boolean[] = [false, true]
 ): ProtocolProbeBatch {
   const batchModels = [...models]
   const probeCases: readonly ProtocolProbeCase[] =
     capabilityLevel === 'semantic' ? PROTOCOL_PROBE_CASES : ['basic']
   const expectedResultKeys = batchModels.flatMap((model) =>
-    TEXT_PROTOCOLS.flatMap((endpointType) =>
-      [false, true].flatMap((stream) =>
+    protocols.flatMap((endpointType) =>
+      streams.flatMap((stream) =>
         probeCases.map((probeCase) =>
           protocolProbeKey(model, endpointType, stream, probeCase)
         )
@@ -231,6 +241,8 @@ export function createProtocolProbeBatch(
     probeCases,
     expectedResultKeys,
     capabilityLevel,
+    protocols: [...protocols],
+    streams: [...streams],
     stopped: false,
   }
 }
@@ -475,12 +487,13 @@ function probeSuiteRecommendedMode(
 /**
  * Apply a complete probe batch without promoting endpoint reachability to a
  * native capability. Endpoint-only results add normalized capabilities while
- * semantic results replace the selected model profiles.
+ * semantic results update only confirmed capabilities in the selected scope.
  */
 export function applyProtocolProbeResults(
   baseOverrides: Record<string, ModelProtocolProfile>,
   batch: ProtocolProbeBatch,
-  results: ProtocolProbeResultMap
+  results: ProtocolProbeResultMap,
+  defaultNative: ModelProtocolProfile['native'] = {}
 ): Record<string, ModelProtocolProfile> | null {
   if (!isProtocolProbeBatchComplete(batch, results)) {
     return null
@@ -491,8 +504,9 @@ export function applyProtocolProbeResults(
     // Endpoint evidence only expands safe normalization and never replaces stronger declarations.
     let changed = false
     for (const model of batch.models) {
-      const native = nextOverrides[model]?.native ?? {}
-      for (const endpointType of TEXT_PROTOCOLS) {
+      const native =
+        nextOverrides[model]?.native ?? structuredClone(defaultNative)
+      for (const endpointType of batch.protocols ?? TEXT_PROTOCOLS) {
         const currentCapability = native[endpointType]
         if (
           currentCapability &&
@@ -503,7 +517,7 @@ export function applyProtocolProbeResults(
 
         let nonStream = false
         let stream = false
-        for (const isStream of [false, true]) {
+        for (const isStream of batch.streams ?? [false, true]) {
           const result =
             results[protocolProbeKey(model, endpointType, isStream, 'basic')]
           if (
@@ -548,10 +562,12 @@ export function applyProtocolProbeResults(
   }
 
   for (const model of batch.models) {
-    delete nextOverrides[model]
-    const native: ModelProtocolProfile['native'] = {}
+    const native: ModelProtocolProfile['native'] = structuredClone(
+      nextOverrides[model]?.native ?? defaultNative
+    )
+    let modelChanged = false
 
-    for (const endpointType of TEXT_PROTOCOLS) {
+    for (const endpointType of batch.protocols ?? TEXT_PROTOCOLS) {
       const nonStreamMode = probeSuiteRecommendedMode(
         batch,
         results,
@@ -569,8 +585,21 @@ export function applyProtocolProbeResults(
       const sharedMode = nonStreamMode ?? streamMode
       if (!sharedMode) continue
 
-      const nonStream = nonStreamMode === sharedMode
-      const stream = streamMode === sharedMode
+      const old = native[endpointType]
+      const oldMode = effectiveProtocolCapabilityMode(old)
+      if (
+        old &&
+        oldMode !== sharedMode &&
+        ((old.non_stream && !nonStreamMode) || (old.stream && !streamMode))
+      ) {
+        continue
+      }
+      const nonStream =
+        nonStreamMode === sharedMode ||
+        (oldMode === sharedMode && old?.non_stream === true)
+      const stream =
+        streamMode === sharedMode ||
+        (oldMode === sharedMode && old?.stream === true)
       const capability: ProtocolCapability = {
         non_stream: nonStream,
         stream,
@@ -578,16 +607,64 @@ export function applyProtocolProbeResults(
       if (sharedMode === 'normalized') {
         capability.mode = 'normalized'
         if (endpointType === 'anthropic') {
-          capability.reasoning_history = 'strip'
+          capability.reasoning_history = old?.reasoning_history ?? 'strip'
         }
       }
-      native[endpointType] = capability
+      if (!protocolCapabilitiesEqual(native[endpointType], capability)) {
+        native[endpointType] = capability
+        modelChanged = true
+      }
     }
 
-    if (Object.keys(native).length > 0) {
+    if (modelChanged && Object.keys(native).length > 0) {
       nextOverrides[model] = { native }
     }
   }
 
   return nextOverrides
+}
+
+/** A preset fills channel defaults without deleting model exceptions. */
+export function protocolPolicyPreset(
+  policy: ChannelProtocolPolicy,
+  endpoint: TextEndpointType
+): ChannelProtocolPolicy {
+  const normalized = supportsNormalizedProtocol(endpoint)
+  return {
+    ...policy,
+    native: {
+      [endpoint]: {
+        non_stream: true,
+        stream: true,
+        ...(normalized ? { mode: 'normalized' as const } : {}),
+        ...(endpoint === 'anthropic'
+          ? { reasoning_history: 'strip' as const }
+          : {}),
+      },
+    },
+  }
+}
+
+/** Remove only behavior-identical model overrides; other models keep their exact profiles. */
+export function compactProtocolPolicy(
+  policy: ChannelProtocolPolicy
+): ChannelProtocolPolicy {
+  const modelOverrides = { ...policy.model_overrides }
+  for (const model of Object.keys(modelOverrides)) {
+    const native = modelNativeFor(modelOverrides, model)
+    if (!native) {
+      continue
+    }
+    if (
+      Object.keys(native).every((key) =>
+        TEXT_PROTOCOLS.includes(key as TextEndpointType)
+      ) &&
+      TEXT_PROTOCOLS.every((endpoint) =>
+        protocolCapabilitiesEqual(native[endpoint], policy.native[endpoint])
+      )
+    ) {
+      delete modelOverrides[model]
+    }
+  }
+  return { ...policy, model_overrides: modelOverrides }
 }

@@ -48,10 +48,11 @@ type ModelProtocolProfile struct {
 }
 
 type ChannelProtocolPolicy struct {
-	Native         map[constant.EndpointType]ProtocolCapability `json:"native,omitempty"`
-	ModelOverrides map[string]ModelProtocolProfile              `json:"model_overrides,omitempty"`
-	AutoConvert    bool                                         `json:"auto_convert"`
-	MaxQuality     ProtocolConversionQuality                    `json:"max_quality"`
+	Native          map[constant.EndpointType]ProtocolCapability `json:"native,omitempty"`
+	ModelOverrides  map[string]ModelProtocolProfile              `json:"model_overrides,omitempty"`
+	RuntimeFallback bool                                         `json:"runtime_fallback,omitempty"`
+	AutoConvert     bool                                         `json:"auto_convert"`
+	MaxQuality      ProtocolConversionQuality                    `json:"max_quality"`
 }
 
 // ModelContextFallback 定义某个源路由模型的上下文阈值与单次兜底目标。

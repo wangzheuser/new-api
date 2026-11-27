@@ -26,12 +26,14 @@ import type {
 } from '../types'
 import {
   applyProtocolProbeResults,
+  compactProtocolPolicy,
   createProtocolProbeBatch,
   isProtocolProbeBatchComplete,
   isProtocolProbeReady,
   parseModelOverridesDraft,
   promoteCommonModelProtocolCapabilities,
   protocolCapabilityState,
+  protocolPolicyPreset,
   protocolProbeKey,
   PROTOCOL_PROBE_CLASSIFICATION_LABEL_KEYS,
   summarizeModelProtocolOverrides,
@@ -501,4 +503,75 @@ describe('model protocol capability summary and promotion', () => {
       null
     )
   })
+})
+
+test('scoped probes preserve existing capabilities and presets retain exceptions', () => {
+  const batch = createProtocolProbeBatch(
+    ['MODEL_A'],
+    'semantic',
+    ['anthropic'],
+    [true]
+  )
+  assert.equal(batch.expectedResultKeys.length, 6)
+  const base = {
+    MODEL_A: {
+      native: {
+        anthropic: {
+          non_stream: true,
+          stream: true,
+          mode: 'normalized' as const,
+          reasoning_history: 'preserve' as const,
+        },
+      },
+    },
+  }
+  const results = createCompleteProbeResults(batch, () => 'unsupported')
+  assert.deepEqual(applyProtocolProbeResults(base, batch, results), base)
+  const applied = applyProtocolProbeResults(
+    base,
+    batch,
+    createCompleteProbeResults(batch, () => 'normalized')
+  )
+  assert.deepEqual(applied, base)
+  const policy = {
+    native: { openai: { non_stream: true, stream: true } },
+    model_overrides: base,
+    auto_convert: true,
+    runtime_fallback: true,
+    max_quality: 'fair' as const,
+  }
+  const preset = protocolPolicyPreset(policy, 'anthropic')
+  assert.deepEqual(preset.model_overrides, base)
+  assert.equal(preset.native.anthropic?.mode, 'normalized')
+  assert.equal(policy.native.openai.non_stream, true)
+})
+
+test('compacts only model exceptions equal to the default without requiring full coverage', () => {
+  const native = { openai: { non_stream: true, stream: true } }
+  const different = { native: { openai: { non_stream: true, stream: false } } }
+  const policy = {
+    native,
+    model_overrides: { SAME: { native }, DIFFERENT: different },
+    auto_convert: true,
+    max_quality: 'fair' as const,
+  }
+  assert.deepEqual(compactProtocolPolicy(policy).model_overrides, {
+    DIFFERENT: different,
+  })
+  assert.equal(Object.keys(policy.model_overrides).length, 2)
+})
+
+test('partial model probes preserve inherited channel protocols', () => {
+  const native = { openai: { non_stream: true, stream: true } }
+  const batch = createProtocolProbeBatch(
+    ['INHERITED'],
+    'endpoint',
+    ['anthropic'],
+    [true]
+  )
+  const results = createCompleteProbeResults(batch, () => 'normalized')
+  const applied = applyProtocolProbeResults({}, batch, results, native)
+  assert.deepEqual(applied?.INHERITED.native.openai, native.openai)
+  assert.equal(applied?.INHERITED.native.anthropic?.stream, true)
+  assert.deepEqual(native, { openai: { non_stream: true, stream: true } })
 })

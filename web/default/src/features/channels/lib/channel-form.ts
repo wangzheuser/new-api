@@ -169,6 +169,12 @@ function getProtocolPolicyError(value: string | undefined): string | null {
     if (policy.max_quality !== 'good' && policy.max_quality !== 'fair') {
       return 'Conversion quality must be good or fair'
     }
+    if (
+      policy.runtime_fallback !== undefined &&
+      typeof policy.runtime_fallback !== 'boolean'
+    ) {
+      return 'Protocol policy must be valid JSON'
+    }
     if (typeof policy.auto_convert !== 'boolean') {
       return 'Auto conversion must be explicitly enabled or disabled'
     }

@@ -30,5 +30,6 @@ type ChannelRoutePlan struct {
 	RequestSteps         int                         `json:"request_steps"`
 	ResponseSteps        int                         `json:"response_steps"`
 	Stream               bool                        `json:"stream"`
+	SelectionReason      string                      `json:"selection_reason,omitempty"`
 	CapabilitySource     string                      `json:"capability_source,omitempty"`
 }

@@ -44,10 +44,11 @@ type ModelProtocolProfile struct {
 }
 
 type ChannelProtocolPolicy struct {
-	Native         map[types.EndpointType]ProtocolCapability `json:"native,omitempty"`
-	ModelOverrides map[string]ModelProtocolProfile           `json:"model_overrides,omitempty"`
-	AutoConvert    bool                                      `json:"auto_convert"`
-	MaxQuality     ProtocolConversionQuality                 `json:"max_quality"`
+	Native          map[types.EndpointType]ProtocolCapability `json:"native,omitempty"`
+	ModelOverrides  map[string]ModelProtocolProfile           `json:"model_overrides,omitempty"`
+	RuntimeFallback bool                                      `json:"runtime_fallback,omitempty"`
+	AutoConvert     bool                                      `json:"auto_convert"`
+	MaxQuality      ProtocolConversionQuality                 `json:"max_quality"`
 }
 
 type ModelContextFallback struct {

@@ -132,6 +132,7 @@ export interface ModelProtocolProfile {
 export interface ChannelProtocolPolicy {
   native: Partial<Record<TextEndpointType, ProtocolCapability>>
   model_overrides?: Record<string, ModelProtocolProfile>
+  runtime_fallback?: boolean
   auto_convert: boolean
   max_quality: 'good' | 'fair'
 }

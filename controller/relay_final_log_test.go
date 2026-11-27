@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	rootdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -403,5 +405,101 @@ func finalErrorOverrideForTest(message string, statusCode int, code string) map[
 				},
 			},
 		},
+	}
+}
+
+func TestHTTPRelayProtocolFallbackLifecycle(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		status           int
+		message          string
+		enabled, allFail bool
+		retries, want    int
+		multiKey         bool
+	}{
+		{"explicit refusal", 400, "This model is only supported on /v1/responses", true, false, 2, 2, false},
+		{"multi-key fallback", 400, "This model is only supported on /v1/responses", true, false, 2, 2, true},
+		{"explicit endpoint", 404, "Model not supported on this endpoint", true, false, 2, 2, false},
+		{"disabled", 400, "This model is only supported on /v1/responses", false, false, 2, 1, false},
+		{"ambiguous not found", 404, "model does not exist", true, false, 0, 1, false},
+		{"authentication", 401, "invalid credentials", true, false, 0, 1, false},
+		{"rate limit", 429, "rate limit exceeded", true, false, 0, 1, false},
+		{"budget exhausted", 400, "This model is only supported on /v1/responses", true, false, 0, 1, false},
+		{"all protocols refused", 400, "Model not supported on this endpoint", true, true, 4, 2, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dialect := os.Getenv("ATTEMPT_LOG_DB")
+			if dialect == "" {
+				dialect = "sqlite"
+			}
+			db := modelManagementDB(t, dialect, os.Getenv("TEST_"+strings.ToUpper(dialect)+"_DSN"))
+			require.NoError(t, db.AutoMigrate(&model.Log{}, &model.UserSubscription{}))
+			require.NoError(t, db.Create(&model.User{Id: 1, Username: "fixture", Group: "default", Quota: 1000000, Status: common.UserStatusEnabled}).Error)
+			oldRetry, oldMemory, oldRedis := common.RetryTimes, common.MemoryCacheEnabled, common.RedisEnabled
+			oldRatio := ratio_setting.ModelRatio2JSONString()
+			common.RetryTimes, common.MemoryCacheEnabled, common.RedisEnabled = tc.retries, false, false
+			require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"PROTOCOL_TEST":0}`))
+			t.Cleanup(func() {
+				common.RetryTimes, common.MemoryCacheEnabled, common.RedisEnabled = oldRetry, oldMemory, oldRedis
+				require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(oldRatio))
+			})
+			service.InitHttpClient()
+			paths := []string{}
+			keys := []string{}
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				paths = append(paths, r.URL.Path)
+				keys = append(keys, r.Header.Get("Authorization"))
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/v1/chat/completions" || tc.allFail {
+					w.WriteHeader(tc.status)
+					fmt.Fprintf(w, `{"error":{"message":%q,"type":"invalid_request_error"}}`, tc.message)
+					return
+				}
+				fmt.Fprint(w, `{"id":"resp_fixture","object":"response","model":"PROTOCOL_TEST","status":"completed","output":[{"id":"msg_fixture","type":"message","role":"assistant","content":[{"type":"output_text","text":"recovered","annotations":[]}]}],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}`)
+			}))
+			defer upstream.Close()
+			channel := &model.Channel{Name: "protocol-fixture", Type: 1, Key: "fixture", Status: common.ChannelStatusEnabled, Group: "default", Models: "PROTOCOL_TEST", BaseURL: &upstream.URL}
+			if tc.multiKey {
+				channel.Key = "fixture-a\nfixture-b"
+				channel.ChannelInfo = model.ChannelInfo{IsMultiKey: true, MultiKeySize: 2, MultiKeyMode: constant.MultiKeyModePolling}
+			}
+			channel.SetSetting(rootdto.ChannelSettings{ProtocolPolicy: &rootdto.ChannelProtocolPolicy{Native: map[constant.EndpointType]rootdto.ProtocolCapability{constant.EndpointTypeOpenAI: {NonStream: true}, constant.EndpointTypeOpenAIResponse: {NonStream: true}}, AutoConvert: true, RuntimeFallback: tc.enabled}})
+			require.NoError(t, db.Create(channel).Error)
+			require.NoError(t, channel.AddAbilities(db))
+			require.NoError(t, service.ClearProtocolObservations(context.Background(), channel.Id))
+			router := gin.New()
+			router.POST("/v1/chat/completions", func(c *gin.Context) {
+				for _, key := range []string{"id", "user_id"} {
+					c.Set(key, 1)
+				}
+				for _, key := range []string{"group", "token_group", "user_group"} {
+					c.Set(key, "default")
+				}
+				require.Nil(t, middleware.SetupContextForSelectedChannel(c, channel, "PROTOCOL_TEST"))
+				Relay(c, types.RelayFormatOpenAI)
+			})
+			send := func() *httptest.ResponseRecorder {
+				w := httptest.NewRecorder()
+				r := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"PROTOCOL_TEST","messages":[{"role":"user","content":"hello"}]}`))
+				r.Header.Set("Content-Type", "application/json")
+				router.ServeHTTP(w, r)
+				return w
+			}
+			response := send()
+			assert.Len(t, paths, tc.want, response.Body.String())
+			if tc.enabled && !tc.allFail && tc.want == 2 {
+				require.Equal(t, 200, response.Code, response.Body.String())
+				assert.Contains(t, response.Body.String(), "recovered")
+				if tc.multiKey {
+					require.Len(t, keys, 2)
+					assert.Equal(t, keys[0], keys[1], "protocol fallback must retain the current credential")
+					return
+				}
+				paths = nil
+				second := send()
+				require.Equal(t, 200, second.Code, second.Body.String())
+				assert.Equal(t, []string{"/v1/responses"}, paths)
+			}
+		})
 	}
 }

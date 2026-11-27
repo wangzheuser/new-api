@@ -88,6 +88,7 @@ func executeConvertedTextRoute(c *gin.Context, info *relaycommon.RelayInfo, adap
 	if httpResp.StatusCode != http.StatusOK {
 		info.ProtocolEndpointMismatch = httpResp.StatusCode == http.StatusNotFound || httpResp.StatusCode == http.StatusMethodNotAllowed
 		newAPIError := service.RelayErrorHandler(c.Request.Context(), httpResp, false)
+		info.ProtocolEndpointRefused = service.ProtocolEndpointRefused(newAPIError)
 		service.ResetStatusCode(newAPIError, c.GetString("status_code_mapping"))
 		return nil, newAPIError
 	}
@@ -218,6 +219,7 @@ func executeNativeTextRoute(c *gin.Context, info *relaycommon.RelayInfo, adaptor
 	if httpResp.StatusCode != http.StatusOK {
 		info.ProtocolEndpointMismatch = httpResp.StatusCode == http.StatusNotFound || httpResp.StatusCode == http.StatusMethodNotAllowed
 		newAPIError := service.RelayErrorHandler(c.Request.Context(), httpResp, false)
+		info.ProtocolEndpointRefused = service.ProtocolEndpointRefused(newAPIError)
 		service.ResetStatusCode(newAPIError, c.GetString("status_code_mapping"))
 		return nil, newAPIError
 	}

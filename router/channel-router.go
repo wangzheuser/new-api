@@ -63,6 +63,7 @@ var channelPermissionRoutes = []permissionRoute{
 	{method: http.MethodGet, path: "/ops", permission: authz.ChannelRead, handler: controller.GetChannelOps},
 	{method: http.MethodGet, path: "/:id", permission: authz.ChannelRead, handler: controller.GetChannel},
 	{method: http.MethodGet, path: "/test", permission: authz.ChannelOperate, handler: controller.TestAllChannels},
+	{method: http.MethodDelete, path: "/:id/protocol_observations", permission: authz.ChannelOperate, handler: controller.ClearChannelProtocolObservations},
 	{method: http.MethodPost, path: "/test/native", permission: authz.ChannelSensitiveWrite, handler: controller.TestChannelNativeProbeDraft},
 	{method: http.MethodGet, path: "/test/:id", permission: authz.ChannelOperate, handler: controller.TestChannel},
 	{method: http.MethodPost, path: "/test/:id", permission: authz.ChannelOperate, handler: controller.TestChannelPromptEffect},

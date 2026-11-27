@@ -27,6 +27,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	hosttypes "github.com/QuantumNous/new-api/types"
 
@@ -269,11 +270,23 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 		relayInfo.FirstPayloadTimeout = firstPayloadTimeout
 	}
 
+	var protocolRetryChannel *model.Channel
+	protocolRetryKeyIndex := 0
+	protocolReplayChecked, protocolReplayable := false, false
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		relayInfo.RetryIndex = retryParam.GetRetry()
 		channel := testChannel
 		var channelErr *types.NewAPIError
-		if channel == nil {
+		if protocolRetryChannel != nil {
+			channel = protocolRetryChannel
+			protocolRetryChannel = nil
+			if channel.ChannelInfo.IsMultiKey {
+				channelErr = middleware.SetupContextForSelectedChannelKey(c, channel, retryParam.ModelName, protocolRetryKeyIndex)
+			} else {
+				channelErr = middleware.SetupContextForSelectedChannel(c, channel, retryParam.ModelName)
+			}
+			service.RequestPolicy(c).BeginAttempt(channel, relayInfo.UsingGroup)
+		} else if channel == nil {
 			channel, channelErr = getChannel(c, relayInfo, retryParam)
 		} else {
 			service.RequestPolicy(c).BeginAttempt(channel, relayInfo.UsingGroup)
@@ -284,6 +297,27 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 			break
 		}
 
+		observationKey := ""
+		protocolPolicy := channel.GetSetting().ProtocolPolicy
+		if !protocolReplayChecked && protocolPolicy != nil && protocolPolicy.RuntimeFallback {
+			protocolReplayable = service.ProtocolRequestReplayable(relayInfo.Request)
+			protocolReplayChecked = true
+		}
+		if testChannel == nil && protocolReplayable && !model_setting.GetGlobalSettings().PassThroughRequestEnabled {
+			plan, key, planErr := service.PlanObservedProtocolRoute(c, channel, retryParam.ModelName, common.GetContextKeyString(c, constant.ContextKeyChannelKey), relayInfo.IsStream)
+			observationKey = key
+			if planErr != nil || key != "" && plan == nil {
+				if planErr == nil {
+					planErr = errors.New("channel has no untried compatible protocol route")
+				}
+				newAPIError = types.NewError(planErr, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+				break
+			}
+			if plan != nil {
+				common.SetContextKey(c, constant.ContextKeyChannelRoutePlan, *plan)
+			}
+		}
+		relayInfo.ProtocolEndpointRefused = false
 		addUsedChannel(c, channel.Id)
 		bodyStorage, bodyErr := common.GetBodyStorage(c)
 		if bodyErr != nil {
@@ -310,6 +344,9 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 
 		firstPayloadExpired := relayInfo.StreamStatus.FinishFirstPayloadWait()
 		if newAPIError == nil {
+			if observationKey != "" && relayInfo.ChannelRoutePlan != nil {
+				service.RecordProtocolObservation(observationKey, relayInfo.ChannelRoutePlan.UpstreamEndpointType, true)
+			}
 			service.FinishChannelKeyProbe(c, true)
 			if testChannel == nil {
 				service.RecordChannelUpstreamResponseAsync(channel, http.StatusOK,
@@ -363,7 +400,7 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 		if relayInfo.IsContextFallbackActive() && relayInfo.ContextFallback.RouteMode == dto.ContextFallbackModeSame {
 			decision = service.PolicyDecision{Action: "stop", Reason: "same_channel_context_fallback", Source: "system"}
 		}
-		endpointMismatch := relayInfo.ProtocolEndpointMismatch &&
+		endpointMismatch := (relayInfo.ProtocolEndpointMismatch || observationKey != "" && relayInfo.ProtocolEndpointRefused) &&
 			relayInfo.ChannelRoutePlan != nil &&
 			relayInfo.ChannelRoutePlan.RouteMode != hosttypes.ChannelRouteModeLegacy
 		if firstPayloadExpired {
@@ -377,6 +414,18 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 				decision.Reason = "first_payload_timeout"
 			}
 		} else if !localBillingError && endpointMismatch {
+			if observationKey != "" && relayInfo.ProtocolEndpointRefused {
+				service.MarkProtocolAttempt(c, observationKey, relayInfo.ChannelRoutePlan.UpstreamEndpointType)
+				service.RecordProtocolObservation(observationKey, relayInfo.ChannelRoutePlan.UpstreamEndpointType, false)
+				if common.RetryTimes-retryParam.GetRetry() > 0 && !retryBlockedByClientCommit(c, relayInfo) && !types.IsSkipRetryError(newAPIError) && !service.ShouldSkipRetryAfterChannelAffinityFailure(c) && !(relayInfo.IsContextFallbackActive() && relayInfo.ContextFallback.RouteMode == dto.ContextFallbackModeSame) {
+					next, _, planErr := service.PlanObservedProtocolRoute(c, channel, retryParam.ModelName, common.GetContextKeyString(c, constant.ContextKeyChannelKey), relayInfo.IsStream)
+					if planErr == nil && next != nil {
+						protocolRetryChannel = channel
+						protocolRetryKeyIndex = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
+					}
+				}
+			}
+
 			if retryParam.ExcludedChannelIDs == nil {
 				retryParam.ExcludedChannelIDs = make(map[int]struct{})
 			}
@@ -424,6 +473,10 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 					common.GetContextKeyString(c, constant.ContextKeyChannelHealthModel))
 				processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, usingKey, channel.GetAutoBan()), newAPIError, relayInfo, relayFormat == types.RelayFormatOpenAIRealtime)
 			}
+		}
+		if protocolRetryChannel != nil {
+			delete(retryParam.ExcludedChannelIDs, channel.Id)
+			decision = service.PolicyDecision{Action: "retry", Reason: "protocol_fallback", Source: "routing"}
 		}
 		service.FinishChannelKeyProbe(c, false)
 		if relayFormat != types.RelayFormatOpenAIRealtime && decision.Action == "retry" && common.RetryTimes-retryParam.GetRetry() <= 0 {

@@ -205,6 +205,7 @@ type RelayInfo struct {
 	ChannelRoutePlan         *hosttypes.ChannelRoutePlan
 	ClaudeToChatStreamState  any
 	ChatToGeminiStreamState  any
+	ProtocolEndpointRefused  bool
 	ProtocolEndpointMismatch bool
 	SendResponseCount        int
 	ReceivedResponseCount    int

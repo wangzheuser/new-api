@@ -236,6 +236,7 @@ func appendChannelRoutePlan(relayInfo *relaycommon.RelayInfo, adminInfo map[stri
 			"response_conversion_steps": plan.ResponseSteps,
 			"stream":                    plan.Stream,
 			"capability_source":         plan.CapabilitySource,
+			"selection_reason":          plan.SelectionReason,
 		}
 		if plan.RequestNormalizer != "" {
 			protocolRoute["normalization_options"] = plan.NormalizationOptions

@@ -768,6 +768,34 @@ export function DetailsDialog(props: DetailsDialogProps) {
           open={props.open}
         />
 
+        {props.isAdmin && other?.admin_info?.protocol_route && (
+          <div className='space-y-1 rounded-md border p-3 text-xs'>
+            <div>
+              {t('Configuration source')}:{' '}
+              {other.admin_info.protocol_route.capability_source ===
+              'model_override'
+                ? t('Model exception')
+                : t('Channel default')}
+            </div>
+            <div>
+              {t('Protocol selection')}:{' '}
+              {t(
+                other.admin_info.protocol_route.selection_reason ||
+                  'configured_protocol'
+              )}
+            </div>
+            <div>
+              {t('Upstream protocol')}:{' '}
+              {other.admin_info.protocol_route.upstream_endpoint_type}
+            </div>
+            {other.admin_info.protocol_route.request_normalizer && (
+              <div>
+                {t('Compatible normalization')}:{' '}
+                {other.admin_info.protocol_route.request_normalizer}
+              </div>
+            )}
+          </div>
+        )}
         {/* Request conversion (admin only, not for refund) */}
         {showConversion && (
           <DetailSection label={t('Request Conversion')}>

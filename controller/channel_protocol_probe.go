@@ -1,14 +1,19 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"github.com/gin-gonic/gin"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/relaynormalize"
 	"github.com/QuantumNous/new-api/types"
 
@@ -469,4 +474,24 @@ func protocolProbeMaxTokens(options channelTestOptions) uint {
 		return 16
 	}
 	return 32
+}
+
+// ClearChannelProtocolObservations clears only this channel's learned protocol evidence.
+func ClearChannelProtocolObservations(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		common.ApiError(c, errors.New("invalid channel id"))
+		return
+	}
+	if _, err := model.GetChannelById(id, false); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+	defer cancel()
+	if err := service.ClearProtocolObservations(ctx, id); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, nil)
 }
