@@ -39,8 +39,17 @@ type ProtocolCapability struct {
 	ReasoningHistory types.ReasoningHistoryPolicy `json:"reasoning_history,omitempty"`
 }
 
+// Omitted fields inherit the channel default, including future changes.
+type ProtocolCapabilityPatch struct {
+	NonStream        *bool                        `json:"non_stream,omitempty"`
+	Stream           *bool                        `json:"stream,omitempty"`
+	Mode             ProtocolHandlingMode         `json:"mode,omitempty"`
+	ReasoningHistory types.ReasoningHistoryPolicy `json:"reasoning_history,omitempty"`
+}
+
 type ModelProtocolProfile struct {
-	Native map[types.EndpointType]ProtocolCapability `json:"native"`
+	Overrides map[types.EndpointType]ProtocolCapabilityPatch `json:"overrides,omitempty"`
+	Native    map[types.EndpointType]ProtocolCapability      `json:"native,omitempty"`
 }
 
 type ChannelProtocolPolicy struct {

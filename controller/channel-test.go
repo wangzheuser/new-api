@@ -1386,6 +1386,14 @@ func TestChannel(c *gin.Context) {
 
 // TestChannelNativeProbeDraft probes one protocol using the current unsaved channel form draft.
 func TestChannelNativeProbeDraft(c *gin.Context) {
+	testProtocolDraft(c, true)
+}
+
+func TestChannelClientDraft(c *gin.Context) {
+	testProtocolDraft(c, false)
+}
+
+func testProtocolDraft(c *gin.Context, native bool) {
 	request := channelNativeProbeRequest{}
 	if err := c.ShouldBindJSON(&request); err != nil {
 		common.ApiError(c, err)
@@ -1433,11 +1441,37 @@ func TestChannelNativeProbeDraft(c *gin.Context) {
 		common.ApiError(c, errors.New("protocol probe only supports standard compatible and advanced custom channels"))
 		return
 	}
+	if native && probeCase == protocolProbeCaseBasic {
+		// Reachability checks are independent of a partially edited protocol matrix.
+		settings, readErr := probeChannel.ReadSetting()
+		if readErr != nil {
+			common.ApiError(c, readErr)
+			return
+		}
+		settings.ProtocolPolicy = nil
+		probeChannel.SetSetting(settings)
+	}
 	if err := validateChannel(probeChannel, true); err != nil {
 		common.ApiError(c, err)
 		return
 	}
 
+	if !native {
+		userID, err := resolveChannelTestUserID(c)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		result := testChannel(c.Request.Context(), probeChannel, userID, channelTestOptions{model: request.Model, endpointType: request.EndpointType, isStream: request.Stream, transientProbe: true})
+		message := ""
+		if result.localErr != nil {
+			message = compactProbeError(result.localErr.Error(), probeChannel.GetKeys()...)
+		} else if result.newAPIError != nil {
+			message = compactProbeError(result.newAPIError.Error(), probeChannel.GetKeys()...)
+		}
+		c.JSON(http.StatusOK, gin.H{"success": result.localErr == nil && result.newAPIError == nil, "message": message, "upstream_endpoint_type": result.upstreamEndpointType})
+		return
+	}
 	runNativeProtocolProbe(c, probeChannel, request.Model, request.EndpointType, request.Stream, probeCase, true)
 }
 
@@ -1890,6 +1924,10 @@ func classifyMultiKeyErrorMessage(message string) string {
 }
 
 func classifyNativeProbeResult(result testResult) string {
+	var upstream *types.NewAPIError
+	if errors.As(result.localErr, &upstream) && service.ProtocolEndpointRefused(upstream) {
+		return "path_mismatch"
+	}
 	if result.localErr == nil && result.newAPIError == nil && result.upstreamStatus == http.StatusOK {
 		return "confirmed"
 	}

@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/QuantumNous/new-api/constant"
+	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/types"
 )
 
@@ -25,35 +26,19 @@ const (
 	ContextFallbackModeCross    = "cross_channel"
 )
 
-type ProtocolConversionQuality string
-
-type ProtocolHandlingMode string
+type ProtocolConversionQuality = kitdto.ProtocolConversionQuality
+type ProtocolHandlingMode = kitdto.ProtocolHandlingMode
+type ProtocolCapability = kitdto.ProtocolCapability
+type ProtocolCapabilityPatch = kitdto.ProtocolCapabilityPatch
+type ModelProtocolProfile = kitdto.ModelProtocolProfile
+type ChannelProtocolPolicy = kitdto.ChannelProtocolPolicy
 
 const (
-	ProtocolConversionQualityGood  ProtocolConversionQuality = "good"
-	ProtocolConversionQualityFair  ProtocolConversionQuality = "fair"
-	ProtocolHandlingModeNative     ProtocolHandlingMode      = "native"
-	ProtocolHandlingModeNormalized ProtocolHandlingMode      = "normalized"
+	ProtocolConversionQualityGood  = kitdto.ProtocolConversionQualityGood
+	ProtocolConversionQualityFair  = kitdto.ProtocolConversionQualityFair
+	ProtocolHandlingModeNative     = kitdto.ProtocolHandlingModeNative
+	ProtocolHandlingModeNormalized = kitdto.ProtocolHandlingModeNormalized
 )
-
-type ProtocolCapability struct {
-	NonStream        bool                         `json:"non_stream"`
-	Stream           bool                         `json:"stream"`
-	Mode             ProtocolHandlingMode         `json:"mode,omitempty"`
-	ReasoningHistory types.ReasoningHistoryPolicy `json:"reasoning_history,omitempty"`
-}
-
-type ModelProtocolProfile struct {
-	Native map[constant.EndpointType]ProtocolCapability `json:"native"`
-}
-
-type ChannelProtocolPolicy struct {
-	Native          map[constant.EndpointType]ProtocolCapability `json:"native,omitempty"`
-	ModelOverrides  map[string]ModelProtocolProfile              `json:"model_overrides,omitempty"`
-	RuntimeFallback bool                                         `json:"runtime_fallback,omitempty"`
-	AutoConvert     bool                                         `json:"auto_convert"`
-	MaxQuality      ProtocolConversionQuality                    `json:"max_quality"`
-}
 
 // ModelContextFallback 定义某个源路由模型的上下文阈值与单次兜底目标。
 type ModelContextFallback struct {
@@ -171,112 +156,6 @@ func (p ModelSystemPromptPolicy) Validate() error {
 		}
 		if strings.TrimSpace(prompt) == "" || len(prompt) > MaxModelSystemPromptBytes {
 			return fmt.Errorf("invalid model system prompt for model: %s", model)
-		}
-	}
-	return nil
-}
-
-// EffectiveMaxQuality returns the configured conversion ceiling.
-func (p ChannelProtocolPolicy) EffectiveMaxQuality() ProtocolConversionQuality {
-	if p.MaxQuality == "" {
-		return ProtocolConversionQualityFair
-	}
-	return p.MaxQuality
-}
-
-// NativeForModel resolves an exact model override before the channel defaults.
-func (p ChannelProtocolPolicy) NativeForModel(model string) (map[constant.EndpointType]ProtocolCapability, string) {
-	if override, ok := p.ModelOverrides[model]; ok {
-		return override.Native, "model_override"
-	}
-	return p.Native, "channel_default"
-}
-
-// HasNormalizedCapability reports whether any channel or model capability requires wire normalization.
-func (p ChannelProtocolPolicy) HasNormalizedCapability() bool {
-	for _, capability := range p.Native {
-		if capability.EffectiveMode() == ProtocolHandlingModeNormalized {
-			return true
-		}
-	}
-	for _, profile := range p.ModelOverrides {
-		for _, capability := range profile.Native {
-			if capability.EffectiveMode() == ProtocolHandlingModeNormalized {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// EffectiveMode keeps existing capability JSON backward compatible by treating an empty mode as native.
-func (c ProtocolCapability) EffectiveMode() ProtocolHandlingMode {
-	if c.Mode == "" {
-		return ProtocolHandlingModeNative
-	}
-	return c.Mode
-}
-
-// EffectiveReasoningHistoryPolicy keeps normalized Claude capabilities backward compatible.
-func (c ProtocolCapability) EffectiveReasoningHistoryPolicy() types.ReasoningHistoryPolicy {
-	if c.ReasoningHistory == "" {
-		return types.ReasoningHistoryPolicyPreserve
-	}
-	return c.ReasoningHistory
-}
-
-// Validate validates protocol capability declarations stored on a channel.
-func (p ChannelProtocolPolicy) Validate() error {
-	if err := validateNativeProtocolCapabilities(p.Native, "channel"); err != nil {
-		return err
-	}
-	if len(p.ModelOverrides) > MaxModelProtocolOverrides {
-		return fmt.Errorf("model protocol overrides cannot exceed %d", MaxModelProtocolOverrides)
-	}
-	for model, profile := range p.ModelOverrides {
-		trimmedModel := strings.TrimSpace(model)
-		if trimmedModel == "" || trimmedModel != model || len(model) > 255 {
-			return fmt.Errorf("invalid model protocol override: %s", model)
-		}
-		if err := validateNativeProtocolCapabilities(profile.Native, "model "+model); err != nil {
-			return err
-		}
-	}
-	quality := p.EffectiveMaxQuality()
-	if quality != ProtocolConversionQualityGood && quality != ProtocolConversionQualityFair {
-		return fmt.Errorf("invalid protocol conversion quality: %s", p.MaxQuality)
-	}
-	return nil
-}
-
-func validateNativeProtocolCapabilities(capabilities map[constant.EndpointType]ProtocolCapability, scope string) error {
-	if len(capabilities) == 0 {
-		return fmt.Errorf("%s native protocol capabilities are required", scope)
-	}
-	for endpointType, capability := range capabilities {
-		if !IsTextProtocolEndpointType(endpointType) {
-			return fmt.Errorf("invalid text protocol endpoint type: %s", endpointType)
-		}
-		if !capability.NonStream && !capability.Stream {
-			return fmt.Errorf("protocol capability %s for %s must enable non-stream or stream", endpointType, scope)
-		}
-		mode := capability.EffectiveMode()
-		if mode != ProtocolHandlingModeNative && mode != ProtocolHandlingModeNormalized {
-			return fmt.Errorf("invalid protocol handling mode %s for %s in %s", capability.Mode, endpointType, scope)
-		}
-		if mode == ProtocolHandlingModeNormalized &&
-			endpointType != constant.EndpointTypeAnthropic &&
-			endpointType != constant.EndpointTypeOpenAIResponse {
-			return fmt.Errorf("normalized protocol handling is unsupported for %s in %s", endpointType, scope)
-		}
-		if capability.ReasoningHistory != "" {
-			if mode != ProtocolHandlingModeNormalized || endpointType != constant.EndpointTypeAnthropic {
-				return fmt.Errorf("reasoning history policy is only supported for normalized anthropic capabilities in %s", scope)
-			}
-			policy := capability.EffectiveReasoningHistoryPolicy()
-			if policy != types.ReasoningHistoryPolicyPreserve && policy != types.ReasoningHistoryPolicyStrip {
-				return fmt.Errorf("invalid reasoning history policy %s for %s in %s", capability.ReasoningHistory, endpointType, scope)
-			}
 		}
 	}
 	return nil

@@ -31,6 +31,8 @@ import type {
   ChannelPromptTestRequest,
   ChannelPromptTestResponse,
   ChannelProtocolProbeResponse,
+  ChannelProtocolPolicy,
+  TextEndpointType,
   ChannelTestResponse,
   CopyChannelParams,
   CopyChannelResponse,
@@ -263,14 +265,56 @@ export async function testChannelConnectionPrompt(
   return res.data
 }
 
+export async function previewChannelProtocol(
+  data: {
+    model: string
+    endpoint_type: TextEndpointType
+    stream: boolean
+    policy: ChannelProtocolPolicy | null
+    model_mapping?: string
+    pass_through: boolean
+  },
+  signal: AbortSignal
+) {
+  const res = await api.post(
+    '/api/channel/test/protocol_preview',
+    data,
+    channelActionConfig({ signal })
+  )
+  if (!res.data.success) throw new Error(res.data.message)
+  return res.data.data as {
+    upstream_endpoint_type: TextEndpointType
+    upstream_path: string
+    route_mode: string
+    capability_source: string
+  } | null
+}
+
+export async function testChannelClientDraft(
+  data: ChannelNativeProbeRequest,
+  signal: AbortSignal
+) {
+  const res = await api.post(
+    '/api/channel/test/client',
+    data,
+    channelActionConfig({ signal })
+  )
+  return res.data as {
+    success: boolean
+    message?: string
+    upstream_endpoint_type?: TextEndpointType
+  }
+}
+
 /** Probe one native protocol against an immutable unsaved channel draft. */
 export async function probeChannelProtocolDraft(
-  data: ChannelNativeProbeRequest
+  data: ChannelNativeProbeRequest,
+  signal?: AbortSignal
 ): Promise<ChannelProtocolProbeResponse> {
   const res = await api.post(
     '/api/channel/test/native',
     data,
-    channelActionConfig()
+    channelActionConfig({ signal })
   )
   return res.data
 }

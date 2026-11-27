@@ -193,6 +193,49 @@ function getProtocolPolicyError(value: string | undefined): string | null {
         if (!isJsonObjectValue(profile)) {
           return 'Model protocol profile must be an object'
         }
+        if (profile.overrides !== undefined) {
+          if (
+            !isJsonObjectValue(profile.overrides) ||
+            profile.native !== undefined ||
+            !Object.keys(profile.overrides).length
+          ) {
+            return 'Model protocol profile must be an object'
+          }
+          for (const [endpoint, patch] of Object.entries(profile.overrides)) {
+            if (
+              !TEXT_PROTOCOL_ENDPOINTS.has(endpoint) ||
+              !isJsonObjectValue(patch) ||
+              !Object.keys(patch).length
+            ) {
+              return 'Protocol capability must be an object'
+            }
+            if (
+              ['non_stream', 'stream'].some(
+                (mode) =>
+                  patch[mode] !== undefined && typeof patch[mode] !== 'boolean'
+              )
+            ) {
+              return 'Protocol capability must be an object'
+            }
+            const defaults = isJsonObjectValue(policy.native)
+              ? policy.native[endpoint]
+              : undefined
+            const effective: Record<string, unknown> = {
+              ...(isJsonObjectValue(defaults) ? defaults : {}),
+              ...patch,
+              non_stream: true,
+            }
+            if (
+              patch.mode === 'native' &&
+              patch.reasoning_history === undefined
+            ) {
+              delete effective.reasoning_history
+            }
+            const error = getNativeCapabilitiesError({ [endpoint]: effective })
+            if (error) return error
+          }
+          continue
+        }
         const profileError = getNativeCapabilitiesError(profile.native)
         if (profileError) return profileError
       }
@@ -490,7 +533,9 @@ export const channelFormSchema = z
           policy.native,
           ...Object.values(policy.model_overrides || {}).map(
             (profile: unknown) =>
-              isJsonObjectValue(profile) ? profile.native : undefined
+              isJsonObjectValue(profile)
+                ? (profile.overrides ?? profile.native)
+                : undefined
           ),
         ]
         const hasNormalizedCapability = allProfiles.some(

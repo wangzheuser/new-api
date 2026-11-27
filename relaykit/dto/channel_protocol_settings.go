@@ -2,6 +2,7 @@ package dto
 
 import (
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -35,9 +36,43 @@ func (p ChannelProtocolPolicy) EffectiveMaxQuality() ProtocolConversionQuality {
 
 func (p ChannelProtocolPolicy) NativeForModel(model string) (map[types.EndpointType]ProtocolCapability, string) {
 	if override, ok := p.ModelOverrides[model]; ok {
-		return override.Native, "model_override"
+		if override.Overrides == nil {
+			return override.Native, "model_override"
+		}
+		native := maps.Clone(p.Native)
+		if native == nil {
+			native = make(map[types.EndpointType]ProtocolCapability)
+		}
+		for endpoint, patch := range override.Overrides {
+			cap := patch.apply(native[endpoint])
+			if cap.Stream || cap.NonStream {
+				native[endpoint] = cap
+			} else {
+				delete(native, endpoint)
+			}
+		}
+		return native, "model_override"
 	}
 	return p.Native, "channel_default"
+}
+
+func (r ProtocolCapabilityPatch) apply(cap ProtocolCapability) ProtocolCapability {
+	if r.NonStream != nil {
+		cap.NonStream = *r.NonStream
+	}
+	if r.Stream != nil {
+		cap.Stream = *r.Stream
+	}
+	if r.Mode != "" {
+		cap.Mode = r.Mode
+		if r.Mode == ProtocolHandlingModeNative {
+			cap.ReasoningHistory = ""
+		}
+	}
+	if r.ReasoningHistory != "" {
+		cap.ReasoningHistory = r.ReasoningHistory
+	}
+	return cap
 }
 
 func (p ChannelProtocolPolicy) HasNormalizedCapability() bool {
@@ -46,8 +81,9 @@ func (p ChannelProtocolPolicy) HasNormalizedCapability() bool {
 			return true
 		}
 	}
-	for _, profile := range p.ModelOverrides {
-		for _, capability := range profile.Native {
+	for model := range p.ModelOverrides {
+		native, _ := p.NativeForModel(model)
+		for _, capability := range native {
 			if capability.EffectiveMode() == ProtocolHandlingModeNormalized {
 				return true
 			}
@@ -80,6 +116,23 @@ func (p ChannelProtocolPolicy) Validate() error {
 	for model, profile := range p.ModelOverrides {
 		if strings.TrimSpace(model) == "" || strings.TrimSpace(model) != model || len(model) > 255 {
 			return fmt.Errorf("invalid model protocol override: %s", model)
+		}
+		if profile.Overrides != nil {
+			if profile.Native != nil || len(profile.Overrides) == 0 {
+				return fmt.Errorf("invalid protocol overrides for model %s", model)
+			}
+			for endpoint, patch := range profile.Overrides {
+				if patch == (ProtocolCapabilityPatch{}) {
+					return fmt.Errorf("empty protocol override for %s", endpoint)
+				}
+				cap := patch.apply(p.Native[endpoint])
+				// A patch may intentionally turn off both request modes.
+				cap.NonStream = true
+				if err := validateNativeProtocolCapabilities(map[types.EndpointType]ProtocolCapability{endpoint: cap}, "model "+model); err != nil {
+					return err
+				}
+			}
+			continue
 		}
 		if err := validateNativeProtocolCapabilities(profile.Native, "model "+model); err != nil {
 			return err

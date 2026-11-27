@@ -17,577 +17,127 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
-import { describe, test } from 'node:test'
+import { test } from 'node:test'
 
 import { createInstance } from 'i18next'
 
 import zh from '@/i18n/locales/zh.json'
 
-import type {
-  ChannelProtocolProbeResponse,
-  ModelProtocolProfile,
-  TextEndpointType,
-} from '../types'
+import type { ChannelProtocolProbeResponse } from '../types'
 import {
-  applyProtocolProbeResults,
-  compactProtocolPolicy,
-  createProtocolProbeBatch,
-  isProtocolProbeBatchComplete,
-  isProtocolProbeReady,
-  parseModelOverridesDraft,
-  promoteCommonModelProtocolCapabilities,
-  protocolCapabilityState,
-  protocolPolicyPreset,
-  protocolProbeKey,
-  PROTOCOL_PROBE_CLASSIFICATION_LABEL_KEYS,
-  summarizeModelProtocolOverrides,
   TEXT_PROTOCOLS,
+  REQUEST_MODES,
+  applyDetectedProtocols,
+  withAvailability,
+  emptyPolicy,
+  profileFor,
+  protocolOverrides,
+  setModelOverrides,
   textProtocolLabel,
-  updateProtocolCapabilityState,
-  type ProtocolProbeBatch,
-  type ProtocolProbeResultMap,
 } from './protocol-policy'
-
-type ProbeRecommendation = 'native' | 'normalized' | 'unsupported'
 
 test('protocol names use Chinese labels and preserve unfamiliar endpoint IDs', async () => {
   const i18n = createInstance()
   await i18n.init({ lng: 'zh', resources: { zh } })
-
   assert.deepEqual(
-    TEXT_PROTOCOLS.map((endpoint) => textProtocolLabel(endpoint, i18n.t)),
+    TEXT_PROTOCOLS.map((e) => textProtocolLabel(e, i18n.t)),
     ['聊天', 'OpenAI 响应', 'Claude 消息', 'Gemini 内容生成']
   )
   assert.equal(textProtocolLabel('other-endpoint', i18n.t), 'other-endpoint')
 })
-
-describe('protocol probe classification labels', () => {
-  test('maps every response classification to a stable translation key', () => {
-    const expected: Record<
-      ChannelProtocolProbeResponse['classification'],
-      string
-    > = {
-      confirmed: 'Confirmed',
-      path_mismatch: 'Path mismatch',
-      auth_error: 'Authentication failed',
-      rate_limited: 'Rate limited',
-      upstream_error: 'Upstream error',
-      transport_error: 'Transport error',
-    }
-
-    assert.deepEqual(PROTOCOL_PROBE_CLASSIFICATION_LABEL_KEYS, expected)
-  })
-})
-
-/**
- * Build a deterministic complete result set for one probe batch.
- */
-function createCompleteProbeResults(
-  batch: ProtocolProbeBatch,
-  recommendationFor: (
-    endpointType: TextEndpointType
-  ) => ProbeRecommendation = () => 'unsupported'
-): ProtocolProbeResultMap {
-  const results: ProtocolProbeResultMap = {}
-  for (const model of batch.models) {
-    for (const endpointType of TEXT_PROTOCOLS) {
-      for (const stream of [false, true]) {
-        for (const probeCase of batch.probeCases) {
-          const recommendation = recommendationFor(endpointType)
-          const capabilityLevel =
-            probeCase === 'basic' ? 'endpoint' : 'semantic'
-          const result: ChannelProtocolProbeResponse = {
-            success: true,
-            model,
-            endpoint_type: endpointType,
-            stream,
-            http_status: 200,
-            classification: 'confirmed',
-            probe_case: probeCase,
-            capability_level: capabilityLevel,
-            effective_route_mode:
-              recommendation === 'normalized' ? 'normalized' : 'native',
-            recommended_mode:
-              capabilityLevel === 'endpoint' && recommendation === 'native'
-                ? 'unsupported'
-                : recommendation,
-          }
-          results[protocolProbeKey(model, endpointType, stream, probeCase)] =
-            result
-        }
-      }
-    }
-  }
-  return results
-}
-
-describe('model protocol overrides draft', () => {
-  test('treats blank input as an empty object and validates JSON shape', () => {
-    assert.deepEqual(parseModelOverridesDraft('   \n'), {
-      success: true,
-      value: {},
-    })
-    assert.equal(
-      parseModelOverridesDraft(
-        '{"MODEL_A":{"native":{"anthropic":{"non_stream":true,"stream":true,"mode":"normalized"}}}}'
-      ).success,
-      true
-    )
-    assert.deepEqual(parseModelOverridesDraft('{'), {
-      success: false,
-      error: 'invalid_json',
-    })
-    assert.deepEqual(parseModelOverridesDraft('[]'), {
-      success: false,
-      error: 'not_object',
-    })
-  })
-})
-
-describe('protocol probe readiness', () => {
-  test('accepts saved credentials or a current unsaved key after model selection', () => {
-    assert.equal(isProtocolProbeReady(42, '', 1), true)
-    assert.equal(isProtocolProbeReady(undefined, ' draft-key ', 1), true)
-    assert.equal(isProtocolProbeReady(undefined, '', 1), false)
-    assert.equal(isProtocolProbeReady(42, '', 0), false)
-  })
-})
-
-describe('three-state protocol capabilities', () => {
-  test('round-trips unavailable, native, and normalized states', () => {
-    const native = updateProtocolCapabilityState(
-      undefined,
-      'anthropic',
-      'non_stream',
-      'native'
-    )
-    assert.deepEqual(native, { non_stream: true, stream: false })
-    assert.equal(
-      protocolCapabilityState(native || undefined, 'non_stream'),
-      'native'
-    )
-
-    const normalized = updateProtocolCapabilityState(
-      native || undefined,
-      'anthropic',
-      'stream',
-      'normalized'
-    )
-    assert.deepEqual(normalized, {
+const policy = {
+  ...emptyPolicy,
+  native: {
+    openai: { non_stream: true, stream: true },
+    anthropic: {
       non_stream: true,
-      stream: true,
-      mode: 'normalized',
-      reasoning_history: 'strip',
-    })
-    assert.equal(
-      protocolCapabilityState(normalized || undefined, 'non_stream'),
-      'normalized'
-    )
-    assert.equal(
-      protocolCapabilityState(normalized || undefined, 'stream'),
-      'normalized'
-    )
-
-    const withoutNormal = updateProtocolCapabilityState(
-      normalized || undefined,
-      'anthropic',
-      'non_stream',
-      'unavailable'
-    )
-    assert.deepEqual(withoutNormal, {
-      non_stream: false,
-      stream: true,
-      mode: 'normalized',
-      reasoning_history: 'strip',
-    })
-  })
-})
-
-describe('protocol probe batches', () => {
-  test('distinguishes endpoint-only and semantic task scopes', () => {
-    const endpointBatch = createProtocolProbeBatch(['MODEL_A'], 'endpoint')
-    const semanticBatch = createProtocolProbeBatch(['MODEL_A'], 'semantic')
-    assert.equal(endpointBatch.expectedResultKeys.length, 8)
-    assert.equal(semanticBatch.expectedResultKeys.length, 48)
-    assert.equal(
-      isProtocolProbeBatchComplete(
-        endpointBatch,
-        createCompleteProbeResults(endpointBatch)
-      ),
-      true
-    )
-
-    const results = createCompleteProbeResults(semanticBatch)
-    delete results[semanticBatch.expectedResultKeys[0]]
-    assert.equal(isProtocolProbeBatchComplete(semanticBatch, results), false)
-    assert.equal(
-      isProtocolProbeBatchComplete(
-        { ...semanticBatch, stopped: true },
-        createCompleteProbeResults(semanticBatch)
-      ),
-      false
-    )
-  })
-
-  test('applies only normalized endpoint suggestions without replacing stronger configuration', () => {
-    const batch = createProtocolProbeBatch(['MODEL_A', 'MODEL_C'], 'endpoint')
-    const results = createCompleteProbeResults(batch, (endpointType) =>
-      endpointType === 'anthropic' || endpointType === 'openai-response'
-        ? 'normalized'
-        : 'unsupported'
-    )
-    const ignoredLevelKey = protocolProbeKey(
-      'MODEL_C',
-      'openai-response',
-      false,
-      'basic'
-    )
-    results[ignoredLevelKey] = {
-      ...results[ignoredLevelKey],
-      capability_level: 'semantic',
-    }
-    const ignoredFailureKey = protocolProbeKey(
-      'MODEL_C',
-      'openai-response',
-      true,
-      'basic'
-    )
-    results[ignoredFailureKey] = {
-      ...results[ignoredFailureKey],
-      success: false,
-      classification: 'upstream_error',
-    }
-    const partialClaudeKey = protocolProbeKey(
-      'MODEL_C',
-      'anthropic',
-      true,
-      'basic'
-    )
-    results[partialClaudeKey] = {
-      ...results[partialClaudeKey],
-      recommended_mode: 'unsupported',
-    }
-
-    const applied = applyProtocolProbeResults(
-      {
-        MODEL_A: {
-          native: {
-            openai: { non_stream: true, stream: true },
-            'openai-response': { non_stream: true, stream: false },
-            anthropic: {
-              non_stream: false,
-              stream: true,
-              mode: 'normalized',
-              reasoning_history: 'preserve',
-            },
-          },
-        },
-        MODEL_B: {
-          native: { gemini: { non_stream: true, stream: false } },
-        },
-      },
-      batch,
-      results
-    )
-
-    assert.deepEqual(applied, {
-      MODEL_A: {
-        native: {
-          openai: { non_stream: true, stream: true },
-          'openai-response': { non_stream: true, stream: false },
-          anthropic: {
-            non_stream: true,
-            stream: true,
-            mode: 'normalized',
-            reasoning_history: 'preserve',
-          },
-        },
-      },
-      MODEL_B: {
-        native: { gemini: { non_stream: true, stream: false } },
-      },
-      MODEL_C: {
-        native: {
-          anthropic: {
-            non_stream: true,
-            stream: false,
-            mode: 'normalized',
-            reasoning_history: 'strip',
-          },
-        },
-      },
-    })
-  })
-
-  test('does not apply native, unsupported, failed, or incomplete endpoint results', () => {
-    const batch = createProtocolProbeBatch(['MODEL_A'], 'endpoint')
-    const nativeResults = createCompleteProbeResults(batch)
-    nativeResults[batch.expectedResultKeys[0]].recommended_mode = 'native'
-    assert.equal(applyProtocolProbeResults({}, batch, nativeResults), null)
-
-    const failedResults = createCompleteProbeResults(batch, () => 'normalized')
-    for (const result of Object.values(failedResults)) {
-      result.success = false
-      result.classification = 'transport_error'
-    }
-    assert.equal(applyProtocolProbeResults({}, batch, failedResults), null)
-
-    const incompleteResults = createCompleteProbeResults(
-      batch,
-      () => 'normalized'
-    )
-    delete incompleteResults[batch.expectedResultKeys[0]]
-    assert.equal(applyProtocolProbeResults({}, batch, incompleteResults), null)
-    assert.equal(
-      applyProtocolProbeResults(
-        {},
-        { ...batch, stopped: true },
-        createCompleteProbeResults(batch, () => 'normalized')
-      ),
-      null
-    )
-  })
-
-  test('applies a complete semantic suite without upgrading normalized routes', () => {
-    const batch = createProtocolProbeBatch(['MODEL_A'], 'semantic')
-    const applied = applyProtocolProbeResults(
-      {
-        MODEL_B: {
-          native: { openai: { non_stream: true, stream: false } },
-        },
-      },
-      batch,
-      createCompleteProbeResults(batch, (endpointType) => {
-        if (
-          endpointType === 'anthropic' ||
-          endpointType === 'openai-response'
-        ) {
-          return 'normalized'
-        }
-        return 'unsupported'
-      })
-    )
-
-    assert.deepEqual(applied, {
-      MODEL_A: {
-        native: {
-          anthropic: {
-            non_stream: true,
-            stream: true,
-            mode: 'normalized',
-            reasoning_history: 'strip',
-          },
-          'openai-response': {
-            non_stream: true,
-            stream: true,
-            mode: 'normalized',
-          },
-        },
-      },
-      MODEL_B: {
-        native: { openai: { non_stream: true, stream: false } },
-      },
-    })
-  })
-
-  test('leaves failed semantic protocols unavailable in the form draft', () => {
-    const batch = createProtocolProbeBatch(['MODEL_A'], 'semantic')
-    const results = createCompleteProbeResults(batch, () => 'normalized')
-    const failedKey = protocolProbeKey(
-      'MODEL_A',
-      'anthropic',
-      false,
-      'tool_cycle'
-    )
-    results[failedKey] = {
-      ...results[failedKey],
-      success: false,
-      classification: 'upstream_error',
-      recommended_mode: 'unsupported',
-    }
-
-    const applied = applyProtocolProbeResults({}, batch, results)
-    assert.equal(applied?.MODEL_A.native.anthropic?.non_stream, false)
-    assert.equal(applied?.MODEL_A.native.anthropic?.stream, true)
-  })
-})
-
-describe('model protocol capability summary and promotion', () => {
-  test('counts native and normalized coverage separately', () => {
-    const summary = summarizeModelProtocolOverrides(
-      ['MODEL_A', 'MODEL_B', 'MODEL_C'],
-      {
-        MODEL_A: {
-          native: {
-            anthropic: {
-              non_stream: true,
-              stream: true,
-              mode: 'normalized',
-              reasoning_history: 'strip',
-            },
-          },
-        },
-        MODEL_B: {
-          native: {
-            anthropic: { non_stream: true, stream: false },
-          },
-        },
-      }
-    )
-
-    assert.equal(summary.coveredModels, 2)
-    assert.deepEqual(summary.capabilities.anthropic.nonStream, {
-      native: 1,
-      normalized: 1,
-    })
-    assert.deepEqual(summary.capabilities.anthropic.stream, {
-      native: 0,
-      normalized: 1,
-    })
-  })
-
-  test('promotes matching normalized capabilities and preserves their mode', () => {
-    const sharedProfile = {
-      native: {
-        anthropic: {
-          non_stream: true,
-          stream: true,
-          mode: 'normalized' as const,
-          reasoning_history: 'strip' as const,
-        },
-      },
-    }
-    const promotion = promoteCommonModelProtocolCapabilities(
-      ['MODEL_A', 'MODEL_B'],
-      {
-        MODEL_A: structuredClone(sharedProfile),
-        MODEL_B: structuredClone(sharedProfile),
-        STALE_MODEL: {
-          native: { gemini: { non_stream: true, stream: false } },
-        },
-      }
-    )
-
-    assert.deepEqual(promotion, {
-      native: sharedProfile.native,
-      modelOverrides: {
-        STALE_MODEL: {
-          native: { gemini: { non_stream: true, stream: false } },
-        },
-      },
-    })
-  })
-
-  test('does not merge different handling modes into one channel default', () => {
-    const promotion = promoteCommonModelProtocolCapabilities(
-      ['MODEL_A', 'MODEL_B'],
-      {
-        MODEL_A: {
-          native: {
-            anthropic: {
-              non_stream: true,
-              stream: true,
-              mode: 'normalized',
-            },
-          },
-        },
-        MODEL_B: {
-          native: {
-            anthropic: { non_stream: true, stream: true },
-          },
-        },
-      }
-    )
-    assert.equal(promotion, null)
-  })
-
-  test('ignores incomplete editable JSON profiles without throwing', () => {
-    const incompleteOverrides = {
-      MODEL_A: {},
-      MODEL_B: { native: null },
-    } as unknown as Record<string, ModelProtocolProfile>
-    const summary = summarizeModelProtocolOverrides(
-      ['MODEL_A', 'MODEL_B'],
-      incompleteOverrides
-    )
-    assert.equal(summary.coveredModels, 0)
-    assert.equal(
-      promoteCommonModelProtocolCapabilities(
-        ['MODEL_A', 'MODEL_B'],
-        incompleteOverrides
-      ),
-      null
-    )
-  })
-})
-
-test('scoped probes preserve existing capabilities and presets retain exceptions', () => {
-  const batch = createProtocolProbeBatch(
-    ['MODEL_A'],
-    'semantic',
-    ['anthropic'],
-    [true]
-  )
-  assert.equal(batch.expectedResultKeys.length, 6)
-  const base = {
-    MODEL_A: {
-      native: {
-        anthropic: {
-          non_stream: true,
-          stream: true,
-          mode: 'normalized' as const,
-          reasoning_history: 'preserve' as const,
-        },
-      },
+      stream: false,
+      mode: 'normalized' as const,
+      reasoning_history: 'preserve' as const,
     },
-  }
-  const results = createCompleteProbeResults(batch, () => 'unsupported')
-  assert.deepEqual(applyProtocolProbeResults(base, batch, results), base)
-  const applied = applyProtocolProbeResults(
-    base,
-    batch,
-    createCompleteProbeResults(batch, () => 'normalized')
+  },
+}
+const model = 'alpha'
+const measured: ChannelProtocolProbeResponse[] = TEXT_PROTOCOLS.flatMap(
+  (endpoint_type) =>
+    REQUEST_MODES.map((key) => {
+      const stream = key === 'stream',
+        success =
+          endpoint_type === 'anthropic' ||
+          (endpoint_type === 'openai-response' && !stream)
+      return {
+        model,
+        endpoint_type,
+        stream,
+        success,
+        classification: success
+          ? ('confirmed' as const)
+          : ('path_mismatch' as const),
+        http_status: success ? 200 : 404,
+        capability_level: 'endpoint' as const,
+        probe_case: 'basic' as const,
+        effective_route_mode: 'native' as const,
+        recommended_mode: 'unsupported' as const,
+      }
+    })
+)
+test('replacing a channel matrix respects each wire mode and preserves handling options', () => {
+  const result = applyDetectedProtocols(
+    policy,
+    model,
+    measured,
+    'channel',
+    true
   )
-  assert.deepEqual(applied, base)
-  const policy = {
-    native: { openai: { non_stream: true, stream: true } },
-    model_overrides: base,
-    auto_convert: true,
-    runtime_fallback: true,
-    max_quality: 'fair' as const,
-  }
-  const preset = protocolPolicyPreset(policy, 'anthropic')
-  assert.deepEqual(preset.model_overrides, base)
-  assert.equal(preset.native.anthropic?.mode, 'normalized')
-  assert.equal(policy.native.openai.non_stream, true)
-})
-
-test('compacts only model exceptions equal to the default without requiring full coverage', () => {
-  const native = { openai: { non_stream: true, stream: true } }
-  const different = { native: { openai: { non_stream: true, stream: false } } }
-  const policy = {
-    native,
-    model_overrides: { SAME: { native }, DIFFERENT: different },
-    auto_convert: true,
-    max_quality: 'fair' as const,
-  }
-  assert.deepEqual(compactProtocolPolicy(policy).model_overrides, {
-    DIFFERENT: different,
+  assert.ok(result)
+  assert.deepEqual(Object.keys(result.native).sort(), [
+    'anthropic',
+    'openai-response',
+  ])
+  assert.equal(result.native['openai-response']?.stream, false)
+  assert.deepEqual(result.native.anthropic, {
+    ...policy.native.anthropic,
+    stream: true,
   })
-  assert.equal(Object.keys(policy.model_overrides).length, 2)
-})
-
-test('partial model probes preserve inherited channel protocols', () => {
-  const native = { openai: { non_stream: true, stream: true } }
-  const batch = createProtocolProbeBatch(
-    ['INHERITED'],
-    'endpoint',
-    ['anthropic'],
-    [true]
+  assert.deepEqual(
+    withAvailability(result.native, 'anthropic', { non_stream: false }, true)
+      .anthropic,
+    { ...result.native.anthropic, non_stream: false }
   )
-  const results = createCompleteProbeResults(batch, () => 'normalized')
-  const applied = applyProtocolProbeResults({}, batch, results, native)
-  assert.deepEqual(applied?.INHERITED.native.openai, native.openai)
-  assert.equal(applied?.INHERITED.native.anthropic?.stream, true)
-  assert.deepEqual(native, { openai: { non_stream: true, stream: true } })
+  assert.equal(
+    applyDetectedProtocols(policy, model, measured.slice(1), 'channel', true),
+    null
+  )
+  assert.equal(
+    applyDetectedProtocols(
+      policy,
+      model,
+      measured.map((r, i) =>
+        i === 0 ? { ...r, classification: 'rate_limited' } : r
+      ),
+      'model',
+      true
+    ),
+    null
+  )
+})
+test('sampled model records differences and restoring inheritance removes the profile', () => {
+  const result = applyDetectedProtocols(policy, model, measured, 'model', true)
+  assert.ok(result)
+  assert.deepEqual(result.native, policy.native)
+  const patch = profileFor(result, model)?.overrides
+  assert.deepEqual(patch?.anthropic, { stream: true })
+  assert.deepEqual(patch?.openai, { non_stream: false, stream: false })
+  assert.equal(
+    profileFor(setModelOverrides(result, model, {}), model),
+    undefined
+  )
+  assert.equal(profileFor(result, 'constructor'), undefined)
+})
+test('an existing absolute profile keeps its explicitly available and unavailable modes when edited', () => {
+  const legacy = protocolOverrides({
+    native: { anthropic: policy.native.anthropic },
+  })
+  assert.deepEqual(legacy.anthropic, policy.native.anthropic)
+  assert.deepEqual(legacy.openai, { non_stream: false, stream: false })
 })

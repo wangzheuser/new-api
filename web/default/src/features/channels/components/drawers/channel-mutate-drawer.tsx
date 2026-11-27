@@ -3119,6 +3119,21 @@ export function ChannelMutateDrawer({
                               />
                             )}
 
+                            {currentType === 1 && (
+                              <Button
+                                type='button'
+                                size='sm'
+                                variant='outline'
+                                onClick={() =>
+                                  handleEditorNavNavigate(
+                                    ADVANCED_SETTINGS_SECTION_IDS.protocolCapabilities
+                                  )
+                                }
+                              >
+                                {t('Upstream interfaces')}
+                              </Button>
+                            )}
+
                             {currentType === CHANNEL_TYPE_ADVANCED_CUSTOM && (
                               <FormField
                                 control={form.control}
@@ -4992,6 +5007,14 @@ export function ChannelMutateDrawer({
                                     channelId={channelId ?? undefined}
                                     draftKey={currentKey}
                                     getProbeDraft={getProtocolProbeDraft}
+                                    savedValue={
+                                      form.formState.defaultValues
+                                        ?.protocol_policy
+                                    }
+                                    passThrough={
+                                      !!currentPassThroughBodyEnabled
+                                    }
+                                    modelMapping={currentModelMapping}
                                     channelType={currentType}
                                     models={currentModelsArray}
                                     value={field.value}

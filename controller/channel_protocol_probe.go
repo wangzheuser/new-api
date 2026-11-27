@@ -495,3 +495,46 @@ func ClearChannelProtocolObservations(c *gin.Context) {
 	}
 	common.ApiSuccess(c, nil)
 }
+
+// PreviewChannelProtocolRoute uses the relay planner without accessing a channel credential.
+func PreviewChannelProtocolRoute(c *gin.Context) {
+	var request struct {
+		ModelMapping string                     `json:"model_mapping"`
+		Policy       *dto.ChannelProtocolPolicy `json:"policy"`
+		PassThrough  bool                       `json:"pass_through"`
+		Model        string                     `json:"model"`
+		Endpoint     constant.EndpointType      `json:"endpoint_type"`
+		Stream       bool                       `json:"stream"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	path, ok := service.BuildTextProtocolPath(request.Endpoint, request.Model, request.Stream)
+	if !ok || strings.TrimSpace(request.Model) == "" || len(request.Model) > 255 {
+		common.ApiError(c, errors.New("invalid protocol preview request"))
+		return
+	}
+	if request.Policy != nil {
+		if err := request.Policy.Validate(); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
+	channel := model.Channel{Type: constant.ChannelTypeOpenAI}
+	channel.SetSetting(dto.ChannelSettings{ProtocolPolicy: request.Policy, PassThroughBodyEnabled: request.PassThrough})
+	plan, err := service.PlanChannelProtocolRoute(&channel, request.Model, path, request.Stream)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if plan != nil && plan.UpstreamEndpointType == constant.EndpointTypeGemini {
+		mapped, err := common.ResolveMappedModel(request.ModelMapping, request.Model)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		plan.UpstreamPath, _ = service.BuildTextProtocolPath(plan.UpstreamEndpointType, mapped, request.Stream)
+	}
+	common.ApiSuccess(c, plan)
+}

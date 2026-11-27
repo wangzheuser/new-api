@@ -645,3 +645,24 @@ func TestAdvancedCustomSupportedEndpointTypesForModel(t *testing.T) {
 		constant.EndpointTypeAnthropic,
 	}, config.SupportedEndpointTypesForModel("other-model"))
 }
+
+func TestProtocolAvailabilityInheritance(t *testing.T) {
+	endpoint := constant.EndpointTypeAnthropic
+	on, off := true, false
+	policy := ChannelProtocolPolicy{
+		Native:         map[constant.EndpointType]ProtocolCapability{endpoint: {NonStream: true, Stream: true, Mode: ProtocolHandlingModeNormalized, ReasoningHistory: types.ReasoningHistoryPolicyPreserve}},
+		ModelOverrides: map[string]ModelProtocolProfile{"sample": {Overrides: map[constant.EndpointType]ProtocolCapabilityPatch{endpoint: {Stream: &off}, constant.EndpointTypeOpenAI: {Stream: &on}}}},
+	}
+	require.NoError(t, policy.Validate())
+	got, source := policy.NativeForModel("sample")
+	assert.Equal(t, "model_override", source)
+	assert.Equal(t, ProtocolCapability{NonStream: true, Mode: ProtocolHandlingModeNormalized, ReasoningHistory: types.ReasoningHistoryPolicyPreserve}, got[endpoint])
+	assert.Equal(t, ProtocolCapability{Stream: true}, got[constant.EndpointTypeOpenAI])
+	policy.Native[endpoint] = ProtocolCapability{Stream: true}
+	got, _ = policy.NativeForModel("sample")
+	assert.NotContains(t, got, endpoint)
+	untouched, _ := policy.NativeForModel("other")
+	assert.True(t, untouched[endpoint].Stream)
+	policy.ModelOverrides["sample"].Overrides[constant.EndpointTypeEmbeddings] = ProtocolCapabilityPatch{Stream: &off}
+	require.Error(t, policy.Validate())
+}

@@ -125,8 +125,15 @@ export interface ProtocolCapability {
   reasoning_history?: 'preserve' | 'strip'
 }
 
+export type ProtocolCapabilities = Partial<
+  Record<TextEndpointType, ProtocolCapability>
+>
+export type ProtocolOverrides = Partial<
+  Record<TextEndpointType, Partial<ProtocolCapability>>
+>
 export interface ModelProtocolProfile {
-  native: Partial<Record<TextEndpointType, ProtocolCapability>>
+  native?: ProtocolCapabilities
+  overrides?: ProtocolOverrides
 }
 
 export interface ChannelProtocolPolicy {

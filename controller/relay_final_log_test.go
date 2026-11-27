@@ -503,3 +503,34 @@ func TestHTTPRelayProtocolFallbackLifecycle(t *testing.T) {
 		})
 	}
 }
+
+func TestModelProtocolExceptionRoundTrip(t *testing.T) {
+	kind := os.Getenv("ATTEMPT_LOG_DB")
+	if kind == "" {
+		kind = "sqlite"
+	}
+	db, _ := newAuditTestDatabase(t, kind, os.Getenv("TEST_"+strings.ToUpper(kind)+"_DSN"))
+	require.NoError(t, db.AutoMigrate(&model.Channel{}))
+	endpoint := constant.EndpointTypeOpenAI
+	channel := model.Channel{Type: constant.ChannelTypeOpenAI, Name: "protocol-exception", Key: "fixture"}
+	channel.SetSetting(rootdto.ChannelSettings{ProtocolPolicy: &rootdto.ChannelProtocolPolicy{
+		Native:         map[constant.EndpointType]rootdto.ProtocolCapability{endpoint: {NonStream: true, Stream: true}},
+		ModelOverrides: map[string]rootdto.ModelProtocolProfile{"sample": {Overrides: map[constant.EndpointType]rootdto.ProtocolCapabilityPatch{endpoint: {Stream: common.GetPointer(false)}}}},
+	}})
+	require.NoError(t, db.Create(&channel).Error)
+	var read model.Channel
+	require.NoError(t, db.First(&read, channel.Id).Error)
+	settings, err := read.ReadSetting()
+	require.NoError(t, err)
+	require.NotNil(t, settings.ProtocolPolicy)
+	require.NoError(t, settings.ProtocolPolicy.Validate())
+	for _, tc := range []struct {
+		model     string
+		stream    bool
+		available bool
+	}{{"sample", true, false}, {"sample", false, true}, {"other", true, true}} {
+		plan, err := service.PlanChannelProtocolRoute(&read, tc.model, "/v1/chat/completions", tc.stream)
+		require.NoError(t, err)
+		assert.Equal(t, tc.available, plan != nil)
+	}
+}
