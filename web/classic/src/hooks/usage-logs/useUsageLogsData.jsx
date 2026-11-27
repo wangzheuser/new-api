@@ -21,6 +21,10 @@ import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Modal } from '@douyinfe/semi-ui';
 import {
+  formatReasoningEffortLabel,
+  textProtocolLabel,
+} from '../../../../shared/usage-display-labels';
+import {
   API,
   getTodayStartTimestamp,
   isAdmin,
@@ -373,7 +377,7 @@ export const useLogsData = () => {
       if (chain.length <= 1) {
         return t('原生格式');
       }
-      return `${chain.join(' -> ')}`;
+      return chain.map((format) => textProtocolLabel(format, t)).join(' -> ');
     };
 
     let expandDatesLocal = {};
@@ -494,7 +498,7 @@ export const useLogsData = () => {
         if (other?.reasoning_effort) {
           expandDataLocal.push({
             key: t('Reasoning Effort'),
-            value: other.reasoning_effort,
+            value: formatReasoningEffortLabel(other.reasoning_effort, t),
           });
         }
         if (other?.billing_mode === 'tiered_expr' && other?.expr_b64) {

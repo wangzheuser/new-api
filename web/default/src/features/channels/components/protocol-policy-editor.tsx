@@ -59,6 +59,7 @@ import {
   PROTOCOL_PROBE_CASES,
   summarizeModelProtocolOverrides,
   supportsNormalizedProtocol,
+  textProtocolLabel,
   TEXT_PROTOCOLS,
   updateProtocolCapabilityState,
   type ProtocolCapabilityState,
@@ -158,10 +159,10 @@ export function ProtocolPolicyEditor({
 }: ProtocolPolicyEditorProps) {
   const { t } = useTranslation()
   const protocolLabels: Record<TextEndpointType, string> = {
-    openai: t('Chat'),
-    'openai-response': t('OpenAI Responses'),
-    anthropic: t('Claude Messages'),
-    gemini: t('Gemini Generate Content'),
+    openai: textProtocolLabel('openai', t),
+    'openai-response': textProtocolLabel('openai-response', t),
+    anthropic: textProtocolLabel('anthropic', t),
+    gemini: textProtocolLabel('gemini', t),
   }
   const probeCaseLabels: Record<ProtocolProbeCase, string> = {
     basic: t('Basic'),

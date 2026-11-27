@@ -73,6 +73,7 @@ import {
   createEmptyCondition,
   createEmptyRuleGroup,
   createEmptyTimeCondition,
+  formatBillingTierLabel,
   getRequestRuleMatchOptions,
   splitBillingExprAndRequestRules,
   tryParseRequestRuleExpr,
@@ -1454,7 +1455,7 @@ function CostEstimator({ effectiveExpr }: EstimatorProps) {
             </span>
             {result.matchedTier && (
               <Badge variant='outline' className='text-xs'>
-                {t('Hit tier')}: {result.matchedTier}
+                {t('Hit tier')}: {formatBillingTierLabel(result.matchedTier, t)}
               </Badge>
             )}
           </div>

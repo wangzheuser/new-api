@@ -57,7 +57,9 @@ import { StatusBadge, type StatusBadgeProps } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 import { IconBadge, type IconBadgeTone } from '@/components/ui/icon-badge'
 import { Label } from '@/components/ui/label'
+import { textProtocolLabel } from '@/features/channels/lib/protocol-policy'
 import { DynamicPricingBreakdown } from '@/features/pricing/components/dynamic-pricing-breakdown'
+import { formatBillingTierLabel } from '@/features/pricing/lib/billing-expr'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import {
@@ -68,6 +70,7 @@ import {
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
+import { formatReasoningEffortLabel } from '../../../../../../shared/usage-display-labels'
 import type { UsageLog } from '../../data/schema'
 import {
   parseLogOther,
@@ -246,7 +249,7 @@ function BillingBreakdown(props: {
       if (tieredSummary.tier.label) {
         rows.push({
           label: t('Matched Tier'),
-          value: tieredSummary.tier.label,
+          value: formatBillingTierLabel(tieredSummary.tier.label, t),
         })
       }
       for (const entry of tieredSummary.priceEntries) {
@@ -517,6 +520,8 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const showAdminIp =
     !!props.log.ip && (showTiming || (props.isAdmin && isTopup))
   const adminInfo = other?.admin_info
+  const protocolRoute = props.isAdmin ? adminInfo?.protocol_route : undefined
+  const requestNormalizer = protocolRoute?.request_normalizer
   const contextFallback = props.isAdmin
     ? adminInfo?.context_fallback
     : undefined
@@ -616,7 +621,11 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const conversionLabel =
     conversionChain.length <= 1
       ? t('Native format')
-      : conversionChain.join(' -> ')
+      : conversionChain
+          .map((format) => textProtocolLabel(format, t))
+          .join(' -> ')
+  const conversionCopyText =
+    conversionChain.length <= 1 ? conversionLabel : conversionChain.join(' -> ')
   const showConversion =
     props.isAdmin &&
     props.log.type !== 6 &&
@@ -768,30 +777,26 @@ export function DetailsDialog(props: DetailsDialogProps) {
           open={props.open}
         />
 
-        {props.isAdmin && other?.admin_info?.protocol_route && (
+        {protocolRoute && (
           <div className='space-y-1 rounded-md border p-3 text-xs'>
             <div>
               {t('Configuration source')}:{' '}
-              {other.admin_info.protocol_route.capability_source ===
-              'model_override'
+              {protocolRoute.capability_source === 'model_override'
                 ? t('Model exception')
                 : t('Channel default')}
             </div>
             <div>
               {t('Protocol selection')}:{' '}
-              {t(
-                other.admin_info.protocol_route.selection_reason ||
-                  'configured_protocol'
-              )}
+              {t(protocolRoute.selection_reason || 'configured_protocol')}
             </div>
             <div>
               {t('Upstream protocol')}:{' '}
-              {other.admin_info.protocol_route.upstream_endpoint_type}
+              {textProtocolLabel(protocolRoute.upstream_endpoint_type, t)}
             </div>
-            {other.admin_info.protocol_route.request_normalizer && (
+            {requestNormalizer && (
               <div>
                 {t('Compatible normalization')}:{' '}
-                {other.admin_info.protocol_route.request_normalizer}
+                {textProtocolLabel(requestNormalizer, t)}
               </div>
             )}
           </div>
@@ -804,11 +809,11 @@ export function DetailsDialog(props: DetailsDialogProps) {
                 variant='ghost'
                 size='sm'
                 className='absolute top-0 right-0 h-5 w-5 p-0'
-                onClick={() => copyToClipboard(conversionLabel)}
+                onClick={() => copyToClipboard(conversionCopyText)}
                 title={t('Copy to clipboard')}
                 aria-label={t('Copy to clipboard')}
               >
-                {copiedText === conversionLabel ? (
+                {copiedText === conversionCopyText ? (
                   <Check className='size-3 text-green-600' />
                 ) : (
                   <Copy className='size-3' />
@@ -1170,7 +1175,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
             label={t('Reasoning Effort')}
             value={
               <StatusBadge
-                label={other.reasoning_effort}
+                label={formatReasoningEffortLabel(other.reasoning_effort, t)}
                 variant={reasoningEffortVariant}
                 size='sm'
                 copyable={false}

@@ -27,6 +27,7 @@ import {
   BILLING_VAR_REGEX,
 } from '../constants';
 import { visit } from 'unist-util-visit';
+import { formatBillingTierLabel } from '../../../shared/usage-display-labels';
 import * as LobeIcons from '@lobehub/icons';
 import {
   OpenAI,
@@ -2326,7 +2327,9 @@ export function renderTieredModelPrice(opts) {
       .map((v) => [v.field, v.label]);
 
   const lines = [
-    buildBillingText('命中档位：{{tier}}', { tier: matchedTier || tier.label }),
+    buildBillingText('命中档位：{{tier}}', {
+      tier: formatBillingTierLabel(matchedTier || tier.label, i18next.t),
+    }),
     ...(opts.cache_creation_tokens_12h > 0 ? [buildBillingText('12h缓存创建 Token (cc12h)：{{count}}', { count: opts.cache_creation_tokens_12h })] : []),
     ...priceLines
         .filter(([field]) => tier[field] > 0)

@@ -31,6 +31,8 @@ export const TEXT_PROTOCOLS: readonly TextEndpointType[] = [
   'gemini',
 ]
 
+export { textProtocolLabel } from '../../../../../shared/usage-display-labels'
+
 export const PROTOCOL_PROBE_CASES = [
   'basic',
   'assistant_history',

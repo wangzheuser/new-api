@@ -20,6 +20,7 @@ For commercial licensing, please contact support@quantumnous.com
 import React from 'react';
 import { Avatar, Tag, Table, Typography } from '@douyinfe/semi-ui';
 import { IconPriceTag } from '@douyinfe/semi-icons';
+import { formatBillingTierLabel } from '../../../../../../../shared/usage-display-labels';
 import { parseTiersFromExpr, getCurrencyConfig } from '../../../../../helpers';
 import { BILLING_PRICING_VARS } from '../../../../../constants';
 import {
@@ -121,7 +122,7 @@ export default function DynamicPricingBreakdown({ billingExpr, t }) {
       dataIndex: 'label',
       render: (text, record) => (
         <div>
-          <Tag color='blue' size='small'>{text || t('默认')}</Tag>
+          <Tag color='blue' size='small'>{formatBillingTierLabel(text, t)}</Tag>
           {record.condSummary && (
             <div className='text-xs text-gray-500 mt-1'>{record.condSummary}</div>
           )}

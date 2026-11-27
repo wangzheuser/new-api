@@ -60,6 +60,7 @@ import { cn } from '@/lib/utils'
 
 import { DEFAULT_TOKEN_UNIT, FILTER_ALL } from '../constants'
 import { usePricingData } from '../hooks/use-pricing-data'
+import { formatBillingTierLabel } from '../lib/billing-expr'
 import {
   getDynamicPriceEntries,
   getDynamicPricingSummary,
@@ -1001,7 +1002,7 @@ function GroupPricingSection(props: {
                       header: t('Tier'),
                       className: thClass,
                       cellClassName: 'text-muted-foreground py-2.5',
-                      cell: (tier) => tier.label || t('Default'),
+                      cell: (tier) => formatBillingTierLabel(tier.label, t),
                     },
                     ...priceFields.map((fieldEntry) => ({
                       id: fieldEntry.field,

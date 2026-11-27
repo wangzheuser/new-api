@@ -32,6 +32,7 @@ import {
   Typography,
 } from '@douyinfe/semi-ui';
 import { IconCopy, IconDelete, IconPlus } from '@douyinfe/semi-icons';
+import { formatBillingTierLabel } from '../../../../../../shared/usage-display-labels';
 import { renderQuota } from '../../../../helpers/render';
 import { copy, showSuccess } from '../../../../helpers';
 import { BILLING_EXTRA_VARS, BILLING_CACHE_VAR_MAP, BILLING_CONDITION_VARS } from '../../../../constants';
@@ -1675,7 +1676,8 @@ export default function TieredPricingEditor({ model, onExprChange, requestRuleEx
                 </Text>
                 {evalResult.matchedTier && (
                   <Tag size='small' color='blue' type='light'>
-                    {t('命中档位')}：{evalResult.matchedTier}
+                    {t('命中档位')}：
+                    {formatBillingTierLabel(evalResult.matchedTier, t)}
                   </Tag>
                 )}
               </div>

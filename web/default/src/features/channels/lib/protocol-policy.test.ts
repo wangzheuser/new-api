@@ -19,6 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
+import { createInstance } from 'i18next'
+
+import zh from '@/i18n/locales/zh.json'
+
 import type {
   ChannelProtocolProbeResponse,
   ModelProtocolProfile,
@@ -38,12 +42,24 @@ import {
   PROTOCOL_PROBE_CLASSIFICATION_LABEL_KEYS,
   summarizeModelProtocolOverrides,
   TEXT_PROTOCOLS,
+  textProtocolLabel,
   updateProtocolCapabilityState,
   type ProtocolProbeBatch,
   type ProtocolProbeResultMap,
 } from './protocol-policy'
 
 type ProbeRecommendation = 'native' | 'normalized' | 'unsupported'
+
+test('protocol names use Chinese labels and preserve unfamiliar endpoint IDs', async () => {
+  const i18n = createInstance()
+  await i18n.init({ lng: 'zh', resources: { zh } })
+
+  assert.deepEqual(
+    TEXT_PROTOCOLS.map((endpoint) => textProtocolLabel(endpoint, i18n.t)),
+    ['聊天', 'OpenAI 响应', 'Claude 消息', 'Gemini 内容生成']
+  )
+  assert.equal(textProtocolLabel('other-endpoint', i18n.t), 'other-endpoint')
+})
 
 describe('protocol probe classification labels', () => {
   test('maps every response classification to a stable translation key', () => {

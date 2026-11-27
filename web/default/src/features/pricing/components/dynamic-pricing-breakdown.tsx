@@ -34,6 +34,7 @@ import {
   MATCH_LT,
   MATCH_RANGE,
   SOURCE_TIME,
+  formatBillingTierLabel,
   normalizeTierLabel,
   parseTiersFromExpr,
   splitBillingExprAndRequestRules,
@@ -153,6 +154,16 @@ function describeGroup(
     .join(' && ')
 }
 
+function keyExpressionRows<T extends ParsedTier | RequestRuleGroup>(rows: T[]) {
+  const occurrences = new Map<string, number>()
+  return rows.map((row) => {
+    const identity = JSON.stringify(row)
+    const occurrence = occurrences.get(identity) ?? 0
+    occurrences.set(identity, occurrence + 1)
+    return { row, key: `${identity}:${occurrence}` }
+  })
+}
+
 export function DynamicPricingBreakdown({
   billingExpr,
   matchedTierLabel,
@@ -176,13 +187,14 @@ export function DynamicPricingBreakdown({
     return { symbol: '$', rate: 1 }
   }, [currency])
 
-  const { tiers, ruleGroups } = useMemo(() => {
+  const { tiers, mobileTiers, ruleGroups } = useMemo(() => {
     const split = splitBillingExprAndRequestRules(expr)
     const parsedTiers = parseTiersFromExpr(split.billingExpr)
     const parsedRules = tryParseRequestRuleExpr(split.requestRuleExpr || '')
     return {
       tiers: parsedTiers,
-      ruleGroups: parsedRules || [],
+      mobileTiers: keyExpressionRows(parsedTiers),
+      ruleGroups: keyExpressionRows(parsedRules || []),
     }
   }, [expr])
 
@@ -260,7 +272,7 @@ export function DynamicPricingBreakdown({
             {t('Tiered price table')}
           </div>
           <div className='space-y-1.5 sm:hidden'>
-            {tiers.map((tier, i) => {
+            {mobileTiers.map(({ row: tier, key }) => {
               const condSummary = formatConditionSummary(tier.conditions, t)
               const isMatched =
                 matchedTierLabel != null &&
@@ -268,7 +280,7 @@ export function DynamicPricingBreakdown({
                 tier.label === matchedTierLabel
               return (
                 <div
-                  key={`tier-mobile-${i}`}
+                  key={key}
                   className={cn(
                     'rounded-md border p-2',
                     isMatched && 'border-emerald-500/40 bg-emerald-500/10'
@@ -279,7 +291,7 @@ export function DynamicPricingBreakdown({
                       variant='secondary'
                       className='bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-300'
                     >
-                      {tier.label || t('Default')}
+                      {formatBillingTierLabel(tier.label, t)}
                     </Badge>
                     {isMatched && (
                       <Badge
@@ -364,7 +376,7 @@ export function DynamicPricingBreakdown({
                           variant='secondary'
                           className='bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-300'
                         >
-                          {tier.label || t('Default')}
+                          {formatBillingTierLabel(tier.label, t)}
                         </Badge>
                         {isMatched && (
                           <Badge
@@ -425,9 +437,9 @@ export function DynamicPricingBreakdown({
             {t('Conditional multipliers')}
           </div>
           <ul className='space-y-1.5'>
-            {ruleGroups.map((group, gi) => (
+            {ruleGroups.map(({ row: group, key }) => (
               <li
-                key={`group-${gi}`}
+                key={key}
                 className='bg-muted/50 flex items-center justify-between gap-3 rounded-md px-3 py-2'
               >
                 <span

@@ -28,6 +28,8 @@ For commercial licensing, please contact support@quantumnous.com
  * expression syntax.
  */
 
+export { formatBillingTierLabel } from '../../../../../shared/usage-display-labels'
+
 // ---------------------------------------------------------------------------
 // Variable registry
 // ---------------------------------------------------------------------------
