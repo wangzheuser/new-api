@@ -16,20 +16,28 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { ChevronDown } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Switch } from '@/components/ui/switch'
+import { toIntlLocale } from '@/i18n/languages'
+import { formatNumber } from '@/lib/format'
 
 import type { ContextPolicy, ContextRule } from './policy'
 
 type Props = {
   value: ContextPolicy
   onChange: (value: ContextPolicy) => void
-  channel?: boolean
+  channelModels?: readonly string[]
   inherited?: ContextPolicy
 }
 
@@ -37,24 +45,43 @@ type Props = {
 export function ContextPolicyEditor({
   value,
   onChange,
-  channel = false,
+  channelModels,
   inherited,
 }: Props) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [model, setModel] = useState('')
   const fields = [
     ['window_tokens', t('Context window (tokens)')],
     ['output_reserve_tokens', t('Output reserve (tokens)')],
   ] as const
-  const models: Record<string, ContextRule> = { ...value.models }
-  if (channel) {
-    for (const id of Object.keys(inherited?.models ?? {})) {
-      models[id] ??= { mode: 'inherit' }
+  const channel = channelModels !== undefined
+  const channelModelSet = channelModels && new Set(channelModels)
+  const rules = new Map(Object.entries(value.models))
+  for (const id of Object.keys(inherited?.models ?? {})) {
+    if (channelModelSet?.has(id) && !rules.has(id)) {
+      rules.set(id, { mode: 'inherit' })
     }
   }
-  /** Replace one rule, preserving every other model. */
+  const visibleRules = [...rules].filter(
+    ([id]) => !channelModelSet || channelModelSet.has(id)
+  )
+  const removedModels = channelModelSet
+    ? Object.keys(value.models).filter((id) => !channelModelSet.has(id))
+    : []
+  const candidates = channelModelSet
+    ? [...channelModelSet].filter((id) => id.length <= 255 && !rules.has(id))
+    : []
+  let modelId = model.trim()
+  if (channel && !candidates.includes(modelId)) modelId = ''
+
   function updateRule(id: string, rule: ContextRule) {
     onChange({ ...value, models: { ...value.models, [id]: rule } })
+  }
+
+  function removeRule(id: string) {
+    const models = { ...value.models }
+    delete models[id]
+    onChange({ ...value, models })
   }
   return (
     <fieldset className='space-y-4 rounded-lg border p-4'>
@@ -75,7 +102,7 @@ export function ContextPolicyEditor({
           {t('Enable context truncation for all channels')}
         </label>
       )}
-      {Object.entries(models).map(([id, rule]) => (
+      {visibleRules.map(([id, rule]) => (
         <div key={id} className='space-y-3 rounded-md border p-3'>
           <div className='flex flex-wrap items-center gap-2'>
             <span className='min-w-0 flex-1 font-mono text-sm break-all'>
@@ -107,11 +134,7 @@ export function ContextPolicyEditor({
               type='button'
               variant='outline'
               disabled={channel && !Object.hasOwn(value.models, id)}
-              onClick={() => {
-                const models = { ...value.models }
-                delete models[id]
-                onChange({ ...value, models })
-              }}
+              onClick={() => removeRule(id)}
             >
               {t('Remove')}
             </Button>
@@ -159,32 +182,99 @@ export function ContextPolicyEditor({
           )}
         </div>
       ))}
-      <div className='flex gap-2'>
-        <Input
-          aria-label={t('Model ID')}
-          placeholder={t('Model ID')}
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-        />
-        <Button
-          type='button'
-          variant='outline'
-          disabled={
-            !model.trim() ||
-            model.trim().length > 255 ||
-            Object.hasOwn(models, model.trim()) ||
-            Object.keys(value.models).length >= 256
-          }
-          onClick={() => {
-            updateRule(model.trim(), {
-              mode: channel ? 'inherit' : 'custom',
-            })
-            setModel('')
-          }}
-        >
-          {t('Add model')}
-        </Button>
-      </div>
+      {channelModels?.length === 0 && (
+        <p className='text-muted-foreground text-sm'>
+          {t('Select models in Models & Groups first.')}
+        </p>
+      )}
+      {(!channel || candidates.length > 0) && (
+        <div className='flex gap-2'>
+          {channel ? (
+            <NativeSelect
+              aria-label={t('Model ID')}
+              className='min-w-0 flex-1'
+              value={modelId}
+              onChange={(e) => setModel(e.target.value)}
+            >
+              <NativeSelectOption value=''>
+                {t('Select a model')}
+              </NativeSelectOption>
+              {candidates.map((id) => (
+                <NativeSelectOption key={id} value={id}>
+                  {id}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          ) : (
+            <Input
+              aria-label={t('Model ID')}
+              placeholder={t('Model ID')}
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+            />
+          )}
+          <Button
+            type='button'
+            variant='outline'
+            disabled={
+              !modelId ||
+              modelId.length > 255 ||
+              rules.has(modelId) ||
+              Object.keys(value.models).length >= 256
+            }
+            onClick={() => {
+              updateRule(modelId, { mode: channel ? 'inherit' : 'custom' })
+              setModel('')
+            }}
+          >
+            {t('Add model')}
+          </Button>
+        </div>
+      )}
+      {removedModels.length > 0 && (
+        <Collapsible>
+          <CollapsibleTrigger
+            render={
+              <Button
+                variant='ghost'
+                type='button'
+                className='h-auto min-h-8 max-w-full justify-start text-left whitespace-normal'
+              />
+            }
+          >
+            <ChevronDown
+              className='transition-transform group-aria-expanded/button:rotate-180'
+              aria-hidden='true'
+            />
+            {t('Rules for removed models ({{total}})', {
+              total: formatNumber(
+                removedModels.length,
+                toIntlLocale(i18n.resolvedLanguage || i18n.language)
+              ),
+            })}
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <ul className='mt-2 space-y-2'>
+              {removedModels.map((id) => (
+                <li key={id} className='flex items-center gap-2'>
+                  <span className='min-w-0 flex-1 font-mono text-sm break-all'>
+                    {id}
+                  </span>
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='sm'
+                    aria-label={`${t('Remove')} ${id}`}
+                    onClick={() => removeRule(id)}
+                  >
+                    {t('Remove')}
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </CollapsibleContent>
+        </Collapsible>
+      )}
       <p className='text-muted-foreground text-xs'>
         {t(
           'Set the real context window and output reserve. Trimming keeps the latest complete turn, uses a 90% threshold and reserves an automatic safety margin. Output limits are not changed.'

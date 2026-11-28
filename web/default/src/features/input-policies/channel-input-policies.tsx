@@ -35,9 +35,11 @@ import {
 
 /** Change only the two owned keys inside the channel's existing settings JSON. */
 export function ChannelInputPolicies({
+  models,
   value,
   onChange,
 }: {
+  models: readonly string[]
   value: string
   onChange: (value: string) => void
 }) {
@@ -104,12 +106,13 @@ export function ChannelInputPolicies({
         </p>
       )}
       <ContextPolicyEditor
-        channel
+        channelModels={models}
         inherited={globalContext}
         value={settings.context_truncation ?? { models: {} }}
         onChange={(p) => {
           for (const [id, rule] of Object.entries(p.models)) {
             const previous = settings.context_truncation?.models?.[id]
+            if (rule === previous) continue
             if (previous?.mode === 'custom' && rule.mode !== 'custom') {
               contextDrafts.current[id] = previous
             }

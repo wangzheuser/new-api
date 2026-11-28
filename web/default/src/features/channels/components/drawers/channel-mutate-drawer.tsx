@@ -4327,6 +4327,7 @@ export function ChannelMutateDrawer({
                       >
                         <ChannelInputPolicies
                           key={`${channelId ?? 'new'}:${open}`}
+                          models={currentModelsArray}
                           value={currentSettings || '{}'}
                           onChange={(value) =>
                             form.setValue('settings', value, {
