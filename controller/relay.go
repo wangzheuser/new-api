@@ -400,6 +400,19 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 		if relayInfo.IsContextFallbackActive() && relayInfo.ContextFallback.RouteMode == dto.ContextFallbackModeSame {
 			decision = service.PolicyDecision{Action: "stop", Reason: "same_channel_context_fallback", Source: "system"}
 		}
+		// Endpoint and key rules may override status matching, but never a replay boundary.
+		allowFallback := decision.Action == "retry" || decision.Reason == "status_not_retryable"
+		if allowFallback && relayInfo.ChannelRoutePlan != nil {
+			portableRequest, safeAfterTimeout := service.TextReplaySafety(c)
+			endReason, _ := relayInfo.StreamStatus.End()
+			if !portableRequest {
+				allowFallback = false
+				decision = service.PolicyDecision{Action: "stop", Reason: "provider_bound_state", Source: "routing"}
+			} else if (firstPayloadExpired || endReason == relaycommon.StreamEndReasonTimeout) && !safeAfterTimeout {
+				allowFallback = false
+				decision = service.PolicyDecision{Action: "stop", Reason: "non_retryable_error", Source: "system"}
+			}
+		}
 		endpointMismatch := (relayInfo.ProtocolEndpointMismatch || observationKey != "" && relayInfo.ProtocolEndpointRefused) &&
 			relayInfo.ChannelRoutePlan != nil &&
 			relayInfo.ChannelRoutePlan.RouteMode != hosttypes.ChannelRouteModeLegacy
@@ -417,7 +430,7 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 			if observationKey != "" && relayInfo.ProtocolEndpointRefused {
 				service.MarkProtocolAttempt(c, observationKey, relayInfo.ChannelRoutePlan.UpstreamEndpointType)
 				service.RecordProtocolObservation(observationKey, relayInfo.ChannelRoutePlan.UpstreamEndpointType, false)
-				if common.RetryTimes-retryParam.GetRetry() > 0 && !retryBlockedByClientCommit(c, relayInfo) && !types.IsSkipRetryError(newAPIError) && !service.ShouldSkipRetryAfterChannelAffinityFailure(c) && !(relayInfo.IsContextFallbackActive() && relayInfo.ContextFallback.RouteMode == dto.ContextFallbackModeSame) {
+				if allowFallback {
 					next, _, planErr := service.PlanObservedProtocolRoute(c, channel, retryParam.ModelName, common.GetContextKeyString(c, constant.ContextKeyChannelKey), relayInfo.IsStream)
 					if planErr == nil && next != nil {
 						protocolRetryChannel = channel
@@ -430,12 +443,8 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 				retryParam.ExcludedChannelIDs = make(map[int]struct{})
 			}
 			retryParam.ExcludedChannelIDs[channel.Id] = struct{}{}
-			if common.RetryTimes-retryParam.GetRetry() > 0 &&
-				!retryBlockedByClientCommit(c, relayInfo) && !service.ShouldSkipRetryAfterChannelAffinityFailure(c) &&
-				!(relayInfo.IsContextFallbackActive() && relayInfo.ContextFallback.RouteMode == dto.ContextFallbackModeSame) {
+			if allowFallback {
 				decision = service.PolicyDecision{Action: "retry", Reason: "protocol_endpoint_mismatch", Source: "routing"}
-			} else if decision.Action == "retry" {
-				decision = service.PolicyDecision{Action: "stop", Reason: "protocol_retry_blocked", Source: "system"}
 			}
 		} else if !localBillingError {
 			usingKey := common.GetContextKeyString(c, constant.ContextKeyChannelKey)
@@ -459,9 +468,7 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 					}
 					retryParam.ExcludedChannelIDs[channel.Id] = struct{}{}
 				}
-				if common.RetryTimes-retryParam.GetRetry() > 0 && !retryBlockedByClientCommit(c, relayInfo) &&
-					!service.ShouldSkipRetryAfterChannelAffinityFailure(c) && !types.IsSkipRetryError(newAPIError) &&
-					!(relayInfo.IsContextFallbackActive() && relayInfo.ContextFallback.RouteMode == dto.ContextFallbackModeSame) {
+				if allowFallback {
 					decision = service.PolicyDecision{Action: "retry", Reason: "multi_key_failover", Source: "channel"}
 					if !channelScoped {
 						retryParam.PreferredChannelID = channel.Id
@@ -479,9 +486,6 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 			decision = service.PolicyDecision{Action: "retry", Reason: "protocol_fallback", Source: "routing"}
 		}
 		service.FinishChannelKeyProbe(c, false)
-		if relayFormat != types.RelayFormatOpenAIRealtime && decision.Action == "retry" && common.RetryTimes-retryParam.GetRetry() <= 0 {
-			decision = service.PolicyDecision{Action: "stop", Reason: "attempt_budget_exhausted", Source: "global"}
-		}
 		if relayFormat != types.RelayFormatOpenAIRealtime {
 			service.RecordPolicyFailure(c, channel.Id, newAPIError, decision)
 		}
@@ -678,60 +682,40 @@ func decideHTTPRelayRetry(c *gin.Context, relayInfo *relaycommon.RelayInfo, open
 	if openaiErr == nil {
 		return service.PolicyDecision{Action: "stop", Reason: "request_completed", Source: "system"}
 	}
+	if c != nil && c.Request != nil && c.Request.Context().Err() != nil {
+		return service.PolicyDecision{Action: "stop", Reason: "request_cancelled", Source: "system"}
+	}
+	if relayInfo != nil && relayInfo.InitialStreamRejection == openaiErr && relayInfo.StreamStatus != nil &&
+		!relayInfo.StreamStatus.ClientUnavailable() && !relayInfo.StreamStatus.ClientPayloadIsCommitted() &&
+		!relayInfo.ProtocolEventWritten && !relayInfo.StreamStatus.ErrorFrameIsWritten() {
+		return service.DecideRelayRetry(c, openaiErr, retryTimes)
+	}
 	if retryBlockedByClientCommit(c, relayInfo) {
-		// Legacy Claude requests flush SSE headers before receiving the upstream HTTP status.
-		// HTTP failures and local first-payload timeouts may bypass headers before any protocol event.
-		upstreamStatus, real := openaiErr.GetUpstreamStatusCode()
-		localTimeout := relayInfo != nil && relayInfo.StreamStatus != nil && errors.Is(openaiErr, relaycommon.ErrFirstPayloadTimeout)
-		if !(localTimeout || real && upstreamStatus >= http.StatusBadRequest && upstreamStatus <= 599) ||
-			relayInfo == nil || !relayInfo.IsStream || relayInfo.ChannelMeta == nil ||
-			relayInfo.ChannelType != constant.ChannelTypeAnthropic ||
-			relayInfo.ChannelRoutePlan == nil || relayInfo.ChannelRoutePlan.RouteMode != hosttypes.ChannelRouteModeLegacy ||
-			(relayInfo.RelayFormat != types.RelayFormatClaude && relayInfo.RelayFormat != types.RelayFormatOpenAI) ||
-			relayInfo.StreamStatus == nil || relayInfo.ReceivedResponseCount != 0 || relayInfo.SendResponseCount != 0 {
+		if relayInfo == nil || !relayInfo.IsStream || relayInfo.ChannelRoutePlan == nil ||
+			relayInfo.ChannelRoutePlan.RouteMode != hosttypes.ChannelRouteModeLegacy || relayInfo.StreamStatus == nil {
 			return service.PolicyDecision{Action: "stop", Reason: "client_response_committed", Source: "system"}
 		}
 		status := relayInfo.StreamStatus
+		upstreamStatus, real := openaiErr.GetUpstreamStatusCode()
 		endReason, endErr := status.End()
-		localTimeout = localTimeout && endReason == relaycommon.StreamEndReasonTimeout && endErr == relaycommon.ErrFirstPayloadTimeout
-		if c.Request.Context().Err() != nil || status.ClientUnavailable() || (endReason != relaycommon.StreamEndReasonNone && !localTimeout) ||
-			status.ClientPayloadIsCommitted() || status.ErrorFrameIsWritten() {
+		_, _, _, textRoute := service.ResolveClientTextProtocol(c.Request.URL.Path)
+		// Only instrumented text routes can distinguish a local first-payload deadline from an ambiguous transport failure.
+		localTimeout := errors.Is(openaiErr, relaycommon.ErrFirstPayloadTimeout) && endErr == relaycommon.ErrFirstPayloadTimeout && endReason == relaycommon.StreamEndReasonTimeout
+		if !textRoute || !status.AppHTTPIsCommitted() || (!localTimeout && (!real || upstreamStatus < 400 || upstreamStatus > 599)) ||
+			relayInfo.ProtocolEventWritten || relayInfo.ReceivedResponseCount != 0 || relayInfo.SendResponseCount != 0 ||
+			status.ClientUnavailable() || c.Request.Context().Err() != nil || status.ClientPayloadIsCommitted() ||
+			status.ErrorFrameIsWritten() || (endReason != relaycommon.StreamEndReasonNone && !localTimeout) {
 			return service.PolicyDecision{Action: "stop", Reason: "client_response_committed", Source: "system"}
 		}
 	}
-	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
-		return service.PolicyDecision{Action: "stop", Reason: "strict_session", Source: "session_rule"}
-	}
-	if types.IsChannelError(openaiErr) {
-		return service.PolicyDecision{Action: "retry", Reason: "channel_error", Source: "system"}
-	}
-	if types.IsSkipRetryError(openaiErr) {
-		return service.PolicyDecision{Action: "stop", Reason: "non_retryable_error", Source: "system"}
-	}
-	if retryTimes <= 0 {
-		return service.PolicyDecision{Action: "stop", Reason: "attempt_budget_exhausted", Source: "global"}
-	}
-	if _, ok := c.Get("specific_channel_id"); ok {
-		return service.PolicyDecision{Action: "stop", Reason: "pinned_channel", Source: "channel_constraint"}
-	}
-	code := openaiErr.StatusCode
-	if code >= 200 && code < 300 {
-		return service.PolicyDecision{Action: "stop", Reason: "system_retry_exclusion", Source: "system"}
-	}
-	if code < 100 || code > 599 {
-		return service.PolicyDecision{Action: "retry", Reason: "unrecognized_status", Source: "system"}
-	}
-	if operation_setting.IsAlwaysSkipRetryCode(openaiErr.GetErrorCode()) {
-		return service.PolicyDecision{Action: "stop", Reason: "system_retry_exclusion", Source: "system"}
-	}
-	if operation_setting.ShouldRetryByStatusCode(code) {
-		return service.PolicyDecision{Action: "retry", Reason: "retry_status_matched", Source: "global"}
-	}
-	return service.PolicyDecision{Action: "stop", Reason: "status_not_retryable", Source: "global"}
+	return service.DecideRelayRetry(c, openaiErr, retryTimes)
 }
 
 func retryBlockedByClientCommit(c *gin.Context, relayInfo *relaycommon.RelayInfo) bool {
 	if relayInfo != nil && relayInfo.IsStream && relayInfo.StreamStatus != nil {
+		if relayInfo.ProtocolEventWritten {
+			return true
+		}
 		status := relayInfo.StreamStatus
 		if status.RetryCommitPolicy() == relaycommon.StreamRetryCommitPolicyPayload &&
 			relayInfo.ReceivedResponseCount > 0 &&
@@ -906,7 +890,21 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	var selectGroup string
 	preferredChannelID := retryParam.PreferredChannelID
 	retryParam.PreferredChannelID = 0
-	if preferredChannelID > 0 {
+	if pin, pinned, _ := service.GetChannelConstraints(c).ResolvedPin(); pinned {
+		if _, excluded := retryParam.ExcludedChannelIDs[pin.ChannelId]; excluded {
+			return nil, types.NewError(errors.New("pinned channel unavailable for retry"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		}
+		var selectErr *service.ChannelSelectError
+		channel, selectGroup, selectErr = service.SelectChannelForRequest(c, modelName, retryParam)
+		if selectErr != nil {
+			message := selectErr.Message
+			if selectErr.MessageID != "" {
+				message = i18n.T(c, selectErr.MessageID, selectErr.Params)
+			}
+			return nil, types.NewErrorWithStatusCode(errors.New(message), selectErr.Code, selectErr.StatusCode, types.ErrOptionWithSkipRetry())
+		}
+		selectGroup = relayRetryGroup(info)
+	} else if preferredChannelID > 0 {
 		preferred, preferredErr := model.CacheGetChannel(preferredChannelID)
 		if preferredErr == nil && preferred != nil && !service.IsChannelRoutingBlocked(preferred, modelName) &&
 			service.CheckChannelImageInput(c, preferred, modelName) == nil {
@@ -1528,6 +1526,12 @@ func decideTaskRetry(c *gin.Context, taskErr *taskdto.TaskError, retryTimes int)
 		stop.Reason = "request_completed"
 	case taskErr.NoRetry:
 		stop.Reason = "task_accepted"
+	case taskErr.SkipRetry:
+		stop.Reason = "non_retryable_error"
+	case c.Writer != nil && c.Writer.Written():
+		stop.Reason = "client_response_committed"
+	case c.Request != nil && c.Request.Context().Err() != nil:
+		stop.Reason = "request_cancelled"
 	case service.ShouldSkipRetryAfterChannelAffinityFailure(c):
 		stop.Reason, stop.Source = "strict_session", "session_rule"
 		if source := service.RequestPolicy(c).SessionModeSource; source != "" {
@@ -1562,30 +1566,6 @@ func decideTaskRetry(c *gin.Context, taskErr *taskdto.TaskError, retryTimes int)
 // CountTokens 保留旧路由名称，复用 Claude 本地 token 统计实现。
 func CountTokens(c *gin.Context) {
 	CountClaudeTokens(c)
-}
-
-func shouldRetryTaskRelay(c *gin.Context, _ int, taskErr *taskdto.TaskError, retryTimes int) bool {
-	if (c.Writer != nil && c.Writer.Written()) || (c.Request != nil && c.Request.Context().Err() != nil) || taskErr == nil || taskErr.SkipRetry {
-		return false
-	}
-	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) || retryTimes <= 0 {
-		return false
-	}
-	if _, ok := c.Get("specific_channel_id"); ok {
-		return false
-	}
-	switch {
-	case taskErr.StatusCode == http.StatusTooManyRequests, taskErr.StatusCode == http.StatusTemporaryRedirect:
-		return true
-	case taskErr.StatusCode/100 == 5:
-		return !operation_setting.IsAlwaysSkipRetryStatusCode(taskErr.StatusCode)
-	case taskErr.StatusCode == http.StatusBadRequest, taskErr.StatusCode == http.StatusRequestTimeout:
-		return false
-	case taskErr.LocalError, taskErr.StatusCode/100 == 2:
-		return false
-	default:
-		return true
-	}
 }
 
 func fastTokenCountMetaForPricing(request interface{ GetTokenCountMeta() *types.TokenCountMeta }) *types.TokenCountMeta {

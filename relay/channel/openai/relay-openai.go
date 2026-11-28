@@ -151,7 +151,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	if progressivePolicy {
 		streamOptions.RequiredTerminalEvent = "[DONE]"
 	}
-	helper.StreamScannerHandlerWithOptions(c, resp, info, streamOptions, func(data string, sr *helper.StreamResult) {
+	if rejection := helper.ScanTextStream(c, resp, info, streamOptions, func(data string, sr *helper.StreamResult) {
 		if lastStreamData != "" {
 			if isAudioModel {
 				secondLastStreamData = lastStreamData
@@ -198,7 +198,9 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 				lastStreamData = ""
 			}
 		}
-	})
+	}); rejection != nil {
+		return nil, rejection
+	}
 	if streamErr != nil {
 		partialUsage := service.ResponseText2Usage(c, responseTextBuilder.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 		partialUsage.CompletionTokens += toolCount * 7

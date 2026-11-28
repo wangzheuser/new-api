@@ -114,6 +114,7 @@ func WriteConvertedResponsesEvent(c *gin.Context, info *relaycommon.RelayInfo, e
 	}
 	status := info.StreamStatus
 	observation := ObserveStreamDataPayload(string(data), types.RelayFormatOpenAIResponses)
+	info.ProtocolEventWritten = true
 	if observation.Meaningful {
 		status.MarkClientPayloadCommitted()
 	}

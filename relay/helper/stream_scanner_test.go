@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -53,6 +54,48 @@ func buildSSEBody(n int) string {
 	}
 	b.WriteString("data: [DONE]\n")
 	return b.String()
+}
+
+func TestScanTextStreamInterceptsOnlyStandaloneFirstRejection(t *testing.T) {
+	oldRetries, oldRanges := common.RetryTimes, operation_setting.AutomaticRetryStatusCodeRanges
+	common.RetryTimes = 1
+	operation_setting.AutomaticRetryStatusCodeRanges = []operation_setting.StatusCodeRange{{Start: 400, End: 599}}
+	t.Cleanup(func() { common.RetryTimes, operation_setting.AutomaticRetryStatusCodeRanges = oldRetries, oldRanges })
+	const limited = `{"type":"error","code":"rate_limit_exceeded","message":"busy"}`
+	const started = `{"type":"response.created"}`
+	for _, tc := range []struct {
+		name, request string
+		events        []string
+		retryStatus   int
+	}{
+		{"responses rejection", "{}", []string{limited}, 429},
+		{"gemini rejection", "{}", []string{`{"error":{"code":503,"status":"UNAVAILABLE","message":"busy"}}`}, 503},
+		{"error after output", "{}", []string{started, limited}, 0},
+		{"failure with partial result", "{}", []string{`{"type":"error","code":"rate_limit_exceeded","response":{"output":[1]}}`}, 0},
+		{"unknown error", "{}", []string{`{"type":"error","code":"invalid_request"}`}, 0},
+		{"provider conversation", `{"conversation":"conv_1"}`, []string{limited}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, resp, info := setupStreamTest(t, strings.NewReader("data: "+strings.Join(tc.events, "\n\ndata: ")+"\n\n"))
+			resp.StatusCode = http.StatusOK
+			storage, err := common.CreateBodyStorage([]byte(tc.request))
+			require.NoError(t, err)
+			c.Set(common.KeyBodyStorage, storage)
+			t.Cleanup(func() { require.NoError(t, storage.Close()) })
+			var forwarded []string
+			rejection := ScanTextStream(c, resp, info, StreamScannerOptions{}, func(event string, _ *StreamResult) {
+				forwarded = append(forwarded, event)
+			})
+			if tc.retryStatus == 0 {
+				require.Nil(t, rejection)
+				assert.Equal(t, tc.events, forwarded)
+				return
+			}
+			require.NotNil(t, rejection)
+			assert.Equal(t, tc.retryStatus, rejection.StatusCode)
+			assert.Empty(t, forwarded)
+		})
+	}
 }
 
 func TestBoundedStreamDataQueueRejectsOversizedEvent(t *testing.T) {

@@ -27,7 +27,7 @@ import { RetryAttemptList } from '../components/dialogs/retry-details'
 import { usageLogSchema } from '../data/schema'
 import { canShowRetryDetails } from '../lib/request-attempts'
 
-test('retry details require an administrator, request ID and multiple attempts', () => {
+test('retry details require admin access and show why a single attempt stopped', () => {
   const log = usageLogSchema.parse({
     id: 1,
     user_id: 1,
@@ -40,6 +40,13 @@ test('retry details require an administrator, request ID and multiple attempts',
   assert.equal(canShowRetryDetails(log, true), true)
   assert.equal(canShowRetryDetails(log, false), false)
   assert.equal(canShowRetryDetails({ ...log, request_id: '' }, true), false)
+  const stopped = {
+    ...log,
+    other:
+      '{"admin_info":{"request_policy":[{"attempt":1,"decision":{"action":"stop","reason":"client_response_committed"}}]}}',
+  }
+  assert.equal(canShowRetryDetails(stopped, true), true)
+  assert.equal(canShowRetryDetails(stopped, false), false)
   assert.equal(
     canShowRetryDetails(
       { ...log, other: '{"admin_info":{"use_channel":["118"]}}' },
@@ -71,6 +78,9 @@ test('attempt messages remain complete escaped text with an accessible copy acti
             channelName: 'upstream',
             statusCode: 429,
             errorCode: 'rate_limit',
+            upstreamStatus: 503,
+            streamState: 'headers_only',
+            decision: { action: 'stop', reason: 'pinned_channel' },
             message,
           },
         ]}
@@ -81,6 +91,10 @@ test('attempt messages remain complete escaped text with an accessible copy acti
   assert.match(html, /Unknown attempt/)
   assert.match(html, /429/)
   assert.match(html, /rate_limit/)
+  assert.match(html, /Upstream HTTP status/)
+  assert.match(html, /503/)
+  assert.match(html, /Only headers or keepalives sent/)
+  assert.match(html, /pinned_channel/)
   assert.match(html, /&lt;img/)
   assert.doesNotMatch(html, /<img/)
   assert.match(html, /long error long error long error /)

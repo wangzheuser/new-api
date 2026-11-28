@@ -414,7 +414,7 @@ func handleConvertedTextStream(c *gin.Context, info *relaycommon.RelayInfo, resp
 		scannerOptions.RequireExplicitTerminal = true
 		scannerOptions.RequiredTerminalEvent = "message_stop"
 	}
-	helper.StreamScannerHandlerWithOptions(c, resp, info, scannerOptions, func(data string, sr *helper.StreamResult) {
+	if rejection := helper.ScanTextStream(c, resp, info, scannerOptions, func(data string, sr *helper.StreamResult) {
 		if streamErr != nil {
 			sr.Stop(streamErr)
 			return
@@ -455,7 +455,9 @@ func handleConvertedTextStream(c *gin.Context, info *relaycommon.RelayInfo, resp
 		if chatChunk, ok := chunk.(*dto.ChatCompletionsStreamResponse); ok {
 			markChatStreamTerminal(sr, chatChunk)
 		}
-	})
+	}); rejection != nil {
+		return nil, rejection
+	}
 	if streamErr != nil {
 		observePartialProtocolStreamUsage(c, info, state, usageText.String())
 		return nil, streamErr
@@ -527,7 +529,7 @@ func HandleNativeTextResponse(c *gin.Context, info *relaycommon.RelayInfo, resp 
 	scannerOptions := helper.StreamScannerOptions{
 		RequireExplicitTerminal: format == types.RelayFormatOpenAIResponses || format == types.RelayFormatOpenAI,
 	}
-	helper.StreamScannerHandlerWithOptions(c, resp, info, scannerOptions, func(data string, sr *helper.StreamResult) {
+	if rejection := helper.ScanTextStream(c, resp, info, scannerOptions, func(data string, sr *helper.StreamResult) {
 		chunk, decodeErr := decodeProtocolStreamChunk(format, data)
 		if decodeErr != nil {
 			streamErr = types.NewOpenAIError(decodeErr, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
@@ -567,7 +569,9 @@ func HandleNativeTextResponse(c *gin.Context, info *relaycommon.RelayInfo, resp 
 		if chatChunk, ok := chunk.(*dto.ChatCompletionsStreamResponse); ok {
 			markChatStreamTerminal(sr, chatChunk)
 		}
-	})
+	}); rejection != nil {
+		return nil, rejection
+	}
 	if streamErr != nil {
 		observePartialProtocolStreamUsage(c, info, state, usageText.String())
 		return nil, streamErr

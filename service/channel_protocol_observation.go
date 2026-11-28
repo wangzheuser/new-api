@@ -40,9 +40,20 @@ func ProtocolRequestReplayable(request any) bool {
 func protocolValueReplayable(value any) bool {
 	switch v := value.(type) {
 	case map[string]any:
+		kind, _ := v["type"].(string)
+		if kind == "redacted_thinking" || kind == "item_reference" {
+			return false
+		}
 		for key, item := range v {
 			switch key {
-			case "previous_response_id", "conversation", "encrypted_content", "thoughtSignature", "thought_signature", "signature", "redacted_thinking":
+			case "parameters", "input_schema", "responseSchema", "response_schema", "schema", "metadata", "arguments", "args":
+				continue // Client-defined schemas and tool arguments contain arbitrary field names.
+			case "input":
+				if kind == "tool_use" {
+					continue
+				}
+			case "previous_response_id", "conversation", "encrypted_content", "thoughtSignature", "thought_signature", "signature", "redacted_thinking",
+				"cachedContent", "cached_content", "file_id", "container_id":
 				if item != nil && item != "" {
 					return false
 				}
@@ -59,6 +70,62 @@ func protocolValueReplayable(value any) bool {
 		}
 	}
 	return true
+}
+
+// TextReplaySafety checks the original JSON once, including passthrough-only fields.
+func TextReplaySafety(c *gin.Context) (portable, safeAfterTimeout bool) {
+	const key = "text_request_replay_safety"
+	type safety struct{ portable, afterTimeout bool }
+	if result, ok := common.GetContextKeyType[safety](c, key); ok {
+		return result.portable, result.afterTimeout
+	}
+	storage, ok := common.GetContextKeyType[common.BodyStorage](c, common.KeyBodyStorage)
+	if !ok {
+		return false, false
+	}
+	defer func() { c.Set(key, safety{portable, safeAfterTimeout}) }()
+	reader, err := storage.NewReader()
+	if err != nil {
+		return false, false
+	}
+	defer reader.Close()
+	var request map[string]any
+	if common.DecodeJson(reader, &request) != nil || request == nil || !protocolValueReplayable(request) {
+		return false, false
+	}
+	// A timeout cannot establish whether hosted tools, background jobs or media generation already ran.
+	if background, _ := request["background"].(bool); background {
+		return true, false
+	}
+	if tools, ok := request["tools"].([]any); ok {
+		for _, item := range tools {
+			tool, _ := item.(map[string]any)
+			kind, _ := tool["type"].(string)
+			if kind == "function" || kind == "custom" || (kind == "" && tool["name"] != nil && tool["input_schema"] != nil) {
+				continue
+			}
+			if len(tool) == 1 && (tool["functionDeclarations"] != nil || tool["function_declarations"] != nil) {
+				continue
+			}
+			return true, false
+		}
+	}
+	sets := []any{request["modalities"]}
+	for _, key := range []string{"generationConfig", "generation_config"} {
+		if config, ok := request[key].(map[string]any); ok {
+			sets = append(sets, config["responseModalities"], config["response_modalities"])
+		}
+	}
+	for _, set := range sets {
+		values, _ := set.([]any)
+		for _, value := range values {
+			modality, _ := value.(string)
+			if !strings.EqualFold(modality, "text") {
+				return true, false
+			}
+		}
+	}
+	return true, true
 }
 
 // ProtocolEndpointRefused only recognizes explicit endpoint refusals before status mapping.

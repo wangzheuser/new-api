@@ -399,3 +399,31 @@ func TestProtocolObservationRedisIsolationAndReset(t *testing.T) {
 	assert.True(t, observation.Supported)
 	require.NoError(t, ClearProtocolObservations(context.Background(), 900002))
 }
+
+func TestTextReplaySafetyUsesOriginalClientBody(t *testing.T) {
+	for _, tc := range []struct {
+		body                   string
+		portable, afterTimeout bool
+	}{
+		{`{"input":"hello","tools":[{"type":"function","name":"weather"}]}`, true, true},
+		{`{"previous_response_id":"resp-1"}`, false, false},
+		{`{"input":[{"content":[{"encrypted_content":"sealed"}]}]}`, false, false},
+		{`{"messages":[{"content":[{"type":"redacted_thinking","data":"sealed"}]}]}`, false, false},
+		{`{"input":[{"type":"item_reference","id":"item_1"}]}`, false, false},
+		{`{"cachedContent":"cachedContents/1"}`, false, false},
+		{`{"input":[{"content":[{"type":"input_file","file_id":"file-1"}]}]}`, false, false},
+		{`{"tools":[{"type":"function","parameters":{"properties":{"signature":{"type":"string"}}}}]}`, true, true},
+		{`{"tools":[{"type":"mcp"}]}`, true, false},
+		{`{"background":true}`, true, false},
+		{`{"generationConfig":{"responseModalities":["IMAGE"]}}`, true, false},
+	} {
+		storage, err := common.CreateBodyStorage([]byte(tc.body))
+		require.NoError(t, err)
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Set(common.KeyBodyStorage, storage)
+		portable, afterTimeout := TextReplaySafety(c)
+		require.NoError(t, storage.Close())
+		assert.Equal(t, tc.portable, portable, tc.body)
+		assert.Equal(t, tc.afterTimeout, afterTimeout, tc.body)
+	}
+}

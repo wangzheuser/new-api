@@ -205,6 +205,8 @@ type RelayInfo struct {
 	ChannelRoutePlan         *hosttypes.ChannelRoutePlan
 	ClaudeToChatStreamState  any
 	ChatToGeminiStreamState  any
+	InitialStreamRejection   *types.NewAPIError
+	ProtocolEventWritten     bool
 	ProtocolEndpointRefused  bool
 	ProtocolEndpointMismatch bool
 	SendResponseCount        int
@@ -595,6 +597,9 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 
 // resetAttemptState clears response and billing facts produced by the previous relay attempt.
 func (info *RelayInfo) resetAttemptState(c *gin.Context) {
+	info.ReceivedResponseCount, info.SendResponseCount = 0, 0
+	info.InitialStreamRejection = nil
+	info.ProtocolEndpointMismatch = false
 	info.FinalRequestRelayFormat = ""
 	info.RequestConversionChain = nil
 	info.InitRequestConversionChain()

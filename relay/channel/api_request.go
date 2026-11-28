@@ -611,13 +611,17 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	if err != nil {
 		info.StopStreamPinger()
 		// No business request was sent when connection establishment never completed.
+		options := []types.NewAPIErrorOptions{types.ErrOptionWithHideErrMsg("upstream error: do request failed")}
 		if connectionRequested.Load() && !connectionObtained.Load() {
 			info.EnablePayloadRetry()
+		} else if info.IsStream {
+			// A connected or untraced transport may already have submitted the request.
+			options = append(options, types.ErrOptionWithSkipRetry())
 		}
 		if c.Request.Context().Err() == nil {
 			logger.LogError(c, "do request failed: "+err.Error())
 		}
-		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithHideErrMsg("upstream error: do request failed"))
+		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed, options...)
 	}
 	if resp == nil {
 		return nil, errors.New("resp is nil")

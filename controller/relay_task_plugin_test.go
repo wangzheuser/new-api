@@ -625,6 +625,25 @@ func TestAcceptedSubmitStreamNeverRetries(t *testing.T) {
 	assert.Equal(t, service.PolicyDecision{Action: "stop", Reason: "task_accepted", Source: "system"}, decideTaskRetry(c, &dto.TaskError{StatusCode: 502, LocalError: true, NoRetry: true}, 3))
 }
 
+func TestUncertainTaskSubmissionStopsAfterOneCall(t *testing.T) {
+	var events []string
+	setupTaskSubmissionDatabase(t, true, &events)
+	oldRetries := common.RetryTimes
+	common.RetryTimes = 3
+	t.Cleanup(func() { common.RetryTimes = oldRetries })
+	billing := &taskSubmissionTestBilling{events: &events}
+	submissions := 0
+	outcome, submitErr := executeTaskSubmissionWith(taskSubmissionTestContext(), taskSubmissionRelayInfo(billing),
+		func(*gin.Context, *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
+			submissions++
+			return nil, &dto.TaskError{StatusCode: 500, Code: "do_request_failed", SkipRetry: true}
+		})
+	require.Nil(t, outcome)
+	require.NotNil(t, submitErr)
+	assert.Equal(t, 1, submissions)
+	assert.Equal(t, 1, billing.refunds)
+}
+
 func TestTaskSubmissionAPIErrorPreservesUpstreamCause(t *testing.T) {
 	upstream := types.NewOpenAIError(
 		errors.New("quota exceeded"),
@@ -655,13 +674,15 @@ func TestRespondTaskSubmissionErrorWithoutCause(t *testing.T) {
 	t.Cleanup(func() { constant.ErrorLogEnabled = previousErrorLog })
 	c := taskSubmissionTestContext()
 	taskErr := &dto.TaskError{Code: "get_channel_failed", Message: "no channel", StatusCode: http.StatusServiceUnavailable, LocalError: true}
+	localErr := &dto.TaskError{StatusCode: http.StatusForbidden, LocalError: true, Message: "billing"}
+	assert.Equal(t, "local_rejection", decideTaskRetry(c, localErr, 2).Reason)
 	require.NotPanics(t, func() { respondTaskSubmissionError(c, taskErr) })
 	assert.Equal(t, http.StatusServiceUnavailable, c.Writer.Status())
 	events := service.RequestPolicy(c).Events()
 	require.Len(t, events, 1)
 	assert.Equal(t, service.PolicyDecision{Action: "stop", Reason: "request_failed", Source: "system"}, events[0].Decision)
 	assert.Equal(t, http.StatusServiceUnavailable, events[0].Status)
-	assert.Equal(t, service.PolicyDecision{Action: "stop", Reason: "local_rejection", Source: "system"}, decideTaskRetry(c, &dto.TaskError{StatusCode: http.StatusForbidden, LocalError: true, Message: "billing"}, 2), "local errors stop once the status rules do not force a retry")
+	assert.Equal(t, service.PolicyDecision{Action: "stop", Reason: "client_response_committed", Source: "system"}, decideTaskRetry(c, localErr, 2))
 }
 
 func TestExecuteTaskSubmissionRefundsWhenFinalReserveFails(t *testing.T) {

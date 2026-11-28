@@ -156,3 +156,27 @@ test('mixed channel ID types and full untrusted text are preserved as data', () 
   assert.equal(result.attempts[1].statusCode, 502)
   assert.equal(result.attempts[1].errorCode, 'upstream_failed')
 })
+
+test('single failed attempt keeps upstream status, stream boundary and routing decision separate', () => {
+  const row = entry(1, {
+    intermediate: true,
+    other: JSON.stringify({
+      status_code: 503,
+      admin_info: {
+        use_channel: [98],
+        upstream_status_code: 429,
+        stream_retry_state: 'headers_only',
+        request_policy: [
+          {
+            attempt: 1,
+            decision: { action: 'stop', reason: 'pinned_channel' },
+          },
+        ],
+      },
+    }),
+  })
+  const { attempts } = normalizeRequestAttempts([row], row)
+  assert.equal(attempts[0].upstreamStatus, 429)
+  assert.equal(attempts[0].streamState, 'headers_only')
+  assert.equal(attempts[0].decision?.reason, 'pinned_channel')
+})

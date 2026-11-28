@@ -31,14 +31,14 @@ func DecideRelayRetry(c *gin.Context, err *types.NewAPIError, retryTimes int) Po
 	if GetChannelConstraints(c).SuppressesRetry() {
 		return PolicyDecision{Action: "stop", Reason: "pinned_channel", Source: "channel_constraint"}
 	}
-	if types.IsChannelError(err) {
-		return PolicyDecision{Action: "retry", Reason: "channel_error", Source: "system"}
-	}
 	if types.IsSkipRetryError(err) {
 		return PolicyDecision{Action: "stop", Reason: "non_retryable_error", Source: "system"}
 	}
 	if retryTimes <= 0 {
 		return PolicyDecision{Action: "stop", Reason: "attempt_budget_exhausted", Source: "global"}
+	}
+	if types.IsChannelError(err) {
+		return PolicyDecision{Action: "retry", Reason: "channel_error", Source: "system"}
 	}
 	code := err.StatusCode
 	if code >= 200 && code < 300 {

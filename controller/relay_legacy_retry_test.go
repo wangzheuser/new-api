@@ -3,13 +3,16 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -17,20 +20,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestLegacyClaudeHeaderOnlyRetry protects the narrow HTTP-error retry exception.
-func TestLegacyClaudeHeaderOnlyRetry(t *testing.T) {
-	for _, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAI} {
-		for _, scenario := range []string{"headers", "ping", "event", "sent event", "payload", "error frame", "cancelled", "ping failed", "no budget", "specific channel", "affinity", "local error", "skip retry", "other provider", "responses", "http success"} {
-			t.Run(string(format)+"/"+scenario, func(t *testing.T) {
+func TestLegacyTextHeaderOnlyRetry(t *testing.T) {
+	for _, route := range []struct {
+		path     string
+		format   types.RelayFormat
+		provider int
+	}{
+		{"/v1/messages", types.RelayFormatClaude, constant.ChannelTypeAnthropic},
+		{"/v1/chat/completions", types.RelayFormatOpenAI, constant.ChannelTypeOpenAI},
+		{"/v1/responses", types.RelayFormatOpenAIResponses, constant.ChannelTypeAnthropic},
+		{"/v1/responses", types.RelayFormatOpenAIResponses, constant.ChannelTypeOpenAI},
+		{"/v1beta/models/gemini:streamGenerateContent", types.RelayFormatGemini, constant.ChannelTypeGemini},
+	} {
+		for _, scenario := range []string{"headers", "ping", "event", "sent event", "payload", "error frame", "cancelled", "ping failed", "no budget", "specific channel", "affinity", "local error", "skip retry", "http success"} {
+			t.Run(fmt.Sprintf("%s/%d/%s", route.format, route.provider, scenario), func(t *testing.T) {
 				ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-				ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+				ctx.Request = httptest.NewRequest(http.MethodPost, route.path, nil)
 				helper.SetEventStreamHeaders(ctx)
 				require.NoError(t, helper.FlushWriter(ctx))
 				status := relaycommon.NewStreamStatus()
 				status.MarkAppHTTPCommitted()
 				info := &relaycommon.RelayInfo{
-					IsStream: true, RelayFormat: format, StreamStatus: status,
-					ChannelMeta:      &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeAnthropic},
+					IsStream: true, RelayFormat: route.format, StreamStatus: status,
+					ChannelMeta:      &relaycommon.ChannelMeta{ChannelType: route.provider},
 					ChannelRoutePlan: &types.ChannelRoutePlan{RouteMode: types.ChannelRouteModeLegacy},
 				}
 				err := types.NewErrorWithStatusCode(errors.New("upstream failed"), types.ErrorCodeBadResponseStatusCode, 500, types.ErrOptionWithUpstreamStatusCode(500))
@@ -55,17 +67,13 @@ func TestLegacyClaudeHeaderOnlyRetry(t *testing.T) {
 				case "no budget":
 					budget = 0
 				case "specific channel":
-					ctx.Set("specific_channel_id", 43)
+					service.GetChannelConstraints(ctx).AddPin(dto.ChannelPin{ChannelId: 43, RetryMode: dto.PinRetrySingleAttempt})
 				case "affinity":
 					ctx.Set("channel_affinity_skip_retry_on_failure", true)
 				case "local error":
 					err = types.NewErrorWithStatusCode(errors.New("not implemented"), types.ErrorCodeConvertRequestFailed, 500)
 				case "skip retry":
 					types.ErrOptionWithSkipRetry()(err)
-				case "other provider":
-					info.ChannelType = constant.ChannelTypeOpenAI
-				case "responses":
-					info.RelayFormat = types.RelayFormatOpenAIResponses
 				case "http success":
 					types.ErrOptionWithUpstreamStatusCode(200)(err)
 				}

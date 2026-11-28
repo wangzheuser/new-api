@@ -146,6 +146,8 @@ export interface LogOtherData {
       quality?: string
       request_normalizer?: string
     }
+    upstream_status_code?: number
+    stream_retry_state?: string
     request_policy?: {
       attempt?: number
       decision?: { action?: string; reason?: string; source?: string }

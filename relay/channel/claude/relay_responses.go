@@ -75,7 +75,7 @@ func ClaudeResponsesStreamHandler(c *gin.Context, resp *http.Response, info *rel
 		return err
 	}
 
-	helper.StreamScannerHandlerWithOptions(c, resp, info, helper.StreamScannerOptions{
+	if rejection := helper.ScanTextStream(c, resp, info, helper.StreamScannerOptions{
 		RequireExplicitTerminal: true,
 		RequiredTerminalEvent:   "message_stop",
 	}, func(data string, sr *helper.StreamResult) {
@@ -138,7 +138,9 @@ func ClaudeResponsesStreamHandler(c *gin.Context, resp *http.Response, info *rel
 		if claudeResponse.Type == "message_stop" {
 			sr.DoneWithTerminal(claudeResponse.Type, "completed")
 		}
-	})
+	}); rejection != nil {
+		return nil, rejection
+	}
 	if streamErr == nil {
 		streamErr = helper.StreamStatusError(c, info)
 	}

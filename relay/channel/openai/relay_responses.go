@@ -80,7 +80,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	accumulator := service.NewResponsesUsageAccumulator(info)
 	var streamErr *types.NewAPIError
 
-	helper.StreamScannerHandlerWithOptions(c, resp, info, helper.StreamScannerOptions{RequireExplicitTerminal: true}, func(data string, sr *helper.StreamResult) {
+	if rejection := helper.ScanTextStream(c, resp, info, helper.StreamScannerOptions{RequireExplicitTerminal: true}, func(data string, sr *helper.StreamResult) {
 		// 每个事件都必须先完成协议解析，避免把损坏的 SSE 继续下发。
 		var streamResponse dto.ResponsesStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
@@ -125,7 +125,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			}
 			sr.DoneWithTerminal(streamResponse.Type, status)
 		}
-	})
+	}); rejection != nil {
+		return nil, rejection
+	}
 
 	usage := accumulator.Finish()
 	// The controller owns failed-stream settlement. Preserve the accumulator's

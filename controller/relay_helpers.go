@@ -67,6 +67,30 @@ func recordRelayErrorLog(c *gin.Context, relayInfo *relaycommon.RelayInfo, err *
 	service.AppendResponseModelLogInfo(relayInfo, other)
 	service.AppendTaskPluginContextAuditInfo(c, other)
 	adminInfo := make(map[string]any)
+	if isIntermediate {
+		if status, ok := err.GetUpstreamStatusCode(); ok {
+			adminInfo["upstream_status_code"] = status
+		}
+		if relayInfo != nil && relayInfo.IsStream && relayInfo.StreamStatus != nil {
+			stream := relayInfo.StreamStatus
+			switch {
+			case stream.ClientUnavailable():
+				adminInfo["stream_retry_state"] = "client_unavailable"
+			case stream.ErrorFrameIsWritten():
+				adminInfo["stream_retry_state"] = "error_frame"
+			case stream.ClientPayloadIsCommitted() || relayInfo.ProtocolEventWritten || relayInfo.SendResponseCount > 0:
+				adminInfo["stream_retry_state"] = "event_written"
+			case relayInfo.InitialStreamRejection != nil:
+				adminInfo["stream_retry_state"] = "initial_rejection"
+			case relayInfo.ReceivedResponseCount > 0:
+				adminInfo["stream_retry_state"] = "upstream_event_seen"
+			case stream.AppHTTPIsCommitted():
+				adminInfo["stream_retry_state"] = "headers_only"
+			default:
+				adminInfo["stream_retry_state"] = "no_event"
+			}
+		}
+	}
 	service.AppendResponseOverrideAdminInfo(relayInfo, adminInfo)
 	service.AppendRelayProtocolInfo(relayInfo, other, adminInfo)
 	other.MergeAdmin(adminInfo)

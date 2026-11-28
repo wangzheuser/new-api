@@ -230,8 +230,8 @@ func TestMultiKeyTaskRetryCommitBoundary(t *testing.T) {
 	for _, status := range []int{429, 500} {
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())
 		c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
-		assert.False(t, shouldRetryTaskRelay(c, 1, &dto.TaskError{StatusCode: status, SkipRetry: true}, 2))
+		assert.Equal(t, "stop", decideTaskRetry(c, &dto.TaskError{StatusCode: status, SkipRetry: true}, 2).Action)
 		c.Writer.WriteHeaderNow()
-		assert.False(t, shouldRetryTaskRelay(c, 1, &dto.TaskError{StatusCode: status}, 2))
+		assert.Equal(t, "stop", decideTaskRetry(c, &dto.TaskError{StatusCode: status}, 2).Action)
 	}
 }

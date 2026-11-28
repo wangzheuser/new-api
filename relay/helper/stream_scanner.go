@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/bytedance/gopkg/util/gopool"
@@ -151,6 +152,81 @@ func ExtendWriteDeadline(c *gin.Context) {
 		return
 	}
 	_ = http.NewResponseController(c.Writer).SetWriteDeadline(time.Now().Add(streamWriteTimeout))
+}
+
+// ScanTextStream returns an explicit transient rejection before forwarding the first data event.
+func ScanTextStream(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo, options StreamScannerOptions, handle func(string, *StreamResult)) *types.NewAPIError {
+	first := true
+	StreamScannerHandlerWithOptions(c, resp, info, options, func(data string, sr *StreamResult) {
+		if first {
+			first = false
+			if err := initialStreamRejection(data, resp, info); err != nil && !info.IsChannelTest && !info.IsContextFallbackActive() &&
+				service.DecideRelayRetry(c, err, common.RetryTimes-info.RetryIndex).Action == "retry" {
+				if portable, _ := service.TextReplaySafety(c); portable {
+					info.InitialStreamRejection = err
+					sr.StopWithTerminal("error", "failed", err)
+					return
+				}
+			}
+		}
+		handle(data, sr)
+	})
+	return info.InitialStreamRejection
+}
+
+func initialStreamRejection(data string, resp *http.Response, info *relaycommon.RelayInfo) *types.NewAPIError {
+	if resp.StatusCode != http.StatusOK || info.RetryIndex >= common.RetryTimes || info.ProtocolEventWritten ||
+		info.SendResponseCount != 0 || info.StreamStatus.ClientPayloadIsCommitted() || info.StreamStatus.ErrorFrameIsWritten() {
+		return nil
+	}
+	// Only a standalone provider rejection is replayable. Failure terminals can carry partial work.
+	var frame struct {
+		Type    string
+		Code    string
+		Message string
+		Error   *struct {
+			Type, Status, Message string
+			Code                  any
+		}
+	}
+	if !strings.Contains(data, `"error"`) || common.UnmarshalJsonStr(data, &frame) != nil {
+		return nil
+	}
+	if frame.Type != "error" && (frame.Type != "" || frame.Error == nil) {
+		return nil
+	}
+	var fields map[string]any
+	if common.UnmarshalJsonStr(data, &fields) != nil {
+		return nil
+	}
+	for key := range fields {
+		switch key {
+		case "type", "code", "message", "error", "param", "sequence_number", "event_id":
+		default:
+			return nil
+		}
+	}
+	code, message := frame.Code, frame.Message
+	if frame.Error != nil {
+		code, message = frame.Error.Type, frame.Error.Message
+		if explicit, ok := frame.Error.Code.(string); ok && explicit != "" {
+			code = explicit
+		}
+		if code == "" {
+			code = frame.Error.Status
+		}
+	}
+	var status int
+	switch code {
+	case "rate_limit_error", "rate_limit_exceeded", "RESOURCE_EXHAUSTED":
+		status = http.StatusTooManyRequests
+	case "overloaded_error", "server_overloaded", "UNAVAILABLE":
+		status = http.StatusServiceUnavailable
+	default:
+		return nil
+	}
+	return types.WithOpenAIError(types.OpenAIError{Code: code, Type: "upstream_error", Message: message}, status,
+		types.ErrOptionWithUpstreamStatusCode(resp.StatusCode), types.ErrOptionWithUpstreamRetryAfter(resp.Header.Get("Retry-After")))
 }
 
 // StreamScannerHandler scans an SSE response with legacy EOF-compatible semantics.

@@ -17,6 +17,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel"
@@ -48,8 +49,13 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 			dialFailure   bool
 			headerTimeout bool
 			cache         bool
+			responses     bool
 			stop          string
 		}{
+			{name: "Responses HTTP 429", responses: true, status: 429, message: "quota exceeded", recover: true, wantKeys: []string{"KEY_A", "KEY_B"}},
+			{name: "Responses first SSE rejection", responses: true, recover: true, backup: true, wantKeys: []string{"KEY_A", "BACKUP_A"}},
+			{name: "pinned channel rotates keys", stop: "same_channel", status: 429, message: "quota exceeded", recover: true, wantKeys: []string{"KEY_A", "KEY_B"}},
+			{name: "pinned channel cannot use backup", stop: "same_channel", status: 500, message: "upstream failed", backup: true, wantKeys: []string{"KEY_A"}},
 			{name: "key quota recovery", status: 429, message: "quota exceeded", recover: true, wantKeys: []string{"KEY_A", "KEY_B"}},
 			{name: "key quota budget exhausted", status: 429, message: "quota exceeded", wantKeys: []string{"KEY_A", "KEY_B", "KEY_C"}},
 			{name: "channel recovery", status: 500, message: "upstream failed", recover: true, backup: true, wantKeys: []string{"KEY_A", "BACKUP_A"}},
@@ -72,7 +78,19 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 			{name: "dial pinned", dialFailure: true, stop: "pin", wantKeys: []string{"KEY_A"}},
 			{name: "dial strict session", dialFailure: true, stop: "session", wantKeys: []string{"KEY_A"}},
 		} {
-			t.Run(string(format)+"/"+scenario.name, func(t *testing.T) {
+			if scenario.responses && format != types.RelayFormatClaude {
+				continue
+			}
+			entryFormat := format
+			if scenario.responses {
+				entryFormat = types.RelayFormatOpenAIResponses
+			}
+			t.Run(string(entryFormat)+"/"+scenario.name, func(t *testing.T) {
+				if scenario.responses {
+					old := constant.ErrorLogEnabled
+					constant.ErrorLogEnabled = true
+					t.Cleanup(func() { constant.ErrorLogEnabled = old })
+				}
 				oldDB, oldLogDB := model.DB, model.LOG_DB
 				oldRedis, oldRedisEnabled := common.RDB, common.RedisEnabled
 				oldRetry, oldAuto, oldMemory := common.RetryTimes, common.AutomaticDisableChannelEnabled, common.MemoryCacheEnabled
@@ -136,6 +154,11 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 							failed = key != "BACKUP_A"
 						}
 					}
+					if failed && scenario.name == "Responses first SSE rejection" {
+						w.Header().Set("Content-Type", "text/event-stream")
+						_, _ = io.WriteString(w, "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"busy\"}}\n\n")
+						return
+					}
 					if failed {
 						w.Header().Set("Content-Type", "application/json")
 						w.WriteHeader(scenario.status)
@@ -145,7 +168,7 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 					w.Header().Set("Content-Type", "text/event-stream")
 					_, _ = io.WriteString(w, "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"MODEL_X\",\"content\":[],\"usage\":{\"input_tokens\":2,\"output_tokens\":0}}}\n\n")
 					if scenario.name == "protocol event" {
-						_, _ = io.WriteString(w, "data: {\"type\":\"error\",\"error\":{\"type\":\"server_error\",\"message\":\"stream failed\"}}\n\n")
+						_, _ = io.WriteString(w, "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"stream failed\"}}\n\n")
 						return
 					}
 					if scenario.stop == "payload" {
@@ -226,6 +249,9 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 				if format == types.RelayFormatOpenAI {
 					path = "/v1/chat/completions"
 				}
+				if scenario.responses {
+					path = "/v1/responses"
+				}
 				var requestContext *gin.Context
 				router := gin.New()
 				router.POST(path, func(c *gin.Context) {
@@ -241,17 +267,24 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 						return
 					}
 					if scenario.stop == "pin" {
-						c.Set("specific_channel_id", channel.Id)
+						service.GetChannelConstraints(c).AddPin(dto.ChannelPin{ChannelId: channel.Id, RetryMode: dto.PinRetrySingleAttempt})
+					}
+					if scenario.stop == "same_channel" {
+						service.GetChannelConstraints(c).AddPin(dto.ChannelPin{ChannelId: channel.Id, RetryMode: dto.PinRetrySameChannel})
 					}
 					if scenario.stop == "session" {
 						c.Set("channel_affinity_skip_retry_on_failure", true)
 					}
 					requestContext = c
-					Relay(c, format)
+					Relay(c, entryFormat)
 				})
 				// Wait for the handler before inspecting stream output and settled consumption.
 				response := httptest.NewRecorder()
-				request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"MODEL_X","messages":[{"role":"user","content":"hello"}],"max_tokens":16,"stream":true}`))
+				clientBody := `{"model":"MODEL_X","messages":[{"role":"user","content":"hello"}],"max_tokens":16,"stream":true}`
+				if scenario.responses {
+					clientBody = `{"model":"MODEL_X","input":"hello","stream":true}`
+				}
+				request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(clientBody))
 				request.Header.Set("Content-Type", "application/json")
 				router.ServeHTTP(response, request.WithContext(requestCtx))
 				body := response.Body.String()
@@ -287,15 +320,37 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 				require.NoError(t, db.First(&user, 1).Error)
 				require.NoError(t, db.First(&token, 1).Error)
 				if scenario.recover {
-					assert.Equal(t, 1, strings.Count(body, "fixture-ok"), body)
+					if scenario.responses {
+						assert.Contains(t, body, "fixture-ok")
+						assert.Equal(t, 1, strings.Count(body, "event: response.created"))
+						assert.Equal(t, 1, strings.Count(body, "event: response.completed"))
+						var failure model.Log
+						require.NoError(t, db.Where(&model.Log{Type: model.LogTypeError, IsIntermediate: true}).First(&failure).Error)
+						var details struct {
+							Admin struct {
+								HTTPStatus int    `json:"upstream_status_code"`
+								Stream     string `json:"stream_retry_state"`
+							} `json:"admin_info"`
+						}
+						require.NoError(t, common.UnmarshalJsonStr(failure.Other, &details))
+						if scenario.status != 0 {
+							assert.Equal(t, scenario.status, details.Admin.HTTPStatus)
+							assert.Equal(t, "headers_only", details.Admin.Stream)
+						} else {
+							assert.Equal(t, http.StatusOK, details.Admin.HTTPStatus)
+							assert.Equal(t, "initial_rejection", details.Admin.Stream)
+						}
+					} else {
+						assert.Equal(t, 1, strings.Count(body, "fixture-ok"), body)
+					}
 					assert.NotContains(t, body, `"type":"error"`)
 					require.Len(t, logs, 1)
 					assert.Positive(t, logs[0].Quota)
 					assert.Equal(t, initialQuota-logs[0].Quota, user.Quota)
 					assert.Equal(t, user.Quota, token.RemainQuota)
-					if format == types.RelayFormatClaude {
+					if entryFormat == types.RelayFormatClaude {
 						assert.Equal(t, 1, strings.Count(body, "event: message_stop"))
-					} else {
+					} else if !scenario.responses {
 						assert.Equal(t, 1, strings.Count(body, "[DONE]"))
 					}
 				} else {

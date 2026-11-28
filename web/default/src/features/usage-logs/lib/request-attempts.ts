@@ -22,6 +22,9 @@ import type { LogOtherData } from '../types'
 export interface RequestAttempt {
   attempt: number | null
   channel: number
+  upstreamStatus?: number
+  streamState?: string
+  decision?: { action?: string; reason?: string }
   channelName: string
   statusCode: number | null
   errorCode: string | number | undefined
@@ -50,7 +53,9 @@ export function canShowRetryDetails(log: UsageLog, isAdmin: boolean): boolean {
       (Array.isArray(admin?.request_policy) &&
         admin.request_policy.some(
           (event) =>
-            Number.isSafeInteger(event?.attempt) && (event.attempt ?? 0) > 1
+            (Number.isSafeInteger(event?.attempt) &&
+              (event.attempt ?? 0) > 1) ||
+            event?.decision?.action === 'stop'
         )))
   )
 }
@@ -108,6 +113,16 @@ export function normalizeRequestAttempts(
     const item = {
       attempt,
       channel,
+      upstreamStatus: other.admin_info?.upstream_status_code,
+      streamState: other.admin_info?.stream_retry_state,
+      decision: Array.isArray(other.admin_info?.request_policy)
+        ? other.admin_info.request_policy.find(
+            (event) =>
+              event?.attempt === attempt &&
+              (event.decision?.action === 'retry' ||
+                event.decision?.action === 'stop')
+          )?.decision
+        : undefined,
       channelName: channel === log.channel ? (log.channel_name ?? '') : '',
       statusCode:
         typeof status === 'number' && status >= 100 && status <= 599

@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
+import type { TFunction } from 'i18next'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -43,6 +44,27 @@ interface RetryDetailsProps {
   log: UsageLog
   isAdmin: boolean
   open: boolean
+}
+
+function streamStateLabel(t: TFunction, state: string): string {
+  switch (state) {
+    case 'headers_only':
+      return t('Only headers or keepalives sent')
+    case 'no_event':
+      return t('No stream event recorded')
+    case 'event_written':
+      return t('Response event sent')
+    case 'error_frame':
+      return t('Error event sent')
+    case 'initial_rejection':
+      return t('First event rejected by upstream')
+    case 'upstream_event_seen':
+      return t('Upstream event received')
+    case 'client_unavailable':
+      return t('Client disconnected')
+    default:
+      return state
+  }
 }
 
 export function RetryAttemptList(props: {
@@ -93,6 +115,22 @@ export function RetryAttemptList(props: {
               className='ml-auto size-6'
             />
           </div>
+          {attempt.upstreamStatus !== undefined && (
+            <p>
+              {t('Upstream HTTP status')}: {attempt.upstreamStatus}
+            </p>
+          )}
+          {attempt.streamState && (
+            <p>
+              {t('Stream Status')}: {streamStateLabel(t, attempt.streamState)}
+            </p>
+          )}
+          {attempt.decision && (
+            <p>
+              {attempt.decision.action === 'retry' ? t('Retry') : t('Stop')} ·{' '}
+              {attempt.decision.reason}
+            </p>
+          )}
           <p className='[overflow-wrap:anywhere] whitespace-pre-wrap'>
             {attempt.message || t('No error message was recorded')}
           </p>

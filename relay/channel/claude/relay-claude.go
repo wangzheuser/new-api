@@ -356,7 +356,7 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		}
 	}
 	var err *types.NewAPIError
-	helper.StreamScannerHandlerWithOptions(c, resp, info, helper.StreamScannerOptions{
+	if rejection := helper.ScanTextStream(c, resp, info, helper.StreamScannerOptions{
 		RequireExplicitTerminal: true,
 		RequiredTerminalEvent:   "message_stop",
 	}, func(data string, sr *helper.StreamResult) {
@@ -371,7 +371,9 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		if common.UnmarshalJsonStr(data, &event) == nil && event.Type == "message_stop" {
 			sr.DoneWithTerminal("message_stop", "completed")
 		}
-	})
+	}); rejection != nil {
+		return nil, rejection
+	}
 	info.StreamStatus.RequireTerminal()
 	if err != nil {
 		fallback := service.ResponseText2Usage(c, claudeInfo.ResponseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
