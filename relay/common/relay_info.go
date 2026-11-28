@@ -206,6 +206,7 @@ type RelayInfo struct {
 	ClaudeToChatStreamState  any
 	ChatToGeminiStreamState  any
 	InitialStreamRejection   *types.NewAPIError
+	TimeoutReplaySafe        *bool // Set after checking an ambiguous timeout against this attempt's wire request.
 	ProtocolEventWritten     bool
 	ProtocolEndpointRefused  bool
 	ProtocolEndpointMismatch bool
@@ -599,6 +600,7 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 func (info *RelayInfo) resetAttemptState(c *gin.Context) {
 	info.ReceivedResponseCount, info.SendResponseCount = 0, 0
 	info.InitialStreamRejection = nil
+	info.TimeoutReplaySafe = nil
 	info.ProtocolEndpointMismatch = false
 	info.FinalRequestRelayFormat = ""
 	info.RequestConversionChain = nil

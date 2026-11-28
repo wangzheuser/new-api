@@ -90,17 +90,18 @@ const (
 )
 
 type NewAPIError struct {
-	Err                error
-	RelayError         any
-	skipRetry          bool
-	clientErrorWritten bool
-	recordErrorLog     *bool
-	errorType          ErrorType
-	errorCode          ErrorCode
-	StatusCode         int
-	upstreamStatusCode int
-	upstreamRetryAfter string
-	Metadata           json.RawMessage
+	Err                 error
+	RelayError          any
+	skipRetry           bool
+	clientErrorWritten  bool
+	recordErrorLog      *bool
+	errorType           ErrorType
+	errorCode           ErrorCode
+	StatusCode          int
+	upstreamStatusCode  int
+	upstreamEventStatus int
+	upstreamRetryAfter  string
+	Metadata            json.RawMessage
 }
 
 // Unwrap enables errors.Is / errors.As to work with NewAPIError by exposing the underlying error.
@@ -131,6 +132,19 @@ func (e *NewAPIError) GetUpstreamStatusCode() (int, bool) {
 		return 0, false
 	}
 	return e.upstreamStatusCode, true
+}
+
+// GetUpstreamFailureStatus uses an explicit provider event before falling back to the wire HTTP status.
+func (e *NewAPIError) GetUpstreamFailureStatus() (int, bool) {
+	if e != nil && e.upstreamEventStatus != 0 {
+		return e.upstreamEventStatus, true
+	}
+	return e.GetUpstreamStatusCode()
+}
+
+// ErrOptionWithSSEStatus records an observed upstream rejection independently of client status mapping.
+func ErrOptionWithSSEStatus(status int) NewAPIErrorOptions {
+	return func(e *NewAPIError) { e.upstreamEventStatus = status }
 }
 
 // GetUpstreamRetryAfter returns the original recovery hint, not a public error override.

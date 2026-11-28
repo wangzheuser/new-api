@@ -32,7 +32,7 @@ func TestLegacyTextHeaderOnlyRetry(t *testing.T) {
 		{"/v1/responses", types.RelayFormatOpenAIResponses, constant.ChannelTypeOpenAI},
 		{"/v1beta/models/gemini:streamGenerateContent", types.RelayFormatGemini, constant.ChannelTypeGemini},
 	} {
-		for _, scenario := range []string{"headers", "ping", "event", "sent event", "payload", "error frame", "cancelled", "ping failed", "no budget", "specific channel", "affinity", "local error", "skip retry", "http success"} {
+		for _, scenario := range []string{"headers", "ping", "event", "sent event", "payload", "error frame", "cancelled", "ping failed", "no budget", "specific channel", "affinity", "local error", "skip retry", "http success", "context fallback rejection"} {
 			t.Run(fmt.Sprintf("%s/%d/%s", route.format, route.provider, scenario), func(t *testing.T) {
 				ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 				ctx.Request = httptest.NewRequest(http.MethodPost, route.path, nil)
@@ -76,6 +76,9 @@ func TestLegacyTextHeaderOnlyRetry(t *testing.T) {
 					types.ErrOptionWithSkipRetry()(err)
 				case "http success":
 					types.ErrOptionWithUpstreamStatusCode(200)(err)
+				case "context fallback rejection":
+					info.InitialStreamRejection = err
+					info.ContextFallback = &relaycommon.ContextFallbackDecision{Applied: true, RouteMode: dto.ContextFallbackModeCross}
 				}
 				assert.Equal(t, scenario == "headers" || scenario == "ping", decideHTTPRelayRetry(ctx, info, err, budget).Action == "retry")
 			})

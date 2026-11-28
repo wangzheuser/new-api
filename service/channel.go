@@ -82,14 +82,14 @@ func ShouldDisableChannel(err *types.NewAPIError) bool {
 	if err == nil || types.IsLocalBillingError(err) {
 		return false
 	}
-	if statusCode, realUpstream := err.GetUpstreamStatusCode(); realUpstream && statusCode == http.StatusUnauthorized {
+	if statusCode, realUpstream := err.GetUpstreamFailureStatus(); realUpstream && statusCode == http.StatusUnauthorized {
 		return true
 	}
 	// Upstream health failures are evaluated by rolling samples, never by the legacy persistent rule.
 	if isIgnoredChannelHealthError(strings.ToLower(err.Error())) || isRealUpstreamTimeout(err) {
 		return false
 	}
-	if statusCode, realUpstream := err.GetUpstreamStatusCode(); realUpstream &&
+	if statusCode, realUpstream := err.GetUpstreamFailureStatus(); realUpstream &&
 		(statusCode == http.StatusRequestTimeout || statusCode >= http.StatusInternalServerError) {
 		return false
 	}

@@ -35,7 +35,7 @@ func DecideMultiKeyFailure(channel *model.Channel, upstreamModel string, apiErr 
 	if channel == nil || apiErr == nil || !channel.ChannelInfo.IsMultiKey || !common.AutomaticDisableChannelEnabled || !channel.GetAutoBan() {
 		return d
 	}
-	status, real := apiErr.GetUpstreamStatusCode()
+	status, real := apiErr.GetUpstreamFailureStatus()
 	if !real {
 		return d
 	}

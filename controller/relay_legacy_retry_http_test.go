@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -48,12 +49,29 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 			wantKeys      []string
 			dialFailure   bool
 			headerTimeout bool
+			flushHeaders  bool
+			bodyTimeout   bool
 			cache         bool
 			responses     bool
 			stop          string
+			searchOptions bool
+			injectSearch  bool
+			sseError      string
 		}{
 			{name: "Responses HTTP 429", responses: true, status: 429, message: "quota exceeded", recover: true, wantKeys: []string{"KEY_A", "KEY_B"}},
-			{name: "Responses first SSE rejection", responses: true, recover: true, backup: true, wantKeys: []string{"KEY_A", "BACKUP_A"}},
+			{name: "Responses first SSE rejection", responses: true, sseError: "overloaded_error", message: "busy", recover: true, backup: true, wantKeys: []string{"KEY_A", "BACKUP_A"}},
+			{name: "Responses SSE key quota", responses: true, sseError: "rate_limit_error", message: "quota exceeded", recover: true, wantKeys: []string{"KEY_A", "KEY_B"}},
+			{name: "Responses last attempt SSE quota", responses: true, sseError: "rate_limit_error", message: "quota exceeded", stop: "budget", wantKeys: []string{"KEY_A"}},
+			{name: "Responses provider cache SSE quota", responses: true, sseError: "rate_limit_error", message: "quota exceeded", stop: "provider_state", backup: true, wantKeys: []string{"KEY_A"}},
+			{name: "Responses hosted HTTP timeout", responses: true, status: 504, searchOptions: true, backup: true, wantKeys: []string{"KEY_A"}},
+			{name: "Responses plain HTTP timeout", responses: true, status: 504, recover: true, backup: true, wantKeys: []string{"KEY_A", "BACKUP_A"}},
+			{name: "Responses overridden hosted timeout", responses: true, status: 524, injectSearch: true, backup: true, wantKeys: []string{"KEY_A"}},
+			{name: "Responses nonstream read exclusion", responses: true, bodyTimeout: true, injectSearch: true, backup: true, wantKeys: []string{"KEY_A"}},
+			{name: "Responses nonstream hosted transport timeout", responses: true, bodyTimeout: true, stop: "transport", injectSearch: true, backup: true, wantKeys: []string{"KEY_A"}},
+			{name: "Responses nonstream plain transport timeout", responses: true, bodyTimeout: true, stop: "transport", recover: true, backup: true, wantKeys: []string{"KEY_A", "BACKUP_A"}},
+			{name: "Chat hosted first payload timeout", headerTimeout: true, searchOptions: true, backup: true, wantKeys: []string{"KEY_A"}},
+			{name: "Responses hosted timeout after headers", responses: true, headerTimeout: true, flushHeaders: true, injectSearch: true, backup: true, wantKeys: []string{"KEY_A"}},
+			{name: "plain timeout after headers", headerTimeout: true, flushHeaders: true, recover: true, backup: true, wantKeys: []string{"KEY_A", "BACKUP_A"}},
 			{name: "pinned channel rotates keys", stop: "same_channel", status: 429, message: "quota exceeded", recover: true, wantKeys: []string{"KEY_A", "KEY_B"}},
 			{name: "pinned channel cannot use backup", stop: "same_channel", status: 500, message: "upstream failed", backup: true, wantKeys: []string{"KEY_A"}},
 			{name: "key quota recovery", status: 429, message: "quota exceeded", recover: true, wantKeys: []string{"KEY_A", "KEY_B"}},
@@ -78,7 +96,7 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 			{name: "dial pinned", dialFailure: true, stop: "pin", wantKeys: []string{"KEY_A"}},
 			{name: "dial strict session", dialFailure: true, stop: "session", wantKeys: []string{"KEY_A"}},
 		} {
-			if scenario.responses && format != types.RelayFormatClaude {
+			if scenario.responses && format != types.RelayFormatClaude || scenario.searchOptions && !scenario.responses && format != types.RelayFormatOpenAI {
 				continue
 			}
 			entryFormat := format
@@ -135,11 +153,25 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 				defer cancel()
 				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					key := r.Header.Get("X-Api-Key")
+					if scenario.searchOptions || scenario.injectSearch {
+						body, err := io.ReadAll(r.Body)
+						assert.NoError(t, err)
+						assert.Contains(t, string(body), "web_search_20250305")
+					}
+					if scenario.bodyTimeout {
+						w.Header().Set("Content-Type", "application/json")
+						_, _ = io.WriteString(w, `{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"fixture-ok"}],"model":"MODEL_X","stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":1}}`)
+						return
+					}
 					if scenario.headerTimeout && (key == "KEY_A" || !scenario.recover) {
 						if key == "KEY_A" {
 							common.SetRelayFirstPayloadTimeout(time.Hour)
 						}
 						_, _ = io.Copy(io.Discard, r.Body)
+						if scenario.flushHeaders {
+							w.Header().Set("Content-Type", "text/event-stream")
+							w.(http.Flusher).Flush()
+						}
 						select {
 						case <-r.Context().Done():
 						case <-time.After(3 * time.Second):
@@ -147,16 +179,17 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 						}
 						return
 					}
-					failed := scenario.status != 0
+					failed := scenario.status != 0 || scenario.sseError != ""
 					if scenario.recover {
 						failed = key == "KEY_A"
 						if scenario.backup {
 							failed = key != "BACKUP_A"
 						}
 					}
-					if failed && scenario.name == "Responses first SSE rejection" {
+					if failed && scenario.sseError != "" {
 						w.Header().Set("Content-Type", "text/event-stream")
-						_, _ = io.WriteString(w, "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"busy\"}}\n\n")
+						w.Header().Set("Retry-After", "600")
+						_, _ = fmt.Fprintf(w, "data: {\"type\":\"error\",\"error\":{\"type\":%q,\"message\":%q}}\n\n", scenario.sseError, scenario.message)
 						return
 					}
 					if failed {
@@ -202,7 +235,16 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 						cancel()
 						return nil, r.Context().Err()
 					}
-					return transport.RoundTrip(r)
+					resp, err := transport.RoundTrip(r)
+					if err == nil && scenario.bodyTimeout && r.Header.Get("X-Api-Key") == "KEY_A" {
+						_ = resp.Body.Close()
+						timeout := fmt.Errorf("upstream response: %w", context.DeadlineExceeded)
+						if scenario.stop == "transport" {
+							return nil, timeout
+						}
+						resp.Body = io.NopCloser(iotest.ErrReader(timeout))
+					}
+					return resp, err
 				})
 				t.Cleanup(func() { clientTransport.Transport = base })
 				primaryURL := upstream.URL
@@ -215,6 +257,9 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 					AutoBan: common.GetPointer(1), BaseURL: &primaryURL, Priority: common.GetPointer(int64(3)), Group: "default", Models: "MODEL_X",
 					ChannelInfo:   model.ChannelInfo{IsMultiKey: true, MultiKeySize: 4, MultiKeyMode: constant.MultiKeyModePolling},
 					OtherSettings: `{"multi_key_auto_disable_override":{"temporary_status_codes":"429,500-503","persistent_status_codes":"401","temporary_disable_minutes":1}}`,
+				}
+				if scenario.injectSearch {
+					channel.ParamOverride = common.GetPointer(`{"tools":[{"type":"web_search_20250305","name":"web_search"}]}`)
 				}
 				require.NoError(t, db.Create(channel).Error)
 				require.NoError(t, db.Create(&model.Ability{Group: "default", Model: "MODEL_X", ChannelId: channel.Id, Enabled: true, Priority: channel.Priority}).Error)
@@ -255,6 +300,7 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 				var requestContext *gin.Context
 				router := gin.New()
 				router.POST(path, func(c *gin.Context) {
+					c.Set(common.RequestIdKey, "fixture-request")
 					c.Set("id", 1)
 					c.Set("user_id", 1)
 					c.Set("group", "default")
@@ -284,6 +330,19 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 				if scenario.responses {
 					clientBody = `{"model":"MODEL_X","input":"hello","stream":true}`
 				}
+				if scenario.searchOptions {
+					if scenario.responses {
+						clientBody = `{"model":"MODEL_X","input":"hello","stream":true,"tools":[{"type":"web_search_preview"}]}`
+					} else {
+						clientBody = `{"model":"MODEL_X","messages":[{"role":"user","content":"hello"}],"stream":true,"web_search_options":{"search_context_size":"low"}}`
+					}
+				}
+				if scenario.bodyTimeout {
+					clientBody = `{"model":"MODEL_X","input":"hello","stream":false}`
+				}
+				if scenario.stop == "provider_state" {
+					clientBody = `{"model":"MODEL_X","input":"hello","stream":true,"cachedContent":"cachedContents/1"}`
+				}
 				request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(clientBody))
 				request.Header.Set("Content-Type", "application/json")
 				router.ServeHTTP(response, request.WithContext(requestCtx))
@@ -292,6 +351,20 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 				got := append([]string(nil), attempts...)
 				mu.Unlock()
 				require.Equal(t, scenario.wantKeys, got, body)
+				if scenario.stop == "provider_state" {
+					events := service.RequestPolicy(requestContext).Events()
+					require.NotEmpty(t, events)
+					assert.Equal(t, "provider_bound_state", events[len(events)-1].Decision.Reason)
+				}
+				if scenario.searchOptions || scenario.injectSearch {
+					events := service.RequestPolicy(requestContext).Events()
+					require.NotEmpty(t, events)
+					reason := "non_retryable_error"
+					if scenario.bodyTimeout && scenario.stop != "transport" {
+						reason = "system_retry_exclusion"
+					}
+					assert.Equal(t, reason, events[len(events)-1].Decision.Reason)
+				}
 				if scenario.stop == "payload" {
 					require.NoError(t, requestCtx.Err())
 					assert.Contains(t, body, "first stream payload")
@@ -319,8 +392,18 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 				var token model.Token
 				require.NoError(t, db.First(&user, 1).Error)
 				require.NoError(t, db.First(&token, 1).Error)
+				if scenario.responses {
+					finalErrors, _, err := model.GetAllLogs(model.LogTypeError, 0, 0, "", "", "", 0, 10, 0, "", "fixture-request", "", true)
+					require.NoError(t, err)
+					if scenario.recover {
+						assert.Empty(t, finalErrors)
+					} else {
+						require.Len(t, finalErrors, 1)
+						assert.False(t, finalErrors[0].IsIntermediate)
+					}
+				}
 				if scenario.recover {
-					if scenario.responses {
+					if scenario.responses && !scenario.bodyTimeout {
 						assert.Contains(t, body, "fixture-ok")
 						assert.Equal(t, 1, strings.Count(body, "event: response.created"))
 						assert.Equal(t, 1, strings.Count(body, "event: response.completed"))
@@ -366,7 +449,17 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 						assert.Empty(t, keys, "a downstream cancellation is not a health failure")
 						assert.NotContains(t, body, `"error":`)
 					} else {
-						assert.Equal(t, 1, strings.Count(body, `"error":`), body)
+						if scenario.bodyTimeout {
+							assert.GreaterOrEqual(t, response.Code, 400, body)
+							assert.Contains(t, body, `"error"`)
+						} else if scenario.responses {
+							assert.Equal(t, 1, strings.Count(body, "event: error\n"), body)
+							if scenario.sseError == "rate_limit_error" {
+								assert.Contains(t, body, `"code":"rate_limit_error"`)
+							}
+						} else {
+							assert.Equal(t, 1, strings.Count(body, `"error":`), body)
+						}
 						if scenario.name == "dial no budget" {
 							assert.NotEmpty(t, keys, "a transport failure is still recorded")
 						}
@@ -374,8 +467,14 @@ func TestLegacyClaudeMultiKeyHTTP(t *testing.T) {
 					assert.NotContains(t, body, "event: message_stop")
 					assert.NotContains(t, body, "[DONE]")
 				}
-				if scenario.status == http.StatusTooManyRequests {
+				if scenario.status == http.StatusTooManyRequests || scenario.sseError == "rate_limit_error" {
 					assert.NotEmpty(t, service.LoadMultiKeyCooldowns(channel.Id, "KEY_A"), "key quota failures must isolate the affected credential")
+					if scenario.sseError != "" {
+						cooldowns := service.LoadMultiKeyCooldowns(channel.Id, "KEY_A")
+						require.Len(t, cooldowns, 1)
+						assert.Equal(t, http.StatusTooManyRequests, cooldowns[0].StatusCode)
+						assert.GreaterOrEqual(t, cooldowns[0].RecoverAt, time.Now().Unix()+590)
+					}
 					ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 					ctx.Request = httptest.NewRequest(http.MethodPost, path, nil)
 					key, _, apiErr := service.SelectChannelKeyForRequest(ctx, channel, "MODEL_X", nil)

@@ -93,9 +93,55 @@ func TextReplaySafety(c *gin.Context) (portable, safeAfterTimeout bool) {
 	if common.DecodeJson(reader, &request) != nil || request == nil || !protocolValueReplayable(request) {
 		return false, false
 	}
-	// A timeout cannot establish whether hosted tools, background jobs or media generation already ran.
+	return true, textSafeAfterTimeout(request)
+}
+
+// UpstreamTextSafeAfterTimeout examines the actual converted/overridden body while its owner is still active.
+func UpstreamTextSafeAfterTimeout(req *http.Request) bool {
+	if req == nil || req.GetBody == nil {
+		return false
+	}
+	reader, err := req.GetBody()
+	if err != nil {
+		return false
+	}
+	defer reader.Close()
+	var body map[string]any
+	if common.DecodeJson(reader, &body) != nil || (body["messages"] == nil && body["input"] == nil && body["contents"] == nil) {
+		return false
+	}
+	return protocolValueReplayable(body) && textSafeAfterTimeout(body)
+}
+
+// These gateway/proxy responses do not prove that the upstream operation was rejected.
+func IsUpstreamTimeoutStatus(status int) bool {
+	return status == http.StatusRequestTimeout || status == http.StatusGatewayTimeout || status == 524
+}
+
+func textSafeAfterTimeout(request map[string]any) bool {
+	model, _ := request["model"].(string)
+	model = model[strings.LastIndexByte(model, '/')+1:]
+	if strings.HasPrefix(model, "gpt-") && (strings.Contains(model, "-search-preview") || strings.Contains(model, "-search-api")) ||
+		model == "sonar" || strings.HasPrefix(model, "sonar-") || strings.Contains(model, "-sonar-") && strings.HasSuffix(model, "-online") {
+		return false
+	}
 	if background, _ := request["background"].(bool); background {
-		return true, false
+		return false
+	}
+	if request["web_search_options"] != nil || request["audio"] != nil {
+		return false
+	}
+	if request["enable_search"] == true || request["return_images"] == true {
+		return false
+	}
+	if search, ok := request["web_search"].(map[string]any); ok && search["enable"] != false {
+		return false
+	}
+	if search, ok := request["search_parameters"].(map[string]any); ok && search["mode"] != "off" {
+		return false
+	}
+	if servers, _ := request["mcp_servers"].([]any); len(servers) != 0 {
+		return false
 	}
 	if tools, ok := request["tools"].([]any); ok {
 		for _, item := range tools {
@@ -107,7 +153,7 @@ func TextReplaySafety(c *gin.Context) (portable, safeAfterTimeout bool) {
 			if len(tool) == 1 && (tool["functionDeclarations"] != nil || tool["function_declarations"] != nil) {
 				continue
 			}
-			return true, false
+			return false
 		}
 	}
 	sets := []any{request["modalities"]}
@@ -121,11 +167,11 @@ func TextReplaySafety(c *gin.Context) (portable, safeAfterTimeout bool) {
 		for _, value := range values {
 			modality, _ := value.(string)
 			if !strings.EqualFold(modality, "text") {
-				return true, false
+				return false
 			}
 		}
 	}
-	return true, true
+	return true
 }
 
 // ProtocolEndpointRefused only recognizes explicit endpoint refusals before status mapping.

@@ -559,6 +559,49 @@ func keepUpstreamRedirectResponse(_ *http.Request, _ []*http.Request) error {
 	return http.ErrUseLastResponse
 }
 
+// Text adaptors may translate a transport timeout into a generic error before the controller sees it.
+type textResponseBody struct {
+	io.ReadCloser
+	request *http.Request
+	client  *gin.Context
+	info    *common.RelayInfo
+	once    sync.Once
+}
+
+func (b *textResponseBody) recordTimeout() {
+	b.once.Do(func() {
+		_, clientSafe := service.TextReplaySafety(b.client)
+		safe := clientSafe && service.UpstreamTextSafeAfterTimeout(b.request)
+		b.info.TimeoutReplaySafe = &safe
+	})
+}
+
+func isTransportTimeout(err error) bool {
+	// url.Error.Timeout can return false when a transport wraps its timeout with %w.
+	for ; err != nil; err = errors.Unwrap(err) {
+		if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *textResponseBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil && err != io.EOF && isTransportTimeout(err) {
+		b.recordTimeout()
+	}
+	return n, err
+}
+
+func (b *textResponseBody) Close() error {
+	err := b.ReadCloser.Close()
+	if reason, _ := b.info.StreamStatus.End(); reason == common.StreamEndReasonTimeout {
+		b.recordTimeout()
+	}
+	return err
+}
+
 func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
 	common.WrapConversationUpstreamRequest(info, req)
 	client, err := service.GetHttpClientWithProxySettings(info.ChannelSetting.Proxy, info.ChannelSetting)
@@ -572,16 +615,18 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	client = &clientCopy
 
 	var connectionRequested, connectionObtained atomic.Bool
+	if info.IsStream || info.ChannelRoutePlan != nil {
+		req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+			GetConn: func(string) { connectionRequested.Store(true) },
+			GotConn: func(httptrace.GotConnInfo) { connectionObtained.Store(true) },
+		}))
+	}
 	if info.IsStream {
 		if info.FirstPayloadTimeout > 0 {
 			info.FirstPayloadDeadline = time.Now().Add(info.FirstPayloadTimeout)
 		}
 		upstreamCtx, upstreamCancel := context.WithCancel(req.Context())
 		req = req.WithContext(upstreamCtx)
-		req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
-			GetConn: func(string) { connectionRequested.Store(true) },
-			GotConn: func(httptrace.GotConnInfo) { connectionObtained.Store(true) },
-		}))
 		info.SetStreamUpstreamCancel(upstreamCancel)
 		if info.StreamStatus == nil {
 			info.StreamStatus = common.NewStreamStatus()
@@ -603,6 +648,10 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	if info.IsChannelTest {
 		info.ChannelTestHTTP = &common.ChannelTestHTTP{StartedAt: time.Now()}
 	}
+	var textBody *textResponseBody
+	if info.ChannelRoutePlan != nil {
+		textBody = &textResponseBody{request: req, client: c, info: info}
+	}
 	resp, err := client.Do(req)
 	if info.ChannelTestHTTP != nil && resp != nil {
 		info.ChannelTestHTTP.HeadersAt = time.Now()
@@ -614,9 +663,17 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		options := []types.NewAPIErrorOptions{types.ErrOptionWithHideErrMsg("upstream error: do request failed")}
 		if connectionRequested.Load() && !connectionObtained.Load() {
 			info.EnablePayloadRetry()
-		} else if info.IsStream {
-			// A connected or untraced transport may already have submitted the request.
-			options = append(options, types.ErrOptionWithSkipRetry())
+			if reason, _ := info.StreamStatus.End(); reason == common.StreamEndReasonTimeout {
+				info.TimeoutReplaySafe = common2.GetPointer(true)
+			}
+		} else {
+			if reason, _ := info.StreamStatus.End(); textBody != nil && (reason == common.StreamEndReasonTimeout || isTransportTimeout(err)) {
+				textBody.recordTimeout()
+			}
+			if info.IsStream {
+				// A connected or untraced transport may already have submitted the request.
+				options = append(options, types.ErrOptionWithSkipRetry())
+			}
 		}
 		if c.Request.Context().Err() == nil {
 			logger.LogError(c, "do request failed: "+err.Error())
@@ -625,6 +682,15 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	}
 	if resp == nil {
 		return nil, errors.New("resp is nil")
+	}
+	if textBody != nil {
+		if service.IsUpstreamTimeoutStatus(resp.StatusCode) {
+			textBody.recordTimeout()
+		}
+		if resp.Body != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			textBody.ReadCloser = resp.Body
+			resp.Body = textBody
+		}
 	}
 	common.WrapConversationUpstreamResponse(info, resp)
 	if info.StreamStatus != nil {

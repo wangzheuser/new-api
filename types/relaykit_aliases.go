@@ -137,6 +137,7 @@ var (
 	ErrOptionWithNoRecordErrorLog   = kittypes.ErrOptionWithNoRecordErrorLog
 	ErrOptionWithStatusCode         = kittypes.ErrOptionWithStatusCode
 	ErrOptionWithUpstreamStatusCode = kittypes.ErrOptionWithUpstreamStatusCode
+	ErrOptionWithSSEStatus          = kittypes.ErrOptionWithSSEStatus
 	ErrOptionWithUpstreamRetryAfter = kittypes.ErrOptionWithUpstreamRetryAfter
 	ErrOptionWithHideErrMsg         = kittypes.ErrOptionWithHideErrMsg
 	NewURLFileSource                = kittypes.NewURLFileSource

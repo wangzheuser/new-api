@@ -143,7 +143,7 @@ func RecordChannelScopedFailureAsync(channel *model.Channel, apiErr *types.NewAP
 	if channel == nil || apiErr == nil || !common.AutomaticDisableChannelEnabled || !channel.GetAutoBan() || !common.RedisEnabled || common.RDB == nil {
 		return
 	}
-	statusCode, realUpstream := apiErr.GetUpstreamStatusCode()
+	statusCode, realUpstream := apiErr.GetUpstreamFailureStatus()
 	if !realUpstream {
 		return
 	}
@@ -156,7 +156,7 @@ func RecordChannelScopedFailureAsync(channel *model.Channel, apiErr *types.NewAP
 
 // recordChannelUpstreamError applies the priority order for persistent, temporary and statistical failures.
 func recordChannelUpstreamError(channel *model.Channel, apiErr *types.NewAPIError, usingKey, upstreamModel string) {
-	statusCode, realUpstream := apiErr.GetUpstreamStatusCode()
+	statusCode, realUpstream := apiErr.GetUpstreamFailureStatus()
 	message := strings.ToLower(apiErr.Error())
 	if !realUpstream && isRealUpstreamTimeout(apiErr) {
 		statusCode = http.StatusGatewayTimeout
@@ -331,7 +331,7 @@ func IsTemporaryQuotaError(apiErr *types.NewAPIError) bool {
 	if apiErr == nil {
 		return false
 	}
-	statusCode, upstream := apiErr.GetUpstreamStatusCode()
+	statusCode, upstream := apiErr.GetUpstreamFailureStatus()
 	return upstream && isTemporaryQuotaError(apiErr, statusCode)
 }
 
@@ -345,7 +345,7 @@ func blockSingleKeyChannelTemporarily(channel *model.Channel, apiErr *types.NewA
 		disabledUntil = time.Unix(retryAt, 0)
 		recoverAt = retryAt
 	}
-	statusCode, _ := apiErr.GetUpstreamStatusCode()
+	statusCode, _ := apiErr.GetUpstreamFailureStatus()
 	info := dto.TemporaryAutoDisableInfo{
 		DisabledUntil:     disabledUntil.Unix(),
 		SampleSize:        setting.SampleSize,

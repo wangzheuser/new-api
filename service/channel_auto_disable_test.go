@@ -53,6 +53,16 @@ func TestTemporaryAutoDisableThresholdAndExpiry(t *testing.T) {
 
 	server.FastForward(10 * time.Minute)
 	assert.False(t, IsChannelTemporarilyDisabled(42))
+
+	event := types.NewOpenAIError(errors.New("busy"), types.ErrorCodeBadResponseStatusCode, http.StatusBadGateway,
+		types.ErrOptionWithUpstreamStatusCode(http.StatusOK), types.ErrOptionWithSSEStatus(http.StatusTooManyRequests),
+		types.ErrOptionWithUpstreamRetryAfter("1800"))
+	recordChannelUpstreamError(channel, event, "", "fixture")
+	info = LoadChannelTemporaryAutoDisable(42)
+	require.NotNil(t, info)
+	assert.Equal(t, http.StatusTooManyRequests, info.StatusCode)
+	assert.GreaterOrEqual(t, info.RecoverAt, time.Now().Unix()+1799)
+	assert.False(t, ShouldDisableChannel(event))
 }
 
 func TestEffectiveChannelAutoDisableOverride(t *testing.T) {

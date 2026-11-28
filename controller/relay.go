@@ -403,12 +403,15 @@ func executeRelayRequest(c *gin.Context, relayFormat types.RelayFormat, testChan
 		// Endpoint and key rules may override status matching, but never a replay boundary.
 		allowFallback := decision.Action == "retry" || decision.Reason == "status_not_retryable"
 		if allowFallback && relayInfo.ChannelRoutePlan != nil {
-			portableRequest, safeAfterTimeout := service.TextReplaySafety(c)
+			portableRequest, _ := service.TextReplaySafety(c)
 			endReason, _ := relayInfo.StreamStatus.End()
+			upstreamStatus, _ := newAPIError.GetUpstreamStatusCode()
+			safe := relayInfo.TimeoutReplaySafe
+			timedOut := safe != nil || firstPayloadExpired || endReason == relaycommon.StreamEndReasonTimeout || service.IsUpstreamTimeoutStatus(upstreamStatus)
 			if !portableRequest {
 				allowFallback = false
 				decision = service.PolicyDecision{Action: "stop", Reason: "provider_bound_state", Source: "routing"}
-			} else if (firstPayloadExpired || endReason == relaycommon.StreamEndReasonTimeout) && !safeAfterTimeout {
+			} else if timedOut && (safe == nil || !*safe) {
 				allowFallback = false
 				decision = service.PolicyDecision{Action: "stop", Reason: "non_retryable_error", Source: "system"}
 			}
@@ -688,6 +691,9 @@ func decideHTTPRelayRetry(c *gin.Context, relayInfo *relaycommon.RelayInfo, open
 	if relayInfo != nil && relayInfo.InitialStreamRejection == openaiErr && relayInfo.StreamStatus != nil &&
 		!relayInfo.StreamStatus.ClientUnavailable() && !relayInfo.StreamStatus.ClientPayloadIsCommitted() &&
 		!relayInfo.ProtocolEventWritten && !relayInfo.StreamStatus.ErrorFrameIsWritten() {
+		if relayInfo.IsContextFallbackActive() {
+			return service.PolicyDecision{Action: "stop", Reason: "non_retryable_error", Source: "system"}
+		}
 		return service.DecideRelayRetry(c, openaiErr, retryTimes)
 	}
 	if retryBlockedByClientCommit(c, relayInfo) {
@@ -776,7 +782,7 @@ func resolveConfiguredFinalRelayError(c *gin.Context, relayInfo *relaycommon.Rel
 	// and credential errors. Preserve it after channel overrides but before the
 	// global outage fallback turns every error into 502.
 	if relayInfo != nil && relayInfo.RelayFormat == types.RelayFormatOpenAIResponses && relayInfo.LastError != nil {
-		if status, upstream := relayInfo.LastError.GetUpstreamStatusCode(); upstream && status >= 400 && status < 500 {
+		if status, upstream := relayInfo.LastError.GetUpstreamFailureStatus(); upstream && status >= 400 && status < 500 {
 			return relayInfo.LastError
 		}
 	}

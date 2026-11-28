@@ -160,13 +160,11 @@ func ScanTextStream(c *gin.Context, resp *http.Response, info *relaycommon.Relay
 	StreamScannerHandlerWithOptions(c, resp, info, options, func(data string, sr *StreamResult) {
 		if first {
 			first = false
-			if err := initialStreamRejection(data, resp, info); err != nil && !info.IsChannelTest && !info.IsContextFallbackActive() &&
-				service.DecideRelayRetry(c, err, common.RetryTimes-info.RetryIndex).Action == "retry" {
-				if portable, _ := service.TextReplaySafety(c); portable {
-					info.InitialStreamRejection = err
-					sr.StopWithTerminal("error", "failed", err)
-					return
-				}
+			if err := initialStreamRejection(data, resp, info); err != nil {
+				// The controller records health even when this is the last or a pinned attempt.
+				info.InitialStreamRejection = err
+				sr.StopWithTerminal("error", "failed", err)
+				return
 			}
 		}
 		handle(data, sr)
@@ -175,7 +173,7 @@ func ScanTextStream(c *gin.Context, resp *http.Response, info *relaycommon.Relay
 }
 
 func initialStreamRejection(data string, resp *http.Response, info *relaycommon.RelayInfo) *types.NewAPIError {
-	if resp.StatusCode != http.StatusOK || info.RetryIndex >= common.RetryTimes || info.ProtocolEventWritten ||
+	if resp.StatusCode != http.StatusOK || info.ProtocolEventWritten ||
 		info.SendResponseCount != 0 || info.StreamStatus.ClientPayloadIsCommitted() || info.StreamStatus.ErrorFrameIsWritten() {
 		return nil
 	}
@@ -226,7 +224,8 @@ func initialStreamRejection(data string, resp *http.Response, info *relaycommon.
 		return nil
 	}
 	return types.WithOpenAIError(types.OpenAIError{Code: code, Type: "upstream_error", Message: message}, status,
-		types.ErrOptionWithUpstreamStatusCode(resp.StatusCode), types.ErrOptionWithUpstreamRetryAfter(resp.Header.Get("Retry-After")))
+		types.ErrOptionWithUpstreamStatusCode(resp.StatusCode), types.ErrOptionWithSSEStatus(status),
+		types.ErrOptionWithUpstreamRetryAfter(resp.Header.Get("Retry-After")))
 }
 
 // StreamScannerHandler scans an SSE response with legacy EOF-compatible semantics.
