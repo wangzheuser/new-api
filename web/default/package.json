@@ -10,7 +10,7 @@
     "assets:verify-recovery": "node scripts/verify-build-recovery.mjs",
     "build:check": "tsgo -b && bun run build",
     "typecheck": "tsgo -b",
-    "test": "bun test src/features/channels/lib src/features/channels/components/__tests__/agent-header-preset-fields.test.tsx",
+    "test": "bun test src/features/channels/lib src/features/channels/components/__tests__/agent-header-preset-fields.test.tsx src/features/subscriptions/components/dialogs/__tests__",
     "lint": "oxlint -c .oxlintrc.json .",
     "lint:fix": "oxlint -c .oxlintrc.json . --fix",
     "preview": "rsbuild preview",

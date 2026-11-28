@@ -586,6 +586,7 @@ export function UserSubscriptionsDialog(props: Props) {
             )}
 
             <StaticDataTable
+              className='shrink-0'
               data={loading ? [] : subs}
               getRowKey={(record) => record.subscription.id}
               emptyClassName={loading ? 'py-8' : 'text-muted-foreground py-8'}
