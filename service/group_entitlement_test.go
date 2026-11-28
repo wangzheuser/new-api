@@ -14,12 +14,15 @@ import (
 // TestGetUserEffectiveGroupsIncludesOnlyActiveEntitlements verifies group access follows subscription validity.
 func TestGetUserEffectiveGroupsIncludesOnlyActiveEntitlements(t *testing.T) {
 	truncate(t)
+	ratios := ratio_setting.GroupRatio2JSONString()
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"国模":1,"claude":1,"expired-group":1}`))
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(ratios)) })
 	now := time.Now().Unix()
 	require.NoError(t, model.DB.Create(&model.UserSubscription{
-		Id: 7301, UserId: 7302, PlanId: 1, Status: "active", StartTime: now - 60, EndTime: now + 3600, EntitlementGroup: "claude",
+		Id: 7301, UserId: 7302, PlanId: 1, Status: "active", StartTime: now - 60, EndTime: now + 3600, QuotaScope: model.SubscriptionQuotaGroups, GrantGroups: model.GroupNames{"claude"},
 	}).Error)
 	require.NoError(t, model.DB.Create(&model.UserSubscription{
-		Id: 7303, UserId: 7302, PlanId: 2, Status: "active", StartTime: now - 3600, EndTime: now - 1, EntitlementGroup: "expired-group",
+		Id: 7303, UserId: 7302, PlanId: 2, Status: "active", StartTime: now - 3600, EndTime: now - 1, QuotaScope: model.SubscriptionQuotaGroups, GrantGroups: model.GroupNames{"expired-group"},
 	}).Error)
 
 	groups, err := GetUserEffectiveGroups(7302, "国模")
@@ -39,13 +42,13 @@ func TestGroupInUserEffectiveGroupsRejectsCancelledEntitlement(t *testing.T) {
 	})
 	now := time.Now().Unix()
 	require.NoError(t, model.DB.Create(&model.UserSubscription{
-		Id:               7310,
-		UserId:           7311,
-		PlanId:           1,
-		Status:           "cancelled",
-		StartTime:        now - 60,
-		EndTime:          now,
-		EntitlementGroup: "国模",
+		Id:         7310,
+		UserId:     7311,
+		PlanId:     1,
+		Status:     "cancelled",
+		StartTime:  now - 60,
+		EndTime:    now,
+		QuotaScope: model.SubscriptionQuotaGroups, GrantGroups: model.GroupNames{"国模"},
 	}).Error)
 
 	allowed, err := GroupInUserEffectiveGroups(7311, "default", "国模")
@@ -62,18 +65,18 @@ func TestUserEffectiveGroupsRejectsRetiredEntitlementGroup(t *testing.T) {
 	})
 	now := time.Now().Unix()
 	require.NoError(t, model.DB.Create(&model.UserSubscription{
-		Id:               7312,
-		UserId:           7313,
-		PlanId:           1,
-		Status:           "active",
-		StartTime:        now - 60,
-		EndTime:          now + 3600,
-		EntitlementGroup: "retired-group",
+		Id:         7312,
+		UserId:     7313,
+		PlanId:     1,
+		Status:     "active",
+		StartTime:  now - 60,
+		EndTime:    now + 3600,
+		QuotaScope: model.SubscriptionQuotaGroups, GrantGroups: model.GroupNames{"retired-group"},
 	}).Error)
 
 	groups, err := GetUserEffectiveGroups(7313, "default")
 	require.NoError(t, err)
-	assert.Contains(t, groups, "retired-group")
+	assert.NotContains(t, groups, "retired-group")
 
 	allowed, err := GroupInUserEffectiveGroups(7313, "default", "retired-group")
 	require.NoError(t, err)

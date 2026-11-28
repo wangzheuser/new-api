@@ -73,6 +73,7 @@ import {
 } from '../api'
 import {
   getDurationUnitOptions,
+  getQuotaScopeOptions,
   getRepeatPurchaseModeOptions,
   getResetPeriodOptions,
 } from '../constants'
@@ -344,6 +345,37 @@ export function SubscriptionsMutateDrawer({
                         'These groups are available while the subscription is active and do not replace the user base group.'
                       )}
                     </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='quota_scope'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Subscription quota scope')}</FormLabel>
+                    <Select
+                      items={getQuotaScopeOptions(t)}
+                      value={field.value}
+                      onValueChange={(value) =>
+                        value !== null && field.onChange(value)
+                      }
+                    >
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {getQuotaScopeOptions(t).map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                     <FormMessage />
                   </FormItem>
                 )}

@@ -80,6 +80,11 @@ func GetUserEffectiveGroups(userId int, userGroup string) (map[string]string, er
 			}
 		}
 	}
+	for group := range groups {
+		if group != "auto" && !ratio_setting.ContainsGroupRatio(group) {
+			delete(groups, group)
+		}
+	}
 	return groups, nil
 }
 

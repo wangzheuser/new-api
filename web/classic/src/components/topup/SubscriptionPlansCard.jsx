@@ -205,10 +205,8 @@ const SubscriptionPlansCard = ({
   const isSubscriptionPreference =
     billingPreference === 'subscription_first' ||
     billingPreference === 'subscription_only';
-  const displayBillingPreference =
-    disableSubscriptionPreference && isSubscriptionPreference
-      ? 'wallet_first'
-      : billingPreference;
+  const displayBillingPreference = billingPreference;
+  const expiredCount = allSubscriptions.filter(({ subscription }) => subscription.status === 'expired').length;
   const subscriptionPreferenceLabel =
     billingPreference === 'subscription_only' ? t('仅用订阅') : t('优先订阅');
 
@@ -324,9 +322,9 @@ const SubscriptionPlansCard = ({
                     {t('无生效')}
                   </Tag>
                 )}
-                {allSubscriptions.length > activeSubscriptions.length && (
+                {expiredCount > 0 && (
                   <Tag color='white' size='small' shape='circle'>
-                    {allSubscriptions.length - activeSubscriptions.length}{' '}
+                    {expiredCount}{' '}
                     {t('个已过期')}
                   </Tag>
                 )}
@@ -374,7 +372,7 @@ const SubscriptionPlansCard = ({
               <Text type='tertiary' size='small'>
                 {t('已保存偏好为')}
                 {subscriptionPreferenceLabel}
-                {t('，当前无生效订阅，将自动使用钱包')}
+                {t('No active subscription. Requests require wallet funds unless you selected Subscription Only.')}
               </Text>
             )}
 
@@ -398,6 +396,8 @@ const SubscriptionPlansCard = ({
                     const now = Date.now() / 1000;
                     const isExpired = (subscription?.end_time || 0) < now;
                     const isCancelled = subscription?.status === 'cancelled';
+                    const isScheduled = subscription?.status === 'scheduled';
+                    const isArchived = subscription?.status === 'archived';
                     const isActive =
                       subscription?.status === 'active' && !isExpired;
 
@@ -420,6 +420,10 @@ const SubscriptionPlansCard = ({
                               >
                                 {t('生效')}
                               </Tag>
+                            ) : isScheduled ? (
+                              <Tag color='blue' size='small'>{t('待生效')}</Tag>
+                            ) : isArchived ? (
+                              <Tag color='grey' size='small'>{t('已归档')}</Tag>
                             ) : isCancelled ? (
                               <Tag color='white' size='small' shape='circle'>
                                 {t('已作废')}

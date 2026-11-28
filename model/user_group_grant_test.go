@@ -15,20 +15,18 @@ func TestUserGroupGrantLifecycle(t *testing.T) {
 	now := GetDBTimestamp()
 	user := &User{Id: 9801, Username: "grant_user", Status: common.UserStatusEnabled, Group: "default"}
 	require.NoError(t, DB.Create(user).Error)
-	require.NoError(t, ReplaceUserGroupGrants(user.Id, []UserGroupGrant{
-		{GroupName: "manual-permanent", ExpiresAt: 0},
-		{GroupName: "manual-active", ExpiresAt: now + 3600},
-		{GroupName: "manual-expired", ExpiresAt: now - 1},
-	}))
+	require.NoError(t, DB.Create(&[]UserGroupGrant{
+		{UserId: user.Id, GroupName: "manual-permanent", ExpiresAt: 0},
+		{UserId: user.Id, GroupName: "manual-active", ExpiresAt: now + 3600},
+		{UserId: user.Id, GroupName: "manual-expired", ExpiresAt: now - 1}}).Error)
 	require.NoError(t, DB.Create(&UserSubscription{
-		Id:               9802,
-		UserId:           user.Id,
-		PlanId:           1,
-		Status:           "active",
-		StartTime:        now - 60,
-		EndTime:          now + 3600,
-		EntitlementGroup: "legacy-subscription",
-		GrantGroups:      GroupNames{"subscription-b", " subscription-a ", "subscription-a"},
+		Id:         9802,
+		UserId:     user.Id,
+		PlanId:     1,
+		Status:     "active",
+		StartTime:  now - 60,
+		EndTime:    now + 3600,
+		QuotaScope: SubscriptionQuotaGroups, GrantGroups: GroupNames{"legacy-subscription", "subscription-b", " subscription-a ", "subscription-a"},
 	}).Error)
 	require.NoError(t, DB.Create(&UserSubscription{
 		Id:          9803,
@@ -50,11 +48,15 @@ func TestUserGroupGrantLifecycle(t *testing.T) {
 		"subscription-b",
 	}, groups)
 
-	require.NoError(t, ReplaceUserGroupGrants(user.Id, []UserGroupGrant{{GroupName: "manual-replaced", ExpiresAt: 0}}))
+	current, err := GetUserGroupGrants(user.Id)
+	require.NoError(t, err)
+	_, _, err = ReplaceUserGroupGrants(user.Id, "stale", nil)
+	require.Error(t, err)
+	_, _, err = ReplaceUserGroupGrants(user.Id, UserGroupGrantRevision(current), nil)
+	require.NoError(t, err)
 	manualGrants, err := GetUserGroupGrants(user.Id)
 	require.NoError(t, err)
-	require.Len(t, manualGrants, 1)
-	assert.Equal(t, "manual-replaced", manualGrants[0].GroupName)
+	require.Empty(t, manualGrants)
 }
 
 // TestSubscriptionGrantGroupsSnapshotAndMerge verifies purchase snapshots and merge modes preserve group access.
@@ -69,7 +71,7 @@ func TestSubscriptionGrantGroupsSnapshotAndMerge(t *testing.T) {
 		DurationUnit:       SubscriptionDurationHour,
 		DurationValue:      1,
 		RepeatPurchaseMode: SubscriptionRepeatPurchaseExtendTime,
-		GrantGroups:        GroupNames{"group-b", " group-a ", "group-a"},
+		QuotaScope:         SubscriptionQuotaGroupsAndGeneral, GrantGroups: GroupNames{"group-b", " group-a ", "group-a"},
 	}
 
 	var first *SubscriptionApplyResult
@@ -89,8 +91,8 @@ func TestSubscriptionGrantGroupsSnapshotAndMerge(t *testing.T) {
 		return err
 	}))
 	require.NotNil(t, second)
-	assert.Equal(t, SubscriptionApplyActionMerged, second.Action)
-	assert.Equal(t, GroupNames{"group-a", "group-b", "group-c"}, second.Subscription.GrantGroups)
+	assert.Equal(t, SubscriptionApplyActionCreated, second.Action)
+	assert.Equal(t, GroupNames{"group-c"}, second.Subscription.GrantGroups)
 }
 
 // TestSubscriptionUpgradeConflictAndRequestReconciliation verifies the single-upgrade invariant and lazy expiry.
@@ -140,12 +142,12 @@ func TestSubscriptionGrantGroupsFundEveryGrantedScope(t *testing.T) {
 	allowOverflow := false
 	plan := &SubscriptionPlan{
 		Id: 9832, Title: "Multi group", Currency: "USD", DurationUnit: SubscriptionDurationHour, DurationValue: 1,
-		Enabled: true, TotalAmount: 100, GrantGroups: GroupNames{"group-a", "group-b"}, AllowWalletOverflow: &allowOverflow,
+		Enabled: true, TotalAmount: 100, QuotaScope: SubscriptionQuotaGroupsAndGeneral, GrantGroups: GroupNames{"group-a", "group-b"}, AllowWalletOverflow: &allowOverflow,
 	}
 	require.NoError(t, DB.Create(plan).Error)
 	subscription := &UserSubscription{
 		Id: 9833, UserId: user.Id, PlanId: plan.Id, Status: "active", StartTime: now - 60, EndTime: now + 3600,
-		AmountTotal: 100, GrantGroups: GroupNames{"group-a", "group-b"}, AllowWalletOverflow: false,
+		AmountTotal: 100, QuotaScope: SubscriptionQuotaGroupsAndGeneral, GrantGroups: GroupNames{"group-a", "group-b"}, AllowWalletOverflow: false,
 	}
 	require.NoError(t, DB.Create(subscription).Error)
 

@@ -186,13 +186,13 @@ func TestRepeatedSubscriptionMaxValidityModes(t *testing.T) {
 			require.NoError(t, DB.Create(target).Error)
 			incoming := &UserSubscription{
 				UserId: userId, PlanId: plan.Id, AmountTotal: 100,
-				StartTime: now, EndTime: now + testCase.incomingEnd, Status: "active", AllocationCount: 1,
+				StartTime: now, EndTime: now + testCase.incomingEnd, Status: "active", AllocationCount: 1, QuotaScope: SubscriptionQuotaGeneral, QuotaResetPeriod: SubscriptionResetNever,
 			}
 
 			var result *SubscriptionApplyResult
 			require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
 				var err error
-				result, err = mergeRepeatedUserSubscriptionTx(tx, plan, incoming, testCase.mode)
+				result, err = mergeRepeatedUserSubscriptionTx(tx, plan, incoming, testCase.mode, SubscriptionApplyOptions{})
 				return err
 			}))
 
@@ -225,8 +225,8 @@ func TestRepeatedSubscriptionUsesLatestActiveTargetAndKeepsHistory(t *testing.T)
 	plan := seedRepeatPurchaseUserAndPlan(t, 3001, 3002, SubscriptionRepeatPurchaseAddQuota)
 	now := GetDBTimestamp()
 	rows := []UserSubscription{
-		{Id: 3101, UserId: 3001, PlanId: plan.Id, AmountTotal: 100, StartTime: now - 100, EndTime: now + 600, Status: "active", AllocationCount: 1},
-		{Id: 3102, UserId: 3001, PlanId: plan.Id, AmountTotal: 100, StartTime: now - 100, EndTime: now + 1200, Status: "active", AllocationCount: 1},
+		{Id: 3101, UserId: 3001, PlanId: plan.Id, AmountTotal: 100, StartTime: now - 100, EndTime: now + 600, Status: "active", AllocationCount: 1, AllowWalletOverflow: true},
+		{Id: 3102, UserId: 3001, PlanId: plan.Id, AmountTotal: 100, StartTime: now - 100, EndTime: now + 1200, Status: "active", AllocationCount: 1, AllowWalletOverflow: true},
 		{Id: 3103, UserId: 3001, PlanId: plan.Id, AmountTotal: 100, StartTime: now - 2000, EndTime: now - 1, Status: "active", AllocationCount: 1},
 	}
 	require.NoError(t, DB.Create(&rows).Error)
@@ -423,18 +423,18 @@ func TestMaxValidityReopensResetScheduleOnlyWhenExtended(t *testing.T) {
 			now := GetDBTimestamp()
 			target := &UserSubscription{
 				UserId: userId, PlanId: plan.Id, AmountTotal: 100,
-				StartTime: now - 100, EndTime: now + testCase.currentEnd, Status: "active", AllocationCount: 1,
+				StartTime: now - 100, EndTime: now + testCase.currentEnd, Status: "active", AllocationCount: 1, QuotaResetPeriod: plan.QuotaResetPeriod, QuotaResetCustomSeconds: plan.QuotaResetCustomSeconds,
 			}
 			require.NoError(t, DB.Create(target).Error)
 			incoming := &UserSubscription{
 				UserId: userId, PlanId: plan.Id, AmountTotal: 100,
-				StartTime: now, EndTime: now + testCase.incomingEnd, Status: "active", AllocationCount: 1,
+				StartTime: now, EndTime: now + testCase.incomingEnd, Status: "active", AllocationCount: 1, QuotaScope: SubscriptionQuotaGeneral, QuotaResetPeriod: plan.QuotaResetPeriod, QuotaResetCustomSeconds: plan.QuotaResetCustomSeconds,
 			}
 
 			var result *SubscriptionApplyResult
 			require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
 				var err error
-				result, err = mergeRepeatedUserSubscriptionTx(tx, plan, incoming, SubscriptionRepeatPurchaseMaxValidity)
+				result, err = mergeRepeatedUserSubscriptionTx(tx, plan, incoming, SubscriptionRepeatPurchaseMaxValidity, SubscriptionApplyOptions{})
 				return err
 			}))
 
@@ -499,32 +499,11 @@ func TestBalancePurchaseUsesPlanRepeatMode(t *testing.T) {
 	assert.EqualValues(t, 2, second[0].AllocationCount)
 }
 
-func TestSubscriptionAllocationBackfillAndLegacyCount(t *testing.T) {
-	truncateTables(t)
-	plan := seedRepeatPurchaseUserAndPlan(t, 4001, 4002, SubscriptionRepeatPurchaseIndependent)
-	now := GetDBTimestamp()
-	require.NoError(t, DB.Create(&UserSubscription{
-		Id: 4003, UserId: 4001, PlanId: plan.Id, AmountTotal: 100,
-		StartTime: now, EndTime: now + 3600, Status: "active", AllocationCount: 1,
-	}).Error)
-	require.NoError(t, DB.Model(&UserSubscription{}).Where("id = ?", 4003).Update("allocation_count", 0).Error)
-
-	count, err := CountUserSubscriptionsByPlan(4001, plan.Id)
-	require.NoError(t, err)
-	assert.EqualValues(t, 1, count)
-	require.NoError(t, backfillSubscriptionAllocationCount())
-
-	actual := getRepeatPurchaseSubscriptions(t, 4001, plan.Id)
-	require.Len(t, actual, 1)
-	assert.EqualValues(t, 1, actual[0].AllocationCount)
-}
-
-// TestAdminSubscriptionQuantityCreatesOneCalculatedRecord verifies quantity is materialized in one row.
 func TestAdminSubscriptionQuantityCreatesOneCalculatedRecord(t *testing.T) {
 	truncateTables(t)
 	plan := seedRepeatPurchaseUserAndPlan(t, 4101, 4102, SubscriptionRepeatPurchaseIndependent)
 
-	result, err := AdminBindSubscriptionWithOptions(4101, plan.Id, SubscriptionRepeatPurchaseIndependent, SubscriptionActivationImmediate, 3)
+	result, err := AdminBindSubscriptionWithOptions(4101, plan.Id, SubscriptionRepeatPurchaseIndependent, SubscriptionActivationImmediate, 3, false, "")
 	require.NoError(t, err)
 	require.NotNil(t, result.Subscription)
 
@@ -545,18 +524,18 @@ func TestAdminSubscriptionRenewalQuantityAppendsOneCrossPlanRecord(t *testing.T)
 	firstPlan := &SubscriptionPlan{
 		Id: 4202, Title: "First", Currency: "USD", DurationUnit: SubscriptionDurationCustom, CustomSeconds: 3600,
 		Enabled: true, TotalAmount: 100, RepeatPurchaseMode: SubscriptionRepeatPurchaseIndependent,
-		UpgradeGroup: "vip", GrantGroups: GroupNames{" group-b ", "group-a"},
+		UpgradeGroup: "vip", QuotaScope: SubscriptionQuotaGroupsAndGeneral, GrantGroups: GroupNames{" group-b ", "group-a"},
 	}
 	renewalPlan := &SubscriptionPlan{
 		Id: 4203, Title: "Renewal", Currency: "USD", DurationUnit: SubscriptionDurationCustom, CustomSeconds: 7200,
 		Enabled: true, TotalAmount: 200, RepeatPurchaseMode: SubscriptionRepeatPurchaseIndependent,
-		UpgradeGroup: "vip", GrantGroups: GroupNames{"group-a", "group-b", "group-a"},
+		UpgradeGroup: "vip", QuotaScope: SubscriptionQuotaGroupsAndGeneral, GrantGroups: GroupNames{"group-a", "group-b", "group-a"},
 	}
 	require.NoError(t, DB.Create(&[]SubscriptionPlan{*firstPlan, *renewalPlan}).Error)
 
-	first, err := AdminBindSubscriptionWithOptions(user.Id, firstPlan.Id, SubscriptionRepeatPurchaseIndependent, SubscriptionActivationImmediate, 1)
+	first, err := AdminBindSubscriptionWithOptions(user.Id, firstPlan.Id, SubscriptionRepeatPurchaseIndependent, SubscriptionActivationImmediate, 1, false, "")
 	require.NoError(t, err)
-	renewal, err := AdminBindSubscriptionWithOptions(user.Id, renewalPlan.Id, SubscriptionRepeatPurchaseIndependent, SubscriptionActivationRenew, 3)
+	renewal, err := AdminBindSubscriptionWithOptions(user.Id, renewalPlan.Id, SubscriptionRepeatPurchaseIndependent, SubscriptionActivationRenew, 3, false, "")
 	require.NoError(t, err)
 
 	require.NotNil(t, renewal.Subscription)
@@ -574,9 +553,9 @@ func TestAdminSubscriptionRenewalQuantityAppendsOneCrossPlanRecord(t *testing.T)
 func TestAdminSubscriptionQuantityAddsQuotaOnce(t *testing.T) {
 	truncateTables(t)
 	plan := seedRepeatPurchaseUserAndPlan(t, 4301, 4302, SubscriptionRepeatPurchaseAddQuota)
-	first, err := AdminBindSubscriptionWithOptions(4301, plan.Id, SubscriptionRepeatPurchaseAddQuota, SubscriptionActivationImmediate, 1)
+	first, err := AdminBindSubscriptionWithOptions(4301, plan.Id, SubscriptionRepeatPurchaseAddQuota, SubscriptionActivationImmediate, 1, false, "")
 	require.NoError(t, err)
-	second, err := AdminBindSubscriptionWithOptions(4301, plan.Id, SubscriptionRepeatPurchaseAddQuota, SubscriptionActivationImmediate, 3)
+	second, err := AdminBindSubscriptionWithOptions(4301, plan.Id, SubscriptionRepeatPurchaseAddQuota, SubscriptionActivationImmediate, 3, false, "")
 	require.NoError(t, err)
 
 	assert.Equal(t, first.Subscription.Id, second.Subscription.Id)
@@ -608,11 +587,11 @@ func TestAdminSubscriptionQuantityCalculatesEveryMergeMode(t *testing.T) {
 			truncateTables(t)
 			userId := 4500 + index*10
 			plan := seedRepeatPurchaseUserAndPlan(t, userId, userId+1, testCase.mode)
-			first, err := AdminBindSubscriptionWithOptions(userId, plan.Id, testCase.mode, SubscriptionActivationImmediate, 1)
+			first, err := AdminBindSubscriptionWithOptions(userId, plan.Id, testCase.mode, SubscriptionActivationImmediate, 1, false, "")
 			require.NoError(t, err)
 			require.NoError(t, DB.Model(&UserSubscription{}).Where("id = ?", first.Subscription.Id).Update("amount_used", 25).Error)
 
-			result, err := AdminBindSubscriptionWithOptions(userId, plan.Id, testCase.mode, SubscriptionActivationImmediate, 3)
+			result, err := AdminBindSubscriptionWithOptions(userId, plan.Id, testCase.mode, SubscriptionActivationImmediate, 3, false, "")
 			require.NoError(t, err)
 			require.NotNil(t, result.Subscription)
 			assert.Len(t, getRepeatPurchaseSubscriptions(t, userId, plan.Id), 1)
@@ -661,11 +640,11 @@ func TestAdminSubscriptionQuantityRejectsUnsafeCalculations(t *testing.T) {
 	plan.TotalAmount = math.MaxInt64
 	require.NoError(t, DB.Model(plan).Update("total_amount", int64(math.MaxInt64)).Error)
 
-	_, err := AdminBindSubscriptionWithOptions(4701, plan.Id, SubscriptionRepeatPurchaseAddQuota, SubscriptionActivationImmediate, 2)
+	_, err := AdminBindSubscriptionWithOptions(4701, plan.Id, SubscriptionRepeatPurchaseAddQuota, SubscriptionActivationImmediate, 2, false, "")
 	require.ErrorContains(t, err, "quota overflow")
 	assert.Empty(t, getRepeatPurchaseSubscriptions(t, 4701, plan.Id))
 
-	_, err = AdminBindSubscriptionWithOptions(4701, plan.Id, SubscriptionRepeatPurchaseAddQuota, SubscriptionActivationRenew, 1)
+	_, err = AdminBindSubscriptionWithOptions(4701, plan.Id, SubscriptionRepeatPurchaseAddQuota, SubscriptionActivationRenew, 1, false, "")
 	require.ErrorContains(t, err, "renew activation requires independent")
 }
 
@@ -710,4 +689,40 @@ func mustSubscriptionQuantity(t *testing.T, quantity int) int {
 	actual, err := NormalizeSubscriptionQuantity(quantity)
 	require.NoError(t, err)
 	return actual
+}
+
+func TestSubscriptionReservationKeepsTermsAndSurvivesFulfillmentFailure(t *testing.T) {
+	truncateTables(t)
+	plan := seedRepeatPurchaseUserAndPlan(t, 4801, 4802, SubscriptionRepeatPurchaseIndependent)
+	plan.MaxPurchasePerUser = 1
+	plan.UpgradeGroup = "paid-upgrade"
+	require.NoError(t, DB.Save(plan).Error)
+	insertSubscriptionOrderForPaymentGuardTest(t, "reserved-order", 4801, plan.Id, PaymentProviderStripe)
+	other := SubscriptionOrder{UserId: 4801, PlanId: plan.Id, TradeNo: "no-reservation", PaymentProvider: PaymentProviderStripe}
+	require.Error(t, other.Reserve(plan))
+	require.NoError(t, DB.Model(&User{}).Where("id = ?", 4801).UpdateColumn("quota", 100*int(common.QuotaPerUnit)).Error)
+	require.ErrorContains(t, PurchaseSubscriptionWithBalance(4801, plan.Id), "Purchase limit")
+
+	require.NoError(t, DB.Model(plan).Updates(map[string]any{"total_amount": 900, "upgrade_group": "new-template"}).Error)
+	otherPlan := *plan
+	otherPlan.Id = 4804
+	otherPlan.MaxPurchasePerUser = 0
+	otherPlan.UpgradeGroup = "conflict"
+	require.NoError(t, DB.Create(&otherPlan).Error)
+	blocker, err := AdminBindSubscription(4801, otherPlan.Id, SubscriptionApplyModePlanDefault)
+	require.NoError(t, err)
+	require.Error(t, CompleteSubscriptionOrder("reserved-order", "verified", PaymentProviderStripe, ""))
+	order := GetSubscriptionOrderByTradeNo("reserved-order")
+	require.NotNil(t, order)
+	assert.Equal(t, SubscriptionOrderPaid, order.Status)
+	assert.Positive(t, order.PaidAt)
+	_, err = AdminInvalidateUserSubscription(blocker.Subscription.Id)
+	require.NoError(t, err)
+	require.NoError(t, FulfillPaidSubscriptionOrder(order.TradeNo))
+	require.NoError(t, CompleteSubscriptionOrder(order.TradeNo, "verified", PaymentProviderStripe, ""))
+	rows := getRepeatPurchaseSubscriptions(t, 4801, plan.Id)
+	require.Len(t, rows, 1)
+	assert.EqualValues(t, 100, rows[0].AmountTotal)
+	assert.Equal(t, "paid-upgrade", rows[0].UpgradeGroup)
+	assert.Equal(t, rows[0].Id, GetSubscriptionOrderByTradeNo(order.TradeNo).FulfilledSubscriptionID)
 }

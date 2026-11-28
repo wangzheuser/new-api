@@ -1,8 +1,10 @@
 package model
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
-	"strings"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/QuantumNous/new-api/common"
 	"gorm.io/gorm"
@@ -42,29 +44,62 @@ func GetUserGroupGrants(userId int) ([]UserGroupGrant, error) {
 	return grants, err
 }
 
-// ReplaceUserGroupGrants atomically replaces a user's administrator-managed grants.
-func ReplaceUserGroupGrants(userId int, grants []UserGroupGrant) error {
-	if userId <= 0 {
-		return errors.New("invalid userId")
-	}
-	return DB.Transaction(func(tx *gorm.DB) error {
+// UserGroupGrantRevision identifies the ordered snapshot shown to an administrator.
+func UserGroupGrantRevision(grants []UserGroupGrant) string {
+	encoded, _ := common.Marshal(grants)
+	hash := sha256.Sum256(encoded)
+	return hex.EncodeToString(hash[:])
+}
+
+// ReplaceUserGroupGrants saves the submitted changes against the exact version loaded by the administrator.
+func ReplaceUserGroupGrants(userId int, revision string, grants []UserGroupGrant) (before, after []UserGroupGrant, err error) {
+	err = DB.Transaction(func(tx *gorm.DB) error {
 		var user User
-		if err := lockForUpdate(tx).Select("id").Where("id = ?", userId).First(&user).Error; err != nil {
+		if err := lockForUpdate(tx).First(&user, userId).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("user_id = ?", userId).Delete(&UserGroupGrant{}).Error; err != nil {
+		before = make([]UserGroupGrant, 0)
+		if err := tx.Where("user_id = ?", userId).Order("group_name asc").Find(&before).Error; err != nil {
 			return err
 		}
-		if len(grants) == 0 {
-			return nil
+		if revision != UserGroupGrantRevision(before) {
+			return common.NewMessage("These benefit groups have changed. Reload before saving.")
 		}
-		for index := range grants {
-			grants[index].Id = 0
-			grants[index].UserId = userId
-			grants[index].GroupName = strings.TrimSpace(grants[index].GroupName)
+		current := make(map[string]UserGroupGrant, len(before))
+		for _, grant := range before {
+			current[grant.GroupName] = grant
 		}
-		return tx.Create(&grants).Error
+		now := getDBTimestampTx(tx)
+		for _, grant := range grants {
+			existing, found := current[grant.GroupName]
+			delete(current, grant.GroupName)
+			if found && existing.ExpiresAt == grant.ExpiresAt {
+				continue
+			}
+			if (grant.GroupName == user.Group || grant.GroupName == user.EffectiveBaseGroup()) || !ratio_setting.ContainsGroupRatio(grant.GroupName) ||
+				(grant.ExpiresAt != 0 && grant.ExpiresAt <= now) {
+				return common.NewMessage("The benefit group or its expiration is invalid")
+			}
+			if found {
+				if err := tx.Model(&existing).Update("expires_at", grant.ExpiresAt).Error; err != nil {
+					return err
+				}
+			} else {
+				grant.UserId = userId
+				if err := tx.Create(&grant).Error; err != nil {
+					return err
+				}
+			}
+		}
+		for _, grant := range current {
+			if err := tx.Delete(&grant).Error; err != nil {
+				return err
+			}
+		}
+		after = make([]UserGroupGrant, 0)
+		return tx.Where("user_id = ?", userId).Order("group_name asc").Find(&after).Error
 	})
+	return before, after, err
 }
 
 // GetActiveUserManualGrantGroups returns currently effective manual group grants.

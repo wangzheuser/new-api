@@ -51,7 +51,7 @@ export const subscriptionPlanSchema = z.object({
     ])
     .default('independent'),
   total_amount: z.number(),
-  entitlement_group: z.string().optional(),
+  quota_scope: z.enum(['general', 'groups', 'groups_and_general']),
   grant_groups: z.array(z.string()).optional().default([]),
   upgrade_group: z.string().optional(),
   downgrade_group: z.string().optional(),
@@ -85,7 +85,7 @@ export const userSubscriptionSchema = z.object({
   amount_total: z.number(),
   amount_used: z.number(),
   allocation_count: z.number().optional().default(1),
-  entitlement_group: z.string().optional(),
+  quota_scope: z.enum(['general', 'groups', 'groups_and_general']),
   grant_groups: z.array(z.string()).optional().default([]),
   upgrade_group: z.string().optional(),
   downgrade_group: z.string().optional(),
@@ -140,6 +140,7 @@ export interface SubscriptionPayResponse {
 export interface CreateUserSubscriptionRequest {
   plan_id: number
   apply_mode?: SubscriptionApplyMode
+  revision?: string
   activation_mode?: SubscriptionActivationMode
   quantity?: number
 }
@@ -187,7 +188,6 @@ export interface SubscriptionResetResult {
 export interface SelfSubscriptionData {
   billing_preference: string
   subscriptions: UserSubscriptionRecord[]
-  all_subscriptions: UserSubscriptionRecord[]
   plan_titles?: Record<string, string>
 }
 

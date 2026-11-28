@@ -16,6 +16,10 @@ func seedSubscriptionResetPlan(t *testing.T, plan *SubscriptionPlan) {
 
 func seedSubscriptionResetSub(t *testing.T, sub *UserSubscription) {
 	t.Helper()
+	var plan SubscriptionPlan
+	require.NoError(t, DB.First(&plan, sub.PlanId).Error)
+	sub.QuotaResetPeriod = plan.QuotaResetPeriod
+	sub.QuotaResetCustomSeconds = plan.QuotaResetCustomSeconds
 	require.NoError(t, DB.Create(sub).Error)
 }
 

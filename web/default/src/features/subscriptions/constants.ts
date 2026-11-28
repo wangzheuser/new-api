@@ -72,3 +72,14 @@ export function getRepeatPurchaseModeOptions(t: TFunction) {
     label: t(mode.labelKey),
   }))
 }
+
+export function getQuotaScopeOptions(t: TFunction) {
+  return [
+    { value: 'general', label: t('General quota only') },
+    { value: 'groups', label: t('Listed groups only') },
+    {
+      value: 'groups_and_general',
+      label: t('Listed groups and general quota'),
+    },
+  ]
+}

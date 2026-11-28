@@ -16,18 +16,17 @@ func TestGetAllPublicUserSubscriptionsSelectsOwnerFields(t *testing.T) {
 	truncateTables(t)
 	now := common.GetTimestamp()
 	require.NoError(t, DB.Create(&UserSubscription{
-		UserId:              23,
-		PlanId:              7,
-		AmountTotal:         1000,
-		AmountUsed:          250,
-		AllocationCount:     2,
-		StartTime:           now - 10,
-		EndTime:             now + 3600,
-		Status:              "active",
-		Source:              "admin",
-		NextResetTime:       now + 1800,
-		EntitlementGroup:    "premium",
-		GrantGroups:         GroupNames{"vip"},
+		UserId:          23,
+		PlanId:          7,
+		AmountTotal:     1000,
+		AmountUsed:      250,
+		AllocationCount: 2,
+		StartTime:       now - 10,
+		EndTime:         now + 3600,
+		Status:          "active",
+		Source:          "admin",
+		NextResetTime:   now + 1800,
+		QuotaScope:      SubscriptionQuotaGroups, GrantGroups: GroupNames{"premium", "vip"},
 		UpgradeGroup:        "operator-upgrade",
 		PrevUserGroup:       "operator-previous",
 		DowngradeGroup:      "operator-downgrade",
@@ -41,7 +40,7 @@ func TestGetAllPublicUserSubscriptionsSelectsOwnerFields(t *testing.T) {
 	require.NotNil(t, public)
 	assert.Equal(t, 7, public.PlanId)
 	assert.EqualValues(t, 250, public.AmountUsed)
-	assert.Equal(t, GroupNames{"vip"}, public.GrantGroups)
+	assert.Equal(t, GroupNames{"premium", "vip"}, public.GrantGroups)
 
 	encoded, err := common.Marshal(all)
 	require.NoError(t, err)

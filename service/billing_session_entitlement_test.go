@@ -26,13 +26,13 @@ func seedEntitlementBillingSubscription(t *testing.T, id, userId int, group stri
 	t.Helper()
 	plan := &model.SubscriptionPlan{
 		Id: id, Title: group + " plan", Currency: "USD", DurationUnit: model.SubscriptionDurationHour,
-		DurationValue: 24, Enabled: true, TotalAmount: amount, EntitlementGroup: group,
+		DurationValue: 24, Enabled: true, TotalAmount: amount, QuotaScope: model.SubscriptionQuotaGroups, GrantGroups: model.GroupNames{group},
 	}
 	require.NoError(t, model.DB.Create(plan).Error)
 	now := time.Now().Unix()
 	require.NoError(t, model.DB.Create(&model.UserSubscription{
 		Id: id, UserId: userId, PlanId: id, AmountTotal: amount, Status: "active",
-		StartTime: now - 60, EndTime: now + 3600, EntitlementGroup: group,
+		StartTime: now - 60, EndTime: now + 3600, QuotaScope: model.SubscriptionQuotaGroups, GrantGroups: model.GroupNames{group},
 		AllowWalletOverflow: allowOverflow,
 	}).Error)
 }
@@ -45,7 +45,7 @@ func TestNewBillingSessionUsesMatchingEntitlementGroup(t *testing.T) {
 	seedEntitlementBillingSubscription(t, 7403, 7401, "国模", 100, false)
 	relayInfo := &relaycommon.RelayInfo{
 		RequestId: "billing-claude", UserId: 7401, UsingGroup: "claude", OriginModelName: "shared-model",
-		IsPlayground: true, UserSetting: dto.UserSetting{BillingPreference: "wallet_only"},
+		IsPlayground: true, UserSetting: dto.UserSetting{BillingPreference: "subscription_only"},
 	}
 
 	session, apiErr := NewBillingSession(newEntitlementBillingContext(), relayInfo, 40)
@@ -90,7 +90,7 @@ func TestNewBillingSessionScopedOverflowPolicy(t *testing.T) {
 	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("id = ?", 7502).Update("allow_wallet_overflow", true).Error)
 	overflowInfo := &relaycommon.RelayInfo{
 		RequestId: "billing-overflow", UserId: 7501, UsingGroup: "claude", OriginModelName: "shared-model",
-		IsPlayground: true, UserSetting: dto.UserSetting{BillingPreference: "subscription_only"},
+		IsPlayground: true, UserSetting: dto.UserSetting{BillingPreference: "subscription_first"},
 	}
 	overflowSession, apiErr := NewBillingSession(newEntitlementBillingContext(), overflowInfo, 60)
 	require.Nil(t, apiErr)
@@ -137,17 +137,17 @@ func TestNewBillingSessionUsesMultiGroupSubscription(t *testing.T) {
 	seedUser(t, 7701, 1000)
 	plan := &model.SubscriptionPlan{
 		Id: 7702, Title: "multi-group", Currency: "USD", DurationUnit: model.SubscriptionDurationHour,
-		DurationValue: 24, Enabled: true, TotalAmount: 100, GrantGroups: model.GroupNames{"group-a", "group-b"},
+		DurationValue: 24, Enabled: true, TotalAmount: 100, QuotaScope: model.SubscriptionQuotaGroupsAndGeneral, GrantGroups: model.GroupNames{"group-a", "group-b"},
 	}
 	require.NoError(t, model.DB.Create(plan).Error)
 	now := time.Now().Unix()
 	require.NoError(t, model.DB.Create(&model.UserSubscription{
 		Id: 7702, UserId: 7701, PlanId: plan.Id, AmountTotal: 100, Status: "active",
-		StartTime: now - 60, EndTime: now + 3600, GrantGroups: model.GroupNames{"group-a", "group-b"},
+		StartTime: now - 60, EndTime: now + 3600, QuotaScope: model.SubscriptionQuotaGroupsAndGeneral, GrantGroups: model.GroupNames{"group-a", "group-b"},
 	}).Error)
 	relayInfo := &relaycommon.RelayInfo{
 		RequestId: "billing-multi-group", UserId: 7701, UsingGroup: "group-b", OriginModelName: "shared-model",
-		IsPlayground: true, UserSetting: dto.UserSetting{BillingPreference: "wallet_only"},
+		IsPlayground: true, UserSetting: dto.UserSetting{BillingPreference: "subscription_only"},
 	}
 
 	session, apiErr := NewBillingSession(newEntitlementBillingContext(), relayInfo, 25)
@@ -156,4 +156,34 @@ func TestNewBillingSessionUsesMultiGroupSubscription(t *testing.T) {
 	assert.Equal(t, BillingSourceSubscription, relayInfo.BillingSource)
 	assert.Equal(t, "group-b", relayInfo.SubscriptionEntitlementGroup)
 	assert.Equal(t, 7702, relayInfo.SubscriptionId)
+}
+
+func TestScopedSubscriptionOnlyNeverChargesWallet(t *testing.T) {
+	truncate(t)
+	seedUser(t, 7801, 1000)
+	seedEntitlementBillingSubscription(t, 7802, 7801, "claude", 20, true)
+	info := &relaycommon.RelayInfo{
+		RequestId: "strict-preference", UserId: 7801, UsingGroup: "claude",
+		IsPlayground: true, UserSetting: dto.UserSetting{BillingPreference: "subscription_only"},
+	}
+	session, apiErr := NewBillingSession(newEntitlementBillingContext(), info, 25)
+	require.NotNil(t, apiErr)
+	assert.Nil(t, session)
+	quota, err := model.GetUserQuota(7801, true)
+	require.NoError(t, err)
+	assert.Equal(t, 1000, quota)
+	var subscription model.UserSubscription
+	require.NoError(t, model.DB.First(&subscription, 7802).Error)
+	assert.Zero(t, subscription.AmountUsed)
+
+	require.NoError(t, model.DB.Model(&subscription).Update("allow_wallet_overflow", false).Error)
+	info.UserSetting.BillingPreference = "wallet_only"
+	session, apiErr = NewBillingSession(newEntitlementBillingContext(), info, 10)
+	require.NotNil(t, apiErr)
+	assert.Nil(t, session)
+	quota, err = model.GetUserQuota(7801, true)
+	require.NoError(t, err)
+	assert.Equal(t, 1000, quota)
+	require.NoError(t, model.DB.First(&subscription, 7802).Error)
+	assert.Zero(t, subscription.AmountUsed)
 }

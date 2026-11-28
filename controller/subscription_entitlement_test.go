@@ -9,20 +9,20 @@ import (
 )
 
 func TestNormalizeSubscriptionPlanGroups(t *testing.T) {
-	valid := &model.SubscriptionPlan{EntitlementGroup: " default "}
+	valid := &model.SubscriptionPlan{QuotaScope: model.SubscriptionQuotaGroups, GrantGroups: model.GroupNames{" default "}}
 	require.NoError(t, normalizeSubscriptionPlanGroups(valid))
-	assert.Equal(t, "default", valid.EntitlementGroup)
+	assert.Equal(t, model.GroupNames{"default"}, valid.GrantGroups)
 
-	conflict := &model.SubscriptionPlan{EntitlementGroup: "default", UpgradeGroup: "default"}
-	require.ErrorContains(t, normalizeSubscriptionPlanGroups(conflict), "不能与升级或降级分组同时配置")
+	conflict := &model.SubscriptionPlan{QuotaScope: model.SubscriptionQuotaGeneral, GrantGroups: model.GroupNames{"default"}}
+	require.ErrorContains(t, normalizeSubscriptionPlanGroups(conflict), "额度适用范围与权益分组不匹配")
 
-	missing := &model.SubscriptionPlan{EntitlementGroup: "missing-entitlement-group"}
-	require.ErrorContains(t, normalizeSubscriptionPlanGroups(missing), "权益分组不存在")
+	missing := &model.SubscriptionPlan{QuotaScope: model.SubscriptionQuotaGroups, GrantGroups: model.GroupNames{"missing-entitlement-group"}}
+	require.ErrorContains(t, normalizeSubscriptionPlanGroups(missing), "不存在")
 
-	combined := &model.SubscriptionPlan{UpgradeGroup: "vip", GrantGroups: model.GroupNames{" default ", "default"}}
+	combined := &model.SubscriptionPlan{UpgradeGroup: "vip", QuotaScope: model.SubscriptionQuotaGroupsAndGeneral, GrantGroups: model.GroupNames{" default ", "default"}}
 	require.NoError(t, normalizeSubscriptionPlanGroups(combined))
 	assert.Equal(t, model.GroupNames{"default"}, combined.GrantGroups)
 
-	duplicateUpgrade := &model.SubscriptionPlan{UpgradeGroup: "vip", GrantGroups: model.GroupNames{"vip"}}
+	duplicateUpgrade := &model.SubscriptionPlan{UpgradeGroup: "vip", QuotaScope: model.SubscriptionQuotaGroupsAndGeneral, GrantGroups: model.GroupNames{"vip"}}
 	require.ErrorContains(t, normalizeSubscriptionPlanGroups(duplicateUpgrade), "已自动可用")
 }

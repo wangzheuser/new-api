@@ -23,7 +23,7 @@ func TestSubscriptionEntitlementGrantDoesNotChangeBaseGroup(t *testing.T) {
 		Enabled:            true,
 		TotalAmount:        200 * int64(common.QuotaPerUnit),
 		RepeatPurchaseMode: SubscriptionRepeatPurchaseExtendTimeAddQuota,
-		EntitlementGroup:   "claude",
+		QuotaScope:         SubscriptionQuotaGroups, GrantGroups: GroupNames{"claude"},
 	}
 	require.NoError(t, DB.Create(plan).Error)
 
@@ -31,7 +31,7 @@ func TestSubscriptionEntitlementGrantDoesNotChangeBaseGroup(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotNil(t, result.Subscription)
-	assert.Equal(t, "claude", result.Subscription.EntitlementGroup)
+	assert.Equal(t, "claude", result.Subscription.GrantGroups[0])
 	assert.Empty(t, result.Subscription.UpgradeGroup)
 
 	baseGroup, err := GetUserGroup(user.Id, false)
@@ -60,8 +60,8 @@ func TestSubscriptionPreConsumeIsolatedByEntitlementGroup(t *testing.T) {
 
 	plans := []*SubscriptionPlan{
 		{Id: 7202, Title: "通用", Currency: "USD", DurationUnit: SubscriptionDurationHour, DurationValue: 24, Enabled: true, TotalAmount: 100, RepeatPurchaseMode: SubscriptionRepeatPurchaseIndependent},
-		{Id: 7203, Title: "Claude", Currency: "USD", DurationUnit: SubscriptionDurationHour, DurationValue: 24, Enabled: true, TotalAmount: 50, RepeatPurchaseMode: SubscriptionRepeatPurchaseIndependent, EntitlementGroup: "claude"},
-		{Id: 7204, Title: "国模", Currency: "USD", DurationUnit: SubscriptionDurationHour, DurationValue: 24, Enabled: true, TotalAmount: 80, RepeatPurchaseMode: SubscriptionRepeatPurchaseIndependent, EntitlementGroup: "国模"},
+		{Id: 7203, Title: "Claude", Currency: "USD", DurationUnit: SubscriptionDurationHour, DurationValue: 24, Enabled: true, TotalAmount: 50, RepeatPurchaseMode: SubscriptionRepeatPurchaseIndependent, QuotaScope: SubscriptionQuotaGroups, GrantGroups: GroupNames{"claude"}},
+		{Id: 7204, Title: "国模", Currency: "USD", DurationUnit: SubscriptionDurationHour, DurationValue: 24, Enabled: true, TotalAmount: 80, RepeatPurchaseMode: SubscriptionRepeatPurchaseIndependent, QuotaScope: SubscriptionQuotaGroups, GrantGroups: GroupNames{"国模"}},
 	}
 	for _, plan := range plans {
 		require.NoError(t, DB.Create(plan).Error)
@@ -78,7 +78,11 @@ func TestSubscriptionPreConsumeIsolatedByEntitlementGroup(t *testing.T) {
 	assertSubscriptionScope := func(subscriptionId int, expectedGroup string, expectedUsed int64) {
 		var subscription UserSubscription
 		require.NoError(t, DB.First(&subscription, subscriptionId).Error)
-		assert.Equal(t, expectedGroup, subscription.EntitlementGroup)
+		if expectedGroup == "" {
+			assert.Empty(t, subscription.GrantGroups)
+		} else {
+			assert.Contains(t, subscription.GrantGroups, expectedGroup)
+		}
 		assert.Equal(t, expectedUsed, subscription.AmountUsed)
 	}
 	assertSubscriptionScope(claudeResult.UserSubscriptionId, "claude", 40)

@@ -198,14 +198,15 @@ const (
 
 // Quota related messages
 const (
-	MsgQuotaNegative                 = "quota.negative"
-	MsgQuotaExceedMax                = "quota.exceed_max"
-	MsgQuotaInsufficient             = "quota.insufficient"
-	MsgQuotaUserInsufficient         = "quota.user_insufficient"
-	MsgQuotaPreConsumeInsufficient   = "quota.pre_consume_insufficient"
-	MsgQuotaWarningInvalid           = "quota.warning_invalid"
-	MsgQuotaThresholdGtZero          = "quota.threshold_gt_zero"
-	MsgQuotaSubscriptionInsufficient = "quota.subscription_insufficient"
+	MsgQuotaNegative                   = "quota.negative"
+	MsgQuotaExceedMax                  = "quota.exceed_max"
+	MsgQuotaInsufficient               = "quota.insufficient"
+	MsgQuotaUserInsufficient           = "quota.user_insufficient"
+	MsgQuotaPreConsumeInsufficient     = "quota.pre_consume_insufficient"
+	MsgQuotaWarningInvalid             = "quota.warning_invalid"
+	MsgQuotaThresholdGtZero            = "quota.threshold_gt_zero"
+	MsgQuotaSubscriptionWalletDisabled = "quota.subscription_wallet_disabled"
+	MsgQuotaSubscriptionInsufficient   = "quota.subscription_insufficient"
 )
 
 // Subscription related messages

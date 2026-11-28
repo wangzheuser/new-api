@@ -99,6 +99,7 @@ type User struct {
 	UsedQuota            int                        `json:"used_quota" gorm:"type:int;default:0;column:used_quota"` // used quota
 	RequestCount         int                        `json:"request_count" gorm:"type:int;default:0;"`               // request number
 	Group                string                     `json:"group" gorm:"type:varchar(64);default:'default'"`
+	SubscriptionGroup    string                     `json:"-" gorm:"type:varchar(64);not null;default:''"`
 	AffCode              string                     `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
 	AffCount             int                        `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
 	AffQuota             int                        `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
@@ -115,10 +116,17 @@ type User struct {
 	AdminPermissions     map[string]map[string]bool `json:"admin_permissions,omitempty" gorm:"-:all"`
 }
 
+func (user *User) EffectiveBaseGroup() string {
+	if user.SubscriptionGroup != "" {
+		return user.SubscriptionGroup
+	}
+	return user.Group
+}
+
 func (user *User) ToBaseUser() *UserBase {
 	cache := &UserBase{
 		Id:          user.Id,
-		Group:       user.Group,
+		Group:       user.EffectiveBaseGroup(),
 		Quota:       user.Quota,
 		Status:      user.Status,
 		Role:        user.Role,
@@ -451,7 +459,7 @@ type UserSearchFilters struct {
 // GetDistinctUserBaseGroups returns all persisted base groups, including soft-deleted users.
 func GetDistinctUserBaseGroups() ([]string, error) {
 	groups := make([]string, 0)
-	err := DB.Unscoped().Model(&User{}).Distinct("group").Pluck("group", &groups).Error
+	err := DB.Unscoped().Model(&User{}).Distinct("COALESCE(NULLIF(subscription_group, ''), "+commonGroupCol+")").Pluck("COALESCE(NULLIF(subscription_group, ''), "+commonGroupCol+")", &groups).Error
 	return groups, err
 }
 
@@ -575,12 +583,12 @@ func SearchUsers(first any, args ...any) ([]*User, int64, error) {
 		subscriptionGrantUsers := tx.Model(&UserSubscription{}).
 			Select("user_id").
 			Where("status = ? AND start_time <= ? AND end_time > ?", "active", now, now).
-			Where("entitlement_group = ? OR grant_groups LIKE ? ESCAPE '!'", filters.EffectiveGroup, grantGroupPattern)
+			Where("grant_groups LIKE ? ESCAPE '!'", grantGroupPattern)
 
 		effectiveGroupCondition := tx.Where("id IN (?)", manualGrantUsers).
 			Or("id IN (?)", subscriptionGrantUsers)
 		if len(filters.EffectiveBaseGroups) > 0 {
-			effectiveGroupCondition = effectiveGroupCondition.Or(commonGroupCol+" IN ?", filters.EffectiveBaseGroups)
+			effectiveGroupCondition = effectiveGroupCondition.Or("COALESCE(NULLIF(subscription_group, ''), "+commonGroupCol+") IN ?", filters.EffectiveBaseGroups)
 		}
 		query = query.Where(effectiveGroupCondition)
 	}
@@ -1397,12 +1405,13 @@ func GetUserGroup(id int, fromDB bool) (group string, err error) {
 		// Don't return error - fall through to DB
 	}
 	fromDB = true
-	err = DB.Model(&User{}).Where("id = ?", id).Select(commonGroupCol).Find(&group).Error
+	var user User
+	err = DB.Where("id = ?", id).Select(commonGroupCol, "subscription_group").Find(&user).Error
 	if err != nil {
 		return "", err
 	}
 
-	return group, nil
+	return user.EffectiveBaseGroup(), nil
 }
 
 // GetUserSetting gets setting from Redis first, falls back to DB if needed

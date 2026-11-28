@@ -198,6 +198,8 @@ func SetApiRouter(router *gin.Engine) {
 		subscriptionAdminRoute := apiRouter.Group("/subscription/admin")
 		subscriptionAdminRoute.Use(middleware.AdminAuth())
 		{
+			subscriptionAdminRoute.GET("/orders/unfulfilled", controller.AdminListUnfulfilledSubscriptionOrders)
+			subscriptionAdminRoute.POST("/orders/:trade_no/retry", controller.AdminRetrySubscriptionOrder)
 			subscriptionAdminRoute.GET("/plans", controller.AdminListSubscriptionPlans)
 			subscriptionAdminRoute.POST("/plans", controller.AdminCreateSubscriptionPlan)
 			subscriptionAdminRoute.PUT("/plans/:id", controller.AdminUpdateSubscriptionPlan)
@@ -207,6 +209,7 @@ func SetApiRouter(router *gin.Engine) {
 
 			// User subscription management (admin)
 			subscriptionAdminRoute.GET("/users/:id/subscriptions", controller.AdminListUserSubscriptions)
+			subscriptionAdminRoute.POST("/users/:id/subscriptions/preview", controller.AdminPreviewUserSubscription)
 			subscriptionAdminRoute.POST("/users/:id/subscriptions", controller.AdminCreateUserSubscription)
 			subscriptionAdminRoute.POST("/users/:id/subscriptions/reset", controller.AdminResetUserSubscriptionsByPlan)
 			subscriptionAdminRoute.PATCH("/user_subscriptions/:id", controller.AdminUpdateUserSubscription)

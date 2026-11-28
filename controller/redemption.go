@@ -77,7 +77,9 @@ func normalizeRedemptionBenefit(redemption *model.Redemption) (*model.Subscripti
 	if redemption.Quota <= 0 {
 		return nil, i18n.MsgRedemptionQuotaPositive
 	}
-	redemption.PlanId = 0
+	if err := common.ValidateWalletQuota(redemption.Quota); err != nil {
+		return nil, i18n.MsgRedemptionQuotaPositive
+	}
 	return nil, ""
 }
 
@@ -103,14 +105,6 @@ func AddRedemption(c *gin.Context) {
 	}
 	if redemption.Count > 100 {
 		common.ApiErrorT(c, "Maximum 100 redemption codes can be generated at once")
-		return
-	}
-	if redemption.Quota <= 0 {
-		common.ApiErrorT(c, "Redemption quota must be positive")
-		return
-	}
-	if err := common.ValidateWalletQuota(redemption.Quota); err != nil {
-		common.ApiError(c, err)
 		return
 	}
 	if err := validateExpiredTime(redemption.ExpiredTime); err != nil {
@@ -195,14 +189,6 @@ func UpdateRedemption(c *gin.Context) {
 		return
 	}
 	if statusOnly == "" {
-		if redemption.Quota <= 0 {
-			common.ApiErrorT(c, "Redemption quota must be positive")
-			return
-		}
-		if err := common.ValidateWalletQuota(redemption.Quota); err != nil {
-			common.ApiError(c, err)
-			return
-		}
 		if err := validateExpiredTime(redemption.ExpiredTime); err != nil {
 			common.ApiError(c, err)
 			return
@@ -220,7 +206,11 @@ func UpdateRedemption(c *gin.Context) {
 	if statusOnly != "" {
 		cleanRedemption.Status = redemption.Status
 	}
-	err = cleanRedemption.Update()
+	if statusOnly != "" {
+		err = cleanRedemption.SelectUpdate()
+	} else {
+		err = cleanRedemption.Update()
+	}
 	if err != nil {
 		common.ApiError(c, err)
 		return

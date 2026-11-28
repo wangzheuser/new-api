@@ -92,7 +92,7 @@ func TestSearchUsersFiltersAllEffectiveGroupSources(t *testing.T) {
 		{UserId: 8203, GroupName: "target", ExpiresAt: now - 1},
 	}).Error)
 	require.NoError(t, DB.Create(&[]UserSubscription{
-		{UserId: 8204, PlanId: 20, Status: "active", StartTime: now - 60, EndTime: now + 3600, EntitlementGroup: "target"},
+		{UserId: 8204, PlanId: 20, Status: "active", StartTime: now - 60, EndTime: now + 3600, QuotaScope: SubscriptionQuotaGroups, GrantGroups: GroupNames{"target"}},
 		{UserId: 8205, PlanId: 21, Status: "active", StartTime: now - 60, EndTime: now + 3600, GrantGroups: GroupNames{"target"}},
 		{UserId: 8206, PlanId: 22, Status: "active", StartTime: now + 60, EndTime: now + 3600, GrantGroups: GroupNames{"target"}},
 		{UserId: 8207, PlanId: 23, Status: "cancelled", StartTime: now - 60, EndTime: now + 3600, GrantGroups: GroupNames{"target"}},

@@ -444,21 +444,19 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		return session, nil
 	}
 
-	// A group-scoped subscription must consume its own quota. Wallet fallback follows
-	// that subscription's overflow setting and never consumes another group's quota.
+	// The user's exclusive preference is a hard constraint on the funding source.
 	if entitlementGroup != "" {
-		session, apiErr := trySubscription()
-		if apiErr == nil || apiErr.GetErrorCode() != types.ErrorCodeInsufficientUserQuota {
-			return session, apiErr
+		allowWallet, err := model.UserActiveSubscriptionsAllowWalletOverflowForGroup(relayInfo.UserId, entitlementGroup)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
 		}
-		allowOverflow, overflowErr := model.UserActiveSubscriptionsAllowWalletOverflowForGroup(relayInfo.UserId, entitlementGroup)
-		if overflowErr != nil {
-			return nil, types.NewError(overflowErr, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+		if !allowWallet && pref == "wallet_only" {
+			return nil, types.NewErrorWithStatusCode(errors.New(i18n.T(c, i18n.MsgQuotaSubscriptionWalletDisabled)),
+				types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry())
 		}
-		if allowOverflow {
-			return tryWallet()
+		if !allowWallet {
+			return trySubscription()
 		}
-		return nil, apiErr
 	}
 
 	switch pref {
@@ -478,6 +476,13 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 	case "subscription_first":
 		fallthrough
 	default:
+		if entitlementGroup != "" {
+			session, apiErr := trySubscription()
+			if apiErr != nil && apiErr.GetErrorCode() == types.ErrorCodeInsufficientUserQuota {
+				return tryWallet()
+			}
+			return session, apiErr
+		}
 		hasSub, subCheckErr := model.HasActiveUserSubscriptionForGroup(relayInfo.UserId, "")
 		if subCheckErr != nil {
 			return nil, types.NewError(subCheckErr, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())

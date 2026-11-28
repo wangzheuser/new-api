@@ -163,6 +163,8 @@ export interface SubscriptionGroupGrant {
 }
 
 export interface UserGroupGrantData {
+  revision: string
+  current_group: string
   base_group: string
   system_groups: string[]
   manual_grants: UserGroupGrant[]
@@ -171,6 +173,7 @@ export interface UserGroupGrantData {
 }
 
 export interface ReplaceUserGroupGrantsPayload {
+  revision: string
   grants: Array<{
     group: string
     expires_at: number

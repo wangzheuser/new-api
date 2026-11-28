@@ -80,7 +80,7 @@ func buildAdminUserOverview(user *model.User, subscriptions []model.Subscription
 			AmountUsed:          subscription.AmountUsed,
 			AllocationCount:     subscription.AllocationCount,
 			NextResetTime:       subscription.NextResetTime,
-			BenefitGroups:       model.MergeGroupNames(model.GroupNames{subscription.EntitlementGroup}, subscription.GrantGroups),
+			BenefitGroups:       subscription.GrantGroups,
 			AllowWalletOverflow: subscription.AllowWalletOverflow,
 		}
 		if subscription.Status == "active" && subscription.StartTime <= now && subscription.EndTime > now {
@@ -177,7 +177,7 @@ func GetAdminUserOverview(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	effectiveGroupMap, err := service.GetUserEffectiveGroups(userId, user.Group)
+	effectiveGroupMap, err := service.GetUserEffectiveGroups(userId, user.EffectiveBaseGroup())
 	if err != nil {
 		common.ApiError(c, err)
 		return

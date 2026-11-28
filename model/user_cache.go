@@ -11,7 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const userCacheSchemaVersion = 2
+const userCacheSchemaVersion = 3
 
 type UserBase struct {
 	Id          int    `json:"id"`
@@ -207,7 +207,7 @@ func RefreshUserGroupCache(userId int) error {
 		return fmt.Errorf("invalid user id")
 	}
 	var authoritative User
-	if err := DB.Select("id", "auth_version", commonGroupCol).Where("id = ?", userId).First(&authoritative).Error; err != nil {
+	if err := DB.Select("id", "auth_version", commonGroupCol, "subscription_group").Where("id = ?", userId).First(&authoritative).Error; err != nil {
 		return err
 	}
 	// Group transitions intentionally keep the same authentication version. A
@@ -215,15 +215,15 @@ func RefreshUserGroupCache(userId int) error {
 	// refresh and still pass the auth-version fence. Re-read after every write
 	// and repair the cache when the authoritative group changed in between.
 	for range 3 {
-		if err := updateUserCacheFieldAtVersion(userId, "Group", authoritative.Group, authoritative.AuthVersion); err != nil {
+		if err := updateUserCacheFieldAtVersion(userId, "Group", authoritative.EffectiveBaseGroup(), authoritative.AuthVersion); err != nil {
 			return err
 		}
 
 		var verified User
-		if err := DB.Select("id", "auth_version", commonGroupCol).Where("id = ?", userId).First(&verified).Error; err != nil {
+		if err := DB.Select("id", "auth_version", commonGroupCol, "subscription_group").Where("id = ?", userId).First(&verified).Error; err != nil {
 			return err
 		}
-		if verified.AuthVersion == authoritative.AuthVersion && verified.Group == authoritative.Group {
+		if verified.AuthVersion == authoritative.AuthVersion && verified.EffectiveBaseGroup() == authoritative.EffectiveBaseGroup() {
 			return nil
 		}
 		authoritative = verified
@@ -232,7 +232,7 @@ func RefreshUserGroupCache(userId int) error {
 	// Preserve the freshest snapshot observed even when the row was too busy to
 	// stabilize within the bounded retries. Returning an error lets best-effort
 	// callers emit an operation-specific warning.
-	if err := updateUserCacheFieldAtVersion(userId, "Group", authoritative.Group, authoritative.AuthVersion); err != nil {
+	if err := updateUserCacheFieldAtVersion(userId, "Group", authoritative.EffectiveBaseGroup(), authoritative.AuthVersion); err != nil {
 		return err
 	}
 	return fmt.Errorf("user group changed repeatedly during cache refresh")

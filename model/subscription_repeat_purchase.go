@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"gorm.io/gorm"
 )
 
@@ -39,6 +40,8 @@ type SubscriptionApplyOptions struct {
 	ActivationMode       string
 	Quantity             int
 	EnforcePurchaseLimit bool
+	Preview              bool
+	ExpectedRevision     string
 }
 
 // SubscriptionApplyResult describes the entitlement changed by one application.
@@ -50,6 +53,7 @@ type SubscriptionApplyResult struct {
 	PlanTitle      string            `json:"plan_title"`
 	Quantity       int               `json:"quantity"`
 	Before         *UserSubscription `json:"-"`
+	Revision       string            `json:"revision,omitempty"`
 	// PrevUserGroup and Params preserve the legacy admin response shape.
 	PrevUserGroup string         `json:"-"`
 	Params        map[string]any `json:"-"`
@@ -109,17 +113,15 @@ func multiplySubscriptionQuota(amount int64, quantity int) (int64, error) {
 }
 
 // sameSubscriptionBenefits reports whether two snapshots grant the same base and additional groups.
-func sameSubscriptionBenefits(subscription *UserSubscription, upgradeGroup string, entitlementGroup string, grantGroups GroupNames) bool {
+func sameSubscriptionBenefits(subscription *UserSubscription, upgradeGroup string, quotaScope string, grantGroups GroupNames) bool {
 	if subscription == nil || strings.TrimSpace(subscription.UpgradeGroup) != strings.TrimSpace(upgradeGroup) {
 		return false
 	}
-	existingGroups := NormalizeGroupNames(append(GroupNames{subscription.EntitlementGroup}, subscription.GrantGroups...))
-	incomingGroups := NormalizeGroupNames(append(GroupNames{entitlementGroup}, grantGroups...))
-	return slices.Equal(existingGroups, incomingGroups)
+	return subscription.QuotaScope == quotaScope && slices.Equal(subscription.GrantGroups, grantGroups)
 }
 
 // findRenewalTargetTx returns the latest active or scheduled subscription with the same benefit snapshot.
-func findRenewalTargetTx(tx *gorm.DB, userId int, now int64, upgradeGroup string, entitlementGroup string, grantGroups GroupNames) (*UserSubscription, error) {
+func findRenewalTargetTx(tx *gorm.DB, userId int, now int64, upgradeGroup string, quotaScope string, grantGroups GroupNames) (*UserSubscription, error) {
 	var subscriptions []UserSubscription
 	if err := lockForUpdate(tx).
 		Where("user_id = ? AND status IN ? AND end_time > ?", userId, []string{"active", "scheduled"}, now).
@@ -128,7 +130,7 @@ func findRenewalTargetTx(tx *gorm.DB, userId int, now int64, upgradeGroup string
 		return nil, err
 	}
 	for index := range subscriptions {
-		if sameSubscriptionBenefits(&subscriptions[index], upgradeGroup, entitlementGroup, grantGroups) {
+		if sameSubscriptionBenefits(&subscriptions[index], upgradeGroup, quotaScope, grantGroups) {
 			return &subscriptions[index], nil
 		}
 	}
@@ -180,28 +182,39 @@ func countUserSubscriptionAllocationsByPlanTx(tx *gorm.DB, userId int, planId in
 	}
 	var count int64
 	err := tx.Model(&UserSubscription{}).
-		Select("COALESCE(SUM(CASE WHEN allocation_count > 0 THEN allocation_count ELSE 1 END), 0)").
+		Select("COALESCE(SUM(allocation_count), 0)").
 		Where("user_id = ? AND plan_id = ?", userId, planId).
 		Scan(&count).Error
 	return count, err
 }
 
 // mergeRepeatedUserSubscriptionTx merges incoming entitlement into the latest active subscription.
-func mergeRepeatedUserSubscriptionTx(tx *gorm.DB, plan *SubscriptionPlan, incoming *UserSubscription, mode string) (*SubscriptionApplyResult, error) {
+func mergeRepeatedUserSubscriptionTx(tx *gorm.DB, plan *SubscriptionPlan, incoming *UserSubscription, mode string, options SubscriptionApplyOptions) (*SubscriptionApplyResult, error) {
 	if tx == nil || plan == nil || incoming == nil {
 		return nil, errors.New("invalid subscription merge args")
 	}
-	var target UserSubscription
+	var targets []UserSubscription
 	query := lockForUpdate(tx).
 		Where("user_id = ? AND plan_id = ? AND status = ? AND start_time <= ? AND end_time > ?",
 			incoming.UserId, incoming.PlanId, "active", incoming.StartTime, incoming.StartTime).
 		Order("end_time desc, id desc").
-		Limit(1).
-		Find(&target)
+		Find(&targets)
 	if query.Error != nil {
 		return nil, query.Error
 	}
-	if query.RowsAffected == 0 {
+	var target UserSubscription
+	for _, candidate := range targets {
+		if mode == SubscriptionRepeatPurchaseReplace ||
+			(sameSubscriptionBenefits(&candidate, incoming.UpgradeGroup, incoming.QuotaScope, incoming.GrantGroups) &&
+				candidate.DowngradeGroup == incoming.DowngradeGroup &&
+				candidate.AllowWalletOverflow == incoming.AllowWalletOverflow &&
+				candidate.QuotaResetPeriod == incoming.QuotaResetPeriod &&
+				candidate.QuotaResetCustomSeconds == incoming.QuotaResetCustomSeconds) {
+			target = candidate
+			break
+		}
+	}
+	if target.Id == 0 {
 		return nil, nil
 	}
 
@@ -279,24 +292,17 @@ func mergeRepeatedUserSubscriptionTx(tx *gorm.DB, plan *SubscriptionPlan, incomi
 		}
 
 		target.AllocationCount = allocationCount + quantity
-		target.GrantGroups = MergeGroupNames(target.GrantGroups, incoming.GrantGroups)
-		if incoming.EntitlementGroup != "" {
-			target.EntitlementGroup = incoming.EntitlementGroup
-		}
-		if incoming.UpgradeGroup != "" {
-			target.UpgradeGroup = incoming.UpgradeGroup
-			if target.PrevUserGroup == "" {
-				target.PrevUserGroup = incoming.PrevUserGroup
-			}
-		}
-		if incoming.DowngradeGroup != "" {
-			target.DowngradeGroup = incoming.DowngradeGroup
-		}
-		target.AllowWalletOverflow = incoming.AllowWalletOverflow
+
 	}
 
-	if err := tx.Save(&target).Error; err != nil {
+	revision, err := subscriptionApplyRevision(plan, &before, incoming, mode, options)
+	if err != nil {
 		return nil, err
+	}
+	if !options.Preview {
+		if err := tx.Save(&target).Error; err != nil {
+			return nil, err
+		}
 	}
 	result := &SubscriptionApplyResult{
 		Subscription: &target,
@@ -305,8 +311,36 @@ func mergeRepeatedUserSubscriptionTx(tx *gorm.DB, plan *SubscriptionPlan, incomi
 		PlanTitle:    plan.Title,
 		Quantity:     int(quantity),
 		Before:       &before,
+		Revision:     revision,
 	}
 	result.PrevUserGroup = target.PrevUserGroup
 	result.Params = map[string]any{"group": target.UpgradeGroup}
 	return result, nil
+}
+
+// subscriptionApplyRevision identifies the plan and target reviewed by an administrator.
+func subscriptionApplyRevision(plan *SubscriptionPlan, before, incoming *UserSubscription, mode string, options SubscriptionApplyOptions) (string, error) {
+	if !options.Preview && options.ExpectedRevision == "" {
+		return "", nil
+	}
+	start := int64(0)
+	if options.ActivationMode == SubscriptionActivationRenew && incoming.Status == "scheduled" {
+		start = incoming.StartTime
+	}
+	if before != nil && mode != SubscriptionRepeatPurchaseReplace && mode != SubscriptionRepeatPurchaseExtendTimeResetQuota {
+		target := *before
+		target.AmountUsed = 0
+		target.UpdatedAt = 0
+		before = &target
+	}
+	data, err := common.Marshal([]any{plan, before, mode, options.ActivationMode,
+		incoming.UserId, incoming.AllocationCount, incoming.PrevUserGroup, start})
+	if err != nil {
+		return "", err
+	}
+	revision := common.Sha1(data)
+	if options.ExpectedRevision != "" && options.ExpectedRevision != revision {
+		return "", common.NewMessage("The subscription changed. Review it again before saving.")
+	}
+	return revision, nil
 }

@@ -180,12 +180,7 @@ export function useSubscriptionsColumns(): ColumnDef<PlanRecord>[] {
         meta: { mobileHidden: true },
         cell: ({ row }) => {
           const plan = row.original.plan
-          const groups = [
-            ...new Set([
-              ...(plan.grant_groups || []),
-              plan.entitlement_group || '',
-            ]),
-          ].filter(Boolean)
+          const groups = plan.grant_groups.filter(Boolean)
           if (groups.length === 0) {
             return (
               <span className='text-muted-foreground'>

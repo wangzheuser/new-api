@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Gift, Plus, Trash2 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -75,20 +75,48 @@ export function UserGroupGrantsSheet(props: Props) {
   const [data, setData] = useState<UserGroupGrantData | null>(null)
   const [groupOptions, setGroupOptions] = useState<string[]>([])
   const [grants, setGrants] = useState<EditableGrant[]>([])
+  const [loadedUserId, setLoadedUserId] = useState<number>()
+  const loadSequence = useRef(0)
+  const invalidateLoad = useCallback(() => {
+    loadSequence.current++
+  }, [])
+  const ready = data !== null && loadedUserId === props.user?.id
+  const edited =
+    ready &&
+    JSON.stringify(
+      grants.map((grant) => [
+        grant.group,
+        grant.expiresAt ? Math.floor(grant.expiresAt.getTime() / 1000) : 0,
+      ])
+    ) !==
+      JSON.stringify(
+        data.manual_grants.map((grant) => [grant.group, grant.expires_at])
+      )
 
   const loadData = useCallback(async () => {
     if (!props.user?.id) return
+    const userId = props.user.id
+    const sequence = ++loadSequence.current
+    setData(null)
+    setGrants([])
+    setLoadedUserId(undefined)
     setLoading(true)
     try {
       const [grantResponse, groupResponse] = await Promise.all([
         getUserGroupGrants(props.user.id),
         getGroups(),
       ])
-      if (!grantResponse.success || !grantResponse.data) {
+      if (sequence !== loadSequence.current) return
+      if (
+        !grantResponse.success ||
+        !grantResponse.data ||
+        !groupResponse.success
+      ) {
         toast.error(grantResponse.message || t('Loading failed'))
         return
       }
       setData(grantResponse.data)
+      setLoadedUserId(userId)
       setGroupOptions(groupResponse.success ? groupResponse.data || [] : [])
       setGrants(
         grantResponse.data.manual_grants.map((grant) => ({
@@ -100,15 +128,16 @@ export function UserGroupGrantsSheet(props: Props) {
         }))
       )
     } catch {
-      toast.error(t('Loading failed'))
+      if (sequence === loadSequence.current) toast.error(t('Loading failed'))
     } finally {
-      setLoading(false)
+      if (sequence === loadSequence.current) setLoading(false)
     }
   }, [props.user?.id, t])
 
   useEffect(() => {
     if (props.open) void loadData()
-  }, [props.open, loadData])
+    return invalidateLoad
+  }, [props.open, loadData, invalidateLoad])
 
   const selectableGroups = useMemo(
     () => groupOptions.filter((group) => group !== data?.base_group),
@@ -128,7 +157,8 @@ export function UserGroupGrantsSheet(props: Props) {
 
   /** Validates and atomically replaces the manual grants. */
   const saveGrants = async () => {
-    if (!props.user?.id) return
+    if (!props.user?.id || !ready || !edited) return
+    const sequence = loadSequence.current
     const groups = grants.map((grant) => grant.group.trim())
     if (groups.some((group) => !group)) {
       toast.error(t('Please select a benefit group'))
@@ -138,18 +168,11 @@ export function UserGroupGrantsSheet(props: Props) {
       toast.error(t('Benefit groups cannot be duplicated'))
       return
     }
-    if (
-      grants.some(
-        (grant) => grant.expiresAt && grant.expiresAt.getTime() <= Date.now()
-      )
-    ) {
-      toast.error(t('Expiration time must be in the future'))
-      return
-    }
 
     setSaving(true)
     try {
       const response = await replaceUserGroupGrants(props.user.id, {
+        revision: data.revision,
         grants: grants.map((grant) => ({
           group: grant.group,
           expires_at: grant.expiresAt
@@ -157,6 +180,7 @@ export function UserGroupGrantsSheet(props: Props) {
             : 0,
         })),
       })
+      if (sequence !== loadSequence.current) return
       if (response.success && response.data) {
         toast.success(t('Benefit groups updated'))
         setData(response.data)
@@ -209,6 +233,13 @@ export function UserGroupGrantsSheet(props: Props) {
                     {t('Base Group')}
                   </div>
                   <GroupBadge group={data?.base_group} />
+                  {data?.current_group &&
+                    data.current_group !== data.base_group && (
+                      <div className='mt-2 flex items-center gap-2 text-xs'>
+                        {t('Upgrade Group')}{' '}
+                        <GroupBadge group={data.current_group} />
+                      </div>
+                    )}
                 </div>
                 <div className='border-border/60 rounded-lg border p-3'>
                   <div className='text-muted-foreground mb-2 text-xs'>
@@ -221,6 +252,21 @@ export function UserGroupGrantsSheet(props: Props) {
                   </div>
                 </div>
               </div>
+            )}
+            {ready && data.system_groups.length > 0 && (
+              <div className='mt-3 flex flex-wrap items-center gap-1.5'>
+                <span className='text-muted-foreground text-xs'>
+                  {t('System-inherited groups')}
+                </span>
+                {data.system_groups.map((group) => (
+                  <GroupBadge key={group} group={group} />
+                ))}
+              </div>
+            )}
+            {!loading && !ready && (
+              <Button type='button' variant='outline' onClick={loadData}>
+                {t('Retry')}
+              </Button>
             )}
           </SideDrawerSection>
 
@@ -237,7 +283,7 @@ export function UserGroupGrantsSheet(props: Props) {
                 variant='outline'
                 size='sm'
                 onClick={addGrant}
-                disabled={loading}
+                disabled={loading || !ready}
               >
                 <Plus className='mr-1 size-4' />
                 {t('Add group')}
@@ -413,7 +459,10 @@ export function UserGroupGrantsSheet(props: Props) {
           <SheetClose render={<Button variant='outline' />}>
             {t('Close')}
           </SheetClose>
-          <Button onClick={saveGrants} disabled={loading || saving}>
+          <Button
+            onClick={saveGrants}
+            disabled={loading || saving || !ready || !edited}
+          >
             {saving ? t('Saving...') : t('Save changes')}
           </Button>
         </SheetFooter>

@@ -56,6 +56,7 @@ export function getPlanFormSchema(t: TFunction) {
         'replace',
       ]),
       total_amount: z.coerce.number().min(0),
+      quota_scope: z.enum(['general', 'groups', 'groups_and_general']),
       grant_groups: z.array(z.string()).default([]),
       upgrade_group: z.string().optional(),
       downgrade_group: z.string().optional(),
@@ -64,6 +65,16 @@ export function getPlanFormSchema(t: TFunction) {
       waffo_pancake_product_id: z.string().optional(),
     })
     .superRefine((values, context) => {
+      if (
+        (values.quota_scope === 'general') !==
+        (values.grant_groups.length === 0)
+      ) {
+        context.addIssue({
+          code: 'custom',
+          path: ['quota_scope'],
+          message: t('Quota scope must match the benefit groups'),
+        })
+      }
       if (
         values.upgrade_group &&
         values.grant_groups.includes(values.upgrade_group)
@@ -97,6 +108,7 @@ export const PLAN_FORM_DEFAULTS: PlanFormValues = {
   max_purchase_per_user: 0,
   repeat_purchase_mode: 'independent',
   total_amount: 0,
+  quota_scope: 'general',
   grant_groups: [],
   upgrade_group: '',
   downgrade_group: '',
@@ -122,9 +134,8 @@ export function planToFormValues(plan: SubscriptionPlan): PlanFormValues {
     max_purchase_per_user: Number(plan.max_purchase_per_user || 0),
     repeat_purchase_mode: plan.repeat_purchase_mode || 'independent',
     total_amount: quotaUnitsToDollars(Number(plan.total_amount || 0)),
-    grant_groups: [
-      ...new Set([...(plan.grant_groups || []), plan.entitlement_group || '']),
-    ].filter(Boolean),
+    quota_scope: plan.quota_scope,
+    grant_groups: plan.grant_groups,
     upgrade_group: plan.upgrade_group || '',
     downgrade_group: plan.downgrade_group || '',
     stripe_price_id: plan.stripe_price_id || '',
@@ -149,7 +160,6 @@ export function formValuesToPlanPayload(values: PlanFormValues): PlanPayload {
       sort_order: Number(values.sort_order || 0),
       max_purchase_per_user: Number(values.max_purchase_per_user || 0),
       total_amount: parseQuotaFromDollars(Number(values.total_amount || 0)),
-      entitlement_group: '',
       grant_groups: values.grant_groups,
       upgrade_group: values.upgrade_group || '',
       downgrade_group: values.downgrade_group || '',

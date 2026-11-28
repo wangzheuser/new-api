@@ -52,6 +52,7 @@ import {
   updateBillingPreference,
 } from '@/features/subscriptions/api'
 import { SubscriptionPurchaseDialog } from '@/features/subscriptions/components/dialogs/subscription-purchase-dialog'
+import { getQuotaScopeOptions } from '@/features/subscriptions/constants'
 import {
   formatDuration,
   formatResetPeriod,
@@ -138,8 +139,13 @@ export function SubscriptionPlansCard({
         setBillingPreference(
           res.data.billing_preference || 'subscription_first'
         )
-        setActiveSubscriptions(res.data.subscriptions || [])
-        setAllSubscriptions(res.data.all_subscriptions || [])
+        const subscriptions = res.data.subscriptions
+        setActiveSubscriptions(
+          subscriptions.filter(
+            ({ subscription }) => subscription.status === 'active'
+          )
+        )
+        setAllSubscriptions(subscriptions)
         setSubscriptionPlanTitles(res.data.plan_titles || {})
       }
     } catch {
@@ -188,11 +194,13 @@ export function SubscriptionPlansCard({
   const hasAny = allSubscriptions.length > 0
   const isAvailable = loading || plans.length > 0 || hasAny
   const disablePref = !hasActive
+  const expiredCount = allSubscriptions.filter(
+    ({ subscription }) => subscription.status === 'expired'
+  ).length
   const isSubPref =
     billingPreference === 'subscription_first' ||
     billingPreference === 'subscription_only'
-  const displayPref =
-    disablePref && isSubPref ? 'wallet_first' : billingPreference
+  const displayPref = billingPreference
 
   const planPurchaseCountMap = useMemo(() => {
     const map = new Map<number, number>()
@@ -307,12 +315,11 @@ export function SubscriptionPlansCard({
                     {t('No Active')}
                   </span>
                 )}
-                {allSubscriptions.length > activeSubscriptions.length && (
+                {expiredCount > 0 && (
                   <>
                     <span className='text-muted-foreground/30'>·</span>
                     <span className='text-muted-foreground'>
-                      {allSubscriptions.length - activeSubscriptions.length}{' '}
-                      {t('expired')}
+                      {expiredCount} {t('expired')}
                     </span>
                   </>
                 )}
@@ -398,13 +405,7 @@ export function SubscriptionPlansCard({
           {disablePref && isSubPref && (
             <p className='text-muted-foreground mt-2 text-xs'>
               {t(
-                'Preference saved as {{pref}}, but no active subscription. Wallet will be used automatically.',
-                {
-                  pref:
-                    billingPreference === 'subscription_only'
-                      ? t('Subscription Only')
-                      : t('Subscription First'),
-                }
+                'No active subscription. Requests require wallet funds unless you selected Subscription Only.'
               )}
             </p>
           )}
@@ -426,6 +427,7 @@ export function SubscriptionPlansCard({
                   const now = Date.now() / 1000
                   const isExpired = (subscription?.end_time || 0) < now
                   const isCancelled = subscription?.status === 'cancelled'
+                  const isArchived = subscription?.status === 'archived'
                   const isScheduled = subscription?.status === 'scheduled'
                   const isActive =
                     subscription?.status === 'active' && !isExpired
@@ -453,10 +455,10 @@ export function SubscriptionPlansCard({
                         copyable={false}
                       />
                     )
-                  } else if (isCancelled) {
+                  } else if (isCancelled || isArchived) {
                     statusBadge = (
                       <StatusBadge
-                        label={t('Cancelled')}
+                        label={isArchived ? t('Archived') : t('Cancelled')}
                         variant='neutral'
                         copyable={false}
                       />
@@ -545,6 +547,23 @@ export function SubscriptionPlansCard({
                             {t('Used')} {usagePercent}%
                           </span>
                         )}
+                      </div>
+                      <div className='text-muted-foreground mt-1'>
+                        {t('Subscription quota scope')}:{' '}
+                        {
+                          getQuotaScopeOptions(t).find(
+                            (option) =>
+                              option.value === subscription.quota_scope
+                          )?.label
+                        }
+                        {subscription.grant_groups.length > 0 &&
+                          ` · ${subscription.grant_groups.join(', ')}`}
+                      </div>
+                      <div className='text-muted-foreground mt-1'>
+                        {t('Wallet fallback')}:{' '}
+                        {subscription.allow_wallet_overflow
+                          ? t('Enabled')
+                          : t('Disabled')}
                       </div>
                       {totalAmount > 0 && isActive && (
                         <Progress value={usagePercent} className='mt-2 h-1.5' />

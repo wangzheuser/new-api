@@ -307,10 +307,11 @@ func Redeem(key string, userId int) (result *RedemptionResult, err error) {
 }
 
 func (redemption *Redemption) Insert() error {
-	if redemption.Quota <= 0 {
-		return errors.New("redemption quota must be positive")
-	}
-	if err := common.ValidateWalletQuota(redemption.Quota); err != nil {
+	if redemption.PlanId > 0 {
+		redemption.Quota = 0
+	} else if redemption.PlanId < 0 || redemption.Quota <= 0 {
+		return errors.New("invalid redemption benefit")
+	} else if err := common.ValidateWalletQuota(redemption.Quota); err != nil {
 		return err
 	}
 	var err error
@@ -325,10 +326,11 @@ func (redemption *Redemption) SelectUpdate() error {
 
 // Update Make sure your token's fields is completed, because this will update non-zero values
 func (redemption *Redemption) Update() error {
-	if redemption.Quota <= 0 {
-		return errors.New("redemption quota must be positive")
-	}
-	if err := common.ValidateWalletQuota(redemption.Quota); err != nil {
+	if redemption.PlanId > 0 {
+		redemption.Quota = 0
+	} else if redemption.PlanId < 0 || redemption.Quota <= 0 {
+		return errors.New("invalid redemption benefit")
+	} else if err := common.ValidateWalletQuota(redemption.Quota); err != nil {
 		return err
 	}
 	var err error

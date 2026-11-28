@@ -568,11 +568,8 @@ const TopUp = () => {
         setBillingPreference(
           res.data.data?.billing_preference || 'subscription_first',
         );
-        // Active subscriptions
-        const activeSubs = res.data.data?.subscriptions || [];
-        setActiveSubscriptions(activeSubs);
-        // All subscriptions (including expired)
-        const allSubs = res.data.data?.all_subscriptions || [];
+        const allSubs = res.data.data?.subscriptions || [];
+        setActiveSubscriptions(allSubs.filter(({ subscription }) => subscription.status === 'active'));
         setAllSubscriptions(allSubs);
       }
     } catch (e) {

@@ -45,7 +45,10 @@ import {
   paySubscriptionWaffoPancake,
   paySubscriptionBalance,
 } from '../../api'
-import { getRepeatPurchaseModeOptions } from '../../constants'
+import {
+  getQuotaScopeOptions,
+  getRepeatPurchaseModeOptions,
+} from '../../constants'
 import { formatDuration, formatResetPeriod } from '../../lib'
 import type { PlanRecord } from '../../types'
 
@@ -320,24 +323,37 @@ export function SubscriptionPurchaseDialog(props: Props) {
               <span className='text-right text-sm'>{repeatPurchaseLabel}</span>
             </div>
           )}
-          {[
-            ...new Set([
-              ...(plan.grant_groups || []),
-              plan.entitlement_group || '',
-            ]),
-          ]
-            .filter(Boolean)
-            .map((group) => (
-              <div
-                key={group}
-                className='flex items-center justify-between gap-4'
-              >
-                <span className='text-muted-foreground text-sm'>
-                  {t('Benefit Group')}
-                </span>
-                <GroupBadge group={group} />
-              </div>
-            ))}
+          {plan.grant_groups.filter(Boolean).map((group) => (
+            <div
+              key={group}
+              className='flex items-center justify-between gap-4'
+            >
+              <span className='text-muted-foreground text-sm'>
+                {t('Benefit Group')}
+              </span>
+              <GroupBadge group={group} />
+            </div>
+          ))}
+          <div className='flex justify-between gap-3 text-sm'>
+            <span className='text-muted-foreground'>
+              {t('Subscription quota scope')}
+            </span>
+            <span>
+              {
+                getQuotaScopeOptions(t).find(
+                  (option) => option.value === plan.quota_scope
+                )?.label
+              }
+            </span>
+          </div>
+          <div className='flex justify-between gap-3 text-sm'>
+            <span className='text-muted-foreground'>
+              {t('Wallet fallback')}
+            </span>
+            <span>
+              {plan.allow_wallet_overflow ? t('Enabled') : t('Disabled')}
+            </span>
+          </div>
           {plan.upgrade_group && (
             <div className='flex items-center justify-between'>
               <span className='text-muted-foreground text-sm'>

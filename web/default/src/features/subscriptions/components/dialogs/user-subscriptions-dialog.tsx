@@ -1,21 +1,3 @@
-/*
-Copyright (C) 2023-2026 QuantumNous
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as
-published by the Free Software Foundation, either version 3 of the
-License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-GNU Affero General Public License for more details.
-
-You should have received a copy of the GNU Affero General Public License
-along with this program. If not, see <https://www.gnu.org/licenses/>.
-
-For commercial licensing, please contact support@quantumnous.com
-*/
 import { Ban, Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -57,6 +39,25 @@ import {
   SheetDescription,
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+import { api } from '@/lib/api'
 import { formatQuota } from '@/lib/format'
 
 import {
@@ -85,8 +86,8 @@ interface Props {
 }
 
 /** Normalizes the group snapshot used to recommend a renewal target. */
-function getBenefitGroups(entitlementGroup?: string, grantGroups?: string[]) {
-  return [entitlementGroup || '', ...(grantGroups || [])]
+function getBenefitGroups(grantGroups?: string[]) {
+  return [...(grantGroups || [])]
     .map((group) => group.trim())
     .filter(Boolean)
     .filter((group, index, groups) => groups.indexOf(group) === index)
@@ -105,15 +106,9 @@ function hasSameBenefits(
     return false
   }
   return (
-    JSON.stringify(
-      getBenefitGroups(plan.entitlement_group, plan.grant_groups)
-    ) ===
-    JSON.stringify(
-      getBenefitGroups(
-        subscription.entitlement_group,
-        subscription.grant_groups
-      )
-    )
+    plan.quota_scope === subscription.quota_scope &&
+    JSON.stringify(getBenefitGroups(plan.grant_groups)) ===
+      JSON.stringify(getBenefitGroups(subscription.grant_groups))
   )
 }
 
@@ -197,6 +192,15 @@ function SubscriptionStatusBadge(props: {
       />
     )
   }
+  if (props.sub.status === 'archived') {
+    return (
+      <StatusBadge
+        label={props.t('Archived')}
+        variant='neutral'
+        copyable={false}
+      />
+    )
+  }
   if (props.sub.status === 'cancelled') {
     return (
       <StatusBadge
@@ -227,7 +231,10 @@ export function UserSubscriptionsDialog(props: Props) {
   const [activationMode, setActivationMode] =
     useState<SubscriptionActivationMode>('immediate')
   const [quantity, setQuantity] = useState(1)
-  const [replaceConfirmOpen, setReplaceConfirmOpen] = useState(false)
+  const [preview, setPreview] =
+    useState<UserSubscriptionRecord['subscription']>()
+  const [previewing, setPreviewing] = useState(false)
+  const [revision, setRevision] = useState('')
   const [resetting, setResetting] = useState(false)
   const [advanceResetTime, setAdvanceResetTime] = useState(true)
   const [resetAction, setResetAction] = useState<{
@@ -332,6 +339,7 @@ export function UserSubscriptionsDialog(props: Props) {
         plan_id: Number(selectedPlanId),
         apply_mode: applyMode,
         activation_mode: activationMode,
+        revision,
         quantity,
       })
       if (res.success) {
@@ -354,11 +362,26 @@ export function UserSubscriptionsDialog(props: Props) {
       toast.error(t('Please select a subscription plan'))
       return
     }
-    if (resolvedApplyMode === 'replace') {
-      setReplaceConfirmOpen(true)
-      return
+    setPreviewing(true)
+    try {
+      const res = await api.post(
+        `/api/subscription/admin/users/${props.user.id}/subscriptions/preview`,
+        {
+          plan_id: Number(selectedPlanId),
+          apply_mode: applyMode,
+          activation_mode: activationMode,
+          quantity,
+        }
+      )
+      if (res.data.success) {
+        setPreview(res.data.data.subscription)
+        setRevision(res.data.data.revision)
+      }
+    } catch {
+      toast.error(t('Request failed'))
+    } finally {
+      setPreviewing(false)
     }
-    await createSubscriptionForUser()
   }
 
   const handleConfirmAction = async () => {
@@ -374,7 +397,7 @@ export function UserSubscriptionsDialog(props: Props) {
       } else {
         const res = await deleteUserSubscription(confirmAction.subId)
         if (res.success) {
-          toast.success(t('Deleted'))
+          toast.success(t('Archived'))
           await loadData()
           props.onSuccess?.()
         }
@@ -528,7 +551,7 @@ export function UserSubscriptionsDialog(props: Props) {
               )}
               <Button
                 onClick={handleCreate}
-                disabled={creating || !selectedPlanId}
+                disabled={creating || previewing || !selectedPlanId}
               >
                 <Plus className='mr-1 h-4 w-4' />
                 {t('Add subscription')}
@@ -593,16 +616,9 @@ export function UserSubscriptionsDialog(props: Props) {
                           {t('Allocation count')}:{' '}
                           {Math.max(1, Number(sub.allocation_count || 1))}
                         </div>
-                        {[
-                          ...new Set([
-                            ...(sub.grant_groups || []),
-                            sub.entitlement_group || '',
-                          ]),
-                        ]
-                          .filter(Boolean)
-                          .map((group) => (
-                            <GroupBadge key={group} group={group} />
-                          ))}
+                        {sub.grant_groups.filter(Boolean).map((group) => (
+                          <GroupBadge key={group} group={group} />
+                        ))}
                       </div>
                     )
                   },
@@ -707,7 +723,7 @@ export function UserSubscriptionsDialog(props: Props) {
                             })
                           }
                         >
-                          {t('Delete')}
+                          {t('Archive')}
                           <DropdownMenuShortcut>
                             <Trash2 size={16} />
                           </DropdownMenuShortcut>
@@ -729,7 +745,7 @@ export function UserSubscriptionsDialog(props: Props) {
           title={
             confirmAction.type === 'invalidate'
               ? t('Confirm invalidate')
-              : t('Confirm delete')
+              : t('Archive subscription?')
           }
           desc={
             confirmAction.type === 'invalidate'
@@ -761,22 +777,53 @@ export function UserSubscriptionsDialog(props: Props) {
         />
       )}
 
-      {replaceConfirmOpen && (
+      {preview && (
         <ConfirmDialog
           open
-          onOpenChange={(open) => !open && setReplaceConfirmOpen(false)}
-          title={t('Replace current subscription?')}
-          desc={t(
-            'This resets the active subscription validity and used quota to the selected plan. Continue?'
-          )}
-          confirmText={t('Replace subscription')}
+          onOpenChange={(open) => !open && setPreview(undefined)}
+          title={
+            resolvedApplyMode === 'replace'
+              ? t('Replace current subscription?')
+              : t('Add subscription')
+          }
+          desc={
+            preview.id
+              ? `${t('Subscription')} #${preview.id}`
+              : t('One subscription record will be created')
+          }
+          confirmText={t('Confirm')}
           handleConfirm={async () => {
             await createSubscriptionForUser()
-            setReplaceConfirmOpen(false)
+            setPreview(undefined)
           }}
           isLoading={creating}
-          destructive
-        />
+          destructive={resolvedApplyMode === 'replace'}
+        >
+          <dl className='grid grid-cols-2 gap-2 text-sm'>
+            <dt>{t('Start')}</dt>
+            <dd>{formatTimestamp(preview.start_time)}</dd>
+            <dt>{t('End')}</dt>
+            <dd>{formatTimestamp(preview.end_time)}</dd>
+            <dt>{t('Total Quota')}</dt>
+            <dd>
+              {preview.amount_total === 0
+                ? t('Unlimited')
+                : formatQuota(preview.amount_total)}
+            </dd>
+            <dt>{t('Used')}</dt>
+            <dd>{formatQuota(preview.amount_used)}</dd>
+            <dt>{t('Allocation count')}</dt>
+            <dd>{preview.allocation_count}</dd>
+            <dt>{t('Benefit Group')}</dt>
+            <dd>{preview.grant_groups.join(', ') || '—'}</dd>
+            <dt>{t('Upgrade Group')}</dt>
+            <dd>{preview.upgrade_group || '—'}</dd>
+            <dt>{t('Wallet fallback')}</dt>
+            <dd>
+              {preview.allow_wallet_overflow ? t('Enabled') : t('Disabled')}
+            </dd>
+          </dl>
+        </ConfirmDialog>
       )}
 
       {resetAction && (

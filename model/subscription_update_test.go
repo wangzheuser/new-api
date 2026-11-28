@@ -20,7 +20,7 @@ func TestAdminUpdateUserSubscriptionRestoresExpiredSubscription(t *testing.T) {
 	sub := &UserSubscription{
 		Id: 9703, UserId: user.Id, PlanId: plan.Id, Status: "expired", StartTime: now - 7200,
 		EndTime: now - 3600, AmountTotal: 1000, AmountUsed: 800, UpgradeGroup: "vip",
-		PrevUserGroup: "legacy", NextResetTime: 0,
+		PrevUserGroup: "legacy", NextResetTime: 0, QuotaResetPeriod: SubscriptionResetDaily,
 	}
 	require.NoError(t, DB.Create(user).Error)
 	require.NoError(t, DB.Create(plan).Error)
@@ -53,7 +53,7 @@ func TestAdminUpdateUserSubscriptionRestoresExpiredSubscription(t *testing.T) {
 func TestAdminUpdateUserSubscriptionExpiresImmediately(t *testing.T) {
 	truncateTables(t)
 	now := GetDBTimestamp()
-	user := &User{Id: 9711, Username: "expire_sub", Status: common.UserStatusEnabled, Group: "vip"}
+	user := &User{Id: 9711, Username: "expire_sub", Status: common.UserStatusEnabled, Group: "default", SubscriptionGroup: "vip"}
 	plan := &SubscriptionPlan{Id: 9712, Title: "Pro", Currency: "USD", DurationUnit: SubscriptionDurationMonth, DurationValue: 1}
 	sub := &UserSubscription{
 		Id: 9713, UserId: user.Id, PlanId: plan.Id, Status: "active", StartTime: now - 3600,
@@ -78,6 +78,7 @@ func TestAdminUpdateUserSubscriptionExpiresImmediately(t *testing.T) {
 func TestAdminUpdateUserSubscriptionKeepsCancelledStatus(t *testing.T) {
 	truncateTables(t)
 	now := GetDBTimestamp()
+	require.NoError(t, DB.Create(&User{Id: 9723, Username: "cancelled_sub"}).Error)
 	plan := &SubscriptionPlan{Id: 9721, Title: "Pro", Currency: "USD", DurationUnit: SubscriptionDurationMonth, DurationValue: 1}
 	sub := &UserSubscription{
 		Id: 9722, UserId: 9723, PlanId: plan.Id, Status: "cancelled", StartTime: now - 3600,
@@ -98,6 +99,7 @@ func TestAdminUpdateUserSubscriptionKeepsCancelledStatus(t *testing.T) {
 func TestAdminUpdateUserSubscriptionRejectsUsedAboveTotal(t *testing.T) {
 	truncateTables(t)
 	now := GetDBTimestamp()
+	require.NoError(t, DB.Create(&User{Id: 9732, Username: "quota_sub"}).Error)
 	sub := &UserSubscription{
 		Id: 9731, UserId: 9732, PlanId: 9733, Status: "active", StartTime: now - 3600,
 		EndTime: now + 3600, AmountTotal: 1000, AmountUsed: 400,

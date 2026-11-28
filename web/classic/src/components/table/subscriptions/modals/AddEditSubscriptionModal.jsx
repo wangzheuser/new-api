@@ -107,6 +107,12 @@ const AddEditSubscriptionModal = ({
     repeat_purchase_mode: 'independent',
     total_amount: 0,
     upgrade_group: '',
+    downgrade_group: '',
+    grant_groups: [],
+    quota_scope: 'general',
+    allow_balance_pay: true,
+    allow_wallet_overflow: true,
+    waffo_pancake_product_id: '',
     stripe_price_id: '',
     creem_product_id: '',
   });
@@ -134,6 +140,12 @@ const AddEditSubscriptionModal = ({
         quotaToDisplayAmount(p.total_amount || 0).toFixed(2),
       ),
       upgrade_group: p.upgrade_group || '',
+      downgrade_group: p.downgrade_group || '',
+      grant_groups: p.grant_groups,
+      quota_scope: p.quota_scope,
+      allow_balance_pay: p.allow_balance_pay,
+      allow_wallet_overflow: p.allow_wallet_overflow,
+      waffo_pancake_product_id: p.waffo_pancake_product_id || '',
       stripe_price_id: p.stripe_price_id || '',
       creem_product_id: p.creem_product_id || '',
     };
@@ -163,6 +175,7 @@ const AddEditSubscriptionModal = ({
     try {
       const payload = {
         plan: {
+          ...editingPlan?.plan,
           ...values,
           price_amount: Number(values.price_amount || 0),
           currency: 'USD',
@@ -355,6 +368,20 @@ const AddEditSubscriptionModal = ({
                       />
                     </Col>
 
+                    <Col span={12}>
+                      <Form.Select field='grant_groups' label={t('Additional benefit groups')} multiple
+                        optionList={groupOptions.map((group) => ({ label: group, value: group }))}
+                      />
+                    </Col>
+                    <Col span={12}>
+                      <Form.Select field='quota_scope' label={t('Subscription quota scope')}
+                        optionList={[
+                          {value: 'general', label: t('General quota only')},
+                          {value: 'groups', label: t('Listed groups only')},
+                          {value: 'groups_and_general', label: t('Listed groups and general quota')},
+                        ]}
+                      />
+                    </Col>
                     <Col span={12}>
                       <Form.Select
                         field='upgrade_group'

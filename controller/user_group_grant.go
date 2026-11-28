@@ -8,12 +8,12 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 )
 
 type adminUserGroupGrantRequest struct {
-	Grants []adminUserGroupGrantInput `json:"grants"`
+	Grants   []adminUserGroupGrantInput `json:"grants"`
+	Revision string                     `json:"revision"`
 }
 
 type adminUserGroupGrantInput struct {
@@ -36,6 +36,8 @@ type subscriptionGroupGrantView struct {
 }
 
 type adminUserGroupGrantResponse struct {
+	Revision           string                       `json:"revision"`
+	CurrentGroup       string                       `json:"current_group"`
 	BaseGroup          string                       `json:"base_group"`
 	SystemGroups       []string                     `json:"system_groups"`
 	ManualGrants       []adminUserGroupGrantView    `json:"manual_grants"`
@@ -87,9 +89,6 @@ func buildAdminUserGroupGrantResponse(user *model.User) (*adminUserGroupGrantRes
 		}
 		subscription := summary.Subscription
 		groups := model.NormalizeGroupNames(subscription.GrantGroups)
-		if legacyGroup := strings.TrimSpace(subscription.EntitlementGroup); legacyGroup != "" {
-			groups = model.MergeGroupNames(groups, model.GroupNames{legacyGroup})
-		}
 		if len(groups) == 0 {
 			continue
 		}
@@ -103,15 +102,15 @@ func buildAdminUserGroupGrantResponse(user *model.User) (*adminUserGroupGrantRes
 		})
 	}
 
-	configuredGroups := service.GetUserUsableGroups(user.Group)
-	delete(configuredGroups, user.Group)
+	configuredGroups := service.GetUserUsableGroups(user.EffectiveBaseGroup())
+	delete(configuredGroups, user.EffectiveBaseGroup())
 	systemGroups := make([]string, 0, len(configuredGroups))
 	for group := range configuredGroups {
 		systemGroups = append(systemGroups, group)
 	}
 	sort.Strings(systemGroups)
 
-	effectiveGroupMap, err := service.GetUserEffectiveGroups(user.Id, user.Group)
+	effectiveGroupMap, err := service.GetUserEffectiveGroups(user.Id, user.EffectiveBaseGroup())
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +121,9 @@ func buildAdminUserGroupGrantResponse(user *model.User) (*adminUserGroupGrantRes
 	sort.Strings(effectiveGroups)
 
 	return &adminUserGroupGrantResponse{
+		Revision:           model.UserGroupGrantRevision(manualGrants),
 		BaseGroup:          user.Group,
+		CurrentGroup:       user.EffectiveBaseGroup(),
 		SystemGroups:       systemGroups,
 		ManualGrants:       manualViews,
 		SubscriptionGrants: subscriptionViews,
@@ -135,6 +136,15 @@ func AdminGetUserGroupGrants(c *gin.Context) {
 	userId, _ := strconv.Atoi(c.Param("id"))
 	user, ok := getManagedUser(c, userId)
 	if !ok {
+		return
+	}
+	if err := model.ReconcileDueUserSubscriptions(userId); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	user, err := model.GetUserById(userId, false)
+	if err != nil {
+		common.ApiError(c, err)
 		return
 	}
 	response, err := buildAdminUserGroupGrantResponse(user)
@@ -153,13 +163,11 @@ func AdminReplaceUserGroupGrants(c *gin.Context) {
 		return
 	}
 	var request adminUserGroupGrantRequest
-	if err := c.ShouldBindJSON(&request); err != nil {
+	if err := c.ShouldBindJSON(&request); err != nil || request.Grants == nil || request.Revision == "" {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
 
-	now := common.GetTimestamp()
-	knownGroups := ratio_setting.GetGroupRatioCopy()
 	seen := make(map[string]struct{}, len(request.Grants))
 	grants := make([]model.UserGroupGrant, 0, len(request.Grants))
 	for _, input := range request.Grants {
@@ -168,15 +176,7 @@ func AdminReplaceUserGroupGrants(c *gin.Context) {
 			common.ApiErrorMsg(c, "权益分组不能为空")
 			return
 		}
-		if _, exists := knownGroups[group]; !exists {
-			common.ApiErrorMsg(c, "权益分组不存在: "+group)
-			return
-		}
-		if group == user.Group {
-			common.ApiErrorMsg(c, "基础分组已自动可用: "+group)
-			return
-		}
-		if input.ExpiresAt < 0 || (input.ExpiresAt > 0 && input.ExpiresAt <= now) {
+		if input.ExpiresAt < 0 {
 			common.ApiErrorMsg(c, "权益到期时间必须为永久或未来时间")
 			return
 		}
@@ -191,16 +191,7 @@ func AdminReplaceUserGroupGrants(c *gin.Context) {
 		return grants[left].GroupName < grants[right].GroupName
 	})
 
-	before, err := model.GetUserGroupGrants(userId)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	if err := model.ReplaceUserGroupGrants(userId, grants); err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	after, err := model.GetUserGroupGrants(userId)
+	before, after, err := model.ReplaceUserGroupGrants(userId, request.Revision, grants)
 	if err != nil {
 		common.ApiError(c, err)
 		return

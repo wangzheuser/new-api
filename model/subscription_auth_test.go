@@ -52,14 +52,15 @@ func TestSubscriptionGroupTransitionsPreserveAuthVersionAndSessions(t *testing.T
 	}
 	require.NoError(t, DB.Create(plan).Error)
 
-	subscription, err := CreateUserSubscriptionFromPlanTx(DB, user.Id, plan, "test")
+	subscription, err := CreateUserSubscriptionFromPlanTx(DB, user.Id, plan, SubscriptionApplyOptions{Source: "test"})
 	require.NoError(t, err)
 	require.Equal(t, "default", subscription.PrevUserGroup)
 	require.NoError(t, RefreshUserGroupCache(user.Id))
 
 	var updated User
 	require.NoError(t, DB.First(&updated, user.Id).Error)
-	assert.Equal(t, "pro", updated.Group)
+	assert.Equal(t, "default", updated.Group)
+	assert.Equal(t, "pro", updated.EffectiveBaseGroup())
 	assert.EqualValues(t, 1, updated.AuthVersion)
 	var session UserSession
 	require.NoError(t, DB.First(&session, "sid = ?", "subscription-auth-session").Error)
@@ -70,7 +71,7 @@ func TestSubscriptionGroupTransitionsPreserveAuthVersionAndSessions(t *testing.T
 	assert.EqualValues(t, 1, cached.AuthVersion)
 
 	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
-		target, err := downgradeUserGroupForSubscriptionTx(tx, subscription, now+1)
+		target, err := downgradeUserGroupForSubscriptionTx(tx, subscription.Subscription, now+1)
 		assert.Equal(t, "default", target)
 		return err
 	}))
@@ -136,14 +137,15 @@ func TestSubscriptionGroupCacheRefreshFailureDoesNotChangeCommittedResult(t *tes
 		common.RedisEnabled, common.RDB = oldRedisEnabled, oldRDB
 	})
 
-	message, err := AdminBindSubscription(user.Id, plan.Id, "test")
+	message, err := AdminBindSubscription(user.Id, plan.Id, SubscriptionApplyModePlanDefault)
 	require.NoError(t, err)
 	require.NotNil(t, message)
 	assert.Equal(t, "pro", message.Params["group"])
 
 	var updated User
 	require.NoError(t, DB.First(&updated, user.Id).Error)
-	assert.Equal(t, "pro", updated.Group)
+	assert.Equal(t, "default", updated.Group)
+	assert.Equal(t, "pro", updated.EffectiveBaseGroup())
 	assert.EqualValues(t, 1, updated.AuthVersion)
 	var subscription UserSubscription
 	require.NoError(t, DB.Where("user_id = ?", user.Id).First(&subscription).Error)

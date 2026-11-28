@@ -20,6 +20,7 @@ For commercial licensing, please contact support@quantumnous.com
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Button,
+  InputNumber,
   Empty,
   Modal,
   Select,
@@ -34,7 +35,7 @@ import {
   IllustrationNoResultDark,
 } from '@douyinfe/semi-illustrations';
 import { API, showError, showSuccess } from '../../../../helpers';
-import { convertUSDToCurrency } from '../../../../helpers/render';
+import { convertUSDToCurrency, renderQuota } from '../../../../helpers/render';
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
 import CardTable from '../../../common/ui/CardTable';
 
@@ -71,6 +72,13 @@ function renderStatusTag(sub, t) {
       </Tag>
     );
   }
+  if (status === 'scheduled' || status === 'archived') {
+    return (
+      <Tag color={status === 'scheduled' ? 'blue' : 'grey'} shape='circle' size='small'>
+        {status === 'scheduled' ? t('待生效') : t('已归档')}
+      </Tag>
+    );
+  }
   if (status === 'cancelled') {
     return (
       <Tag color='grey' shape='circle' size='small'>
@@ -94,6 +102,8 @@ const UserSubscriptionsModal = ({ visible, onCancel, user, t, onSuccess }) => {
   const [plans, setPlans] = useState([]);
   const [selectedPlanId, setSelectedPlanId] = useState(null);
   const [applyMode, setApplyMode] = useState('plan_default');
+  const [quantity, setQuantity] = useState(1);
+  const [activation, setActivation] = useState('immediate');
 
   const [subs, setSubs] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
@@ -166,6 +176,8 @@ const UserSubscriptionsModal = ({ visible, onCancel, user, t, onSuccess }) => {
     if (!visible) return;
     setSelectedPlanId(null);
     setApplyMode('plan_default');
+    setQuantity(1);
+    setActivation('immediate');
     setCurrentPage(1);
     loadPlans();
     loadUserSubscriptions();
@@ -175,7 +187,14 @@ const UserSubscriptionsModal = ({ visible, onCancel, user, t, onSuccess }) => {
     setCurrentPage(page);
   };
 
-  const submitSubscription = async () => {
+  const selectedPlan = (plans || []).find(
+      (record) => record?.plan?.id === selectedPlanId,
+    );
+  const resolvedMode =
+      applyMode === 'plan_default'
+        ? selectedPlan?.plan?.repeat_purchase_mode
+        : applyMode;
+  const submitSubscription = async (revision) => {
     if (!user?.id || !selectedPlanId) return;
     setCreating(true);
     try {
@@ -184,6 +203,9 @@ const UserSubscriptionsModal = ({ visible, onCancel, user, t, onSuccess }) => {
         {
           plan_id: selectedPlanId,
           apply_mode: applyMode,
+          revision,
+          quantity,
+          activation_mode: resolvedMode === 'independent' ? activation : 'immediate',
         },
       );
       if (res.data?.success) {
@@ -191,6 +213,8 @@ const UserSubscriptionsModal = ({ visible, onCancel, user, t, onSuccess }) => {
         showSuccess(msg ? msg : t('新增成功'));
         setSelectedPlanId(null);
         setApplyMode('plan_default');
+    setQuantity(1);
+    setActivation('immediate');
         await loadUserSubscriptions();
         onSuccess?.();
       } else {
@@ -203,33 +227,47 @@ const UserSubscriptionsModal = ({ visible, onCancel, user, t, onSuccess }) => {
     }
   };
 
-  const createSubscription = () => {
-    if (!user?.id) {
-      showError(t('用户信息缺失'));
-      return;
-    }
-    if (!selectedPlanId) {
+  const createSubscription = async () => {
+    if (!user?.id || !selectedPlanId) {
       showError(t('请选择订阅套餐'));
       return;
     }
-    const selectedPlan = (plans || []).find(
-      (record) => record?.plan?.id === selectedPlanId,
-    );
-    const resolvedMode =
-      applyMode === 'plan_default'
-        ? selectedPlan?.plan?.repeat_purchase_mode
-        : applyMode;
-    if (resolvedMode === 'replace') {
+    setCreating(true);
+    try {
+      const res = await API.post(
+        `/api/subscription/admin/users/${user.id}/subscriptions/preview`,
+        {
+          plan_id: selectedPlanId,
+          apply_mode: applyMode,
+          quantity,
+          activation_mode: resolvedMode === 'independent' ? activation : 'immediate',
+        },
+      );
+      if (!res.data?.success) {
+        showError(res.data?.message || t('请求失败'));
+        return;
+      }
+      const { subscription, revision } = res.data.data;
       Modal.confirm({
-        title: t('确认覆盖当前订阅'),
-        content: t('覆盖会重算有效期并清零已用额度，是否继续？'),
+        title: resolvedMode === 'replace' ? t('确认覆盖当前订阅') : t('新增订阅'),
+        content: (
+          <div className='space-y-1'>
+            <div>{t('订阅')} {subscription.id ? `#${subscription.id}` : t('新增')}</div>
+            <div>{formatTs(subscription.start_time)} – {formatTs(subscription.end_time)}</div>
+            <div>{t('总额度')}: {subscription.amount_total > 0 ? renderQuota(subscription.amount_total) : t('不限')}</div>
+            <div>{t('累计分配次数')}: {subscription.allocation_count}</div>
+            {subscription.grant_groups?.length > 0 && <div>{subscription.grant_groups.join(', ')}</div>}
+          </div>
+        ),
         centered: true,
-        okType: 'danger',
-        onOk: submitSubscription,
+        okType: resolvedMode === 'replace' ? 'danger' : 'primary',
+        onOk: () => submitSubscription(revision),
       });
-      return;
+    } catch {
+      showError(t('请求失败'));
+    } finally {
+      setCreating(false);
     }
-    submitSubscription();
   };
 
   const invalidateSubscription = (subId) => {
@@ -259,8 +297,8 @@ const UserSubscriptionsModal = ({ visible, onCancel, user, t, onSuccess }) => {
 
   const deleteSubscription = (subId) => {
     Modal.confirm({
-      title: t('确认删除'),
-      content: t('删除会彻底移除该订阅记录（含权益明细）。是否继续？'),
+      title: t('确认归档订阅'),
+      content: t('归档会结束订阅权益，保留账务和历史记录。'),
       centered: true,
       okType: 'danger',
       onOk: async () => {
@@ -270,11 +308,11 @@ const UserSubscriptionsModal = ({ visible, onCancel, user, t, onSuccess }) => {
           );
           if (res.data?.success) {
             const msg = res.data?.data?.message;
-            showSuccess(msg ? msg : t('已删除'));
+            showSuccess(msg ? msg : t('已归档'));
             await loadUserSubscriptions();
             onSuccess?.();
           } else {
-            showError(res.data?.message || t('删除失败'));
+            showError(res.data?.message || t('归档失败'));
           }
         } catch (e) {
           showError(t('请求失败'));
@@ -382,7 +420,7 @@ const UserSubscriptionsModal = ({ visible, onCancel, user, t, onSuccess }) => {
                 theme='light'
                 onClick={() => deleteSubscription(sub?.id)}
               >
-                {t('删除')}
+                {t('归档')}
               </Button>
             </Space>
           );
@@ -434,6 +472,15 @@ const UserSubscriptionsModal = ({ visible, onCancel, user, t, onSuccess }) => {
               onChange={setApplyMode}
               style={{ minWidth: isMobile ? undefined : 240 }}
             />
+            <InputNumber aria-label={t('数量')} min={1} max={1000} value={quantity}
+              onChange={(value) => Number.isInteger(value) && setQuantity(value)}
+            />
+            {resolvedMode === 'independent' && (
+              <Select value={activation} onChange={setActivation} optionList={[
+                { value: 'immediate', label: t('Activate immediately') },
+                { value: 'renew', label: t('Renew after current subscription') },
+              ]} />
+            )}
             <Button
               type='primary'
               theme='solid'

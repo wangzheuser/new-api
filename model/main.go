@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -180,6 +181,9 @@ func InitDB() (err error) {
 			db = db.Debug()
 		}
 		DB = db
+		if err := checkSubscriptionSchema(db); err != nil {
+			return err
+		}
 		// MySQL charset/collation startup check: ensure Chinese-capable charset
 		if common.UsingMainDatabase(common.DatabaseTypeMySQL) {
 			if err := checkMySQLChineseSupport(DB); err != nil {
@@ -388,7 +392,7 @@ func migrateDB() error {
 			return err
 		}
 	}
-	return backfillSubscriptionAllocationCount()
+	return nil
 }
 
 func migrateDBFast() error {
@@ -495,9 +499,6 @@ func migrateDBFast() error {
 		if err := ensureLogQueryIndexes(DB); err != nil {
 			return err
 		}
-	}
-	if err := backfillSubscriptionAllocationCount(); err != nil {
-		return err
 	}
 	common.SysLog("database migrated")
 	return nil
@@ -649,7 +650,7 @@ func ensureSubscriptionPlanTableSQLite() error {
 ` + "`waffo_pancake_product_id`" + ` varchar(128) DEFAULT '',
 ` + "`max_purchase_per_user`" + ` integer DEFAULT 0,
 ` + "`repeat_purchase_mode`" + ` varchar(32) NOT NULL DEFAULT 'independent',
-` + "`entitlement_group`" + ` varchar(64) DEFAULT '',
+` + "`quota_scope`" + ` varchar(24) NOT NULL DEFAULT 'general',
 ` + "`grant_groups`" + ` text,
 ` + "`upgrade_group`" + ` varchar(64) DEFAULT '',
 ` + "`downgrade_group`" + ` varchar(64) DEFAULT '',
@@ -689,7 +690,7 @@ PRIMARY KEY (` + "`id`" + `)
 		{Name: "waffo_pancake_product_id", DDL: "`waffo_pancake_product_id` varchar(128) DEFAULT ''"},
 		{Name: "max_purchase_per_user", DDL: "`max_purchase_per_user` integer DEFAULT 0"},
 		{Name: "repeat_purchase_mode", DDL: "`repeat_purchase_mode` varchar(32) NOT NULL DEFAULT 'independent'"},
-		{Name: "entitlement_group", DDL: "`entitlement_group` varchar(64) DEFAULT ''"},
+		{Name: "quota_scope", DDL: "`quota_scope` varchar(24) NOT NULL DEFAULT 'general'"},
 		{Name: "grant_groups", DDL: "`grant_groups` text"},
 		{Name: "upgrade_group", DDL: "`upgrade_group` varchar(64) DEFAULT ''"},
 		{Name: "downgrade_group", DDL: "`downgrade_group` varchar(64) DEFAULT ''"},
@@ -710,11 +711,23 @@ PRIMARY KEY (` + "`id`" + `)
 	return nil
 }
 
-// backfillSubscriptionAllocationCount initializes legacy subscription rows after the additive migration.
-func backfillSubscriptionAllocationCount() error {
-	return DB.Model(&UserSubscription{}).
-		Where("allocation_count IS NULL OR allocation_count < ?", 1).
-		Update("allocation_count", 1).Error
+// checkSubscriptionSchema prevents startup from implicitly converting subscription contracts.
+func checkSubscriptionSchema(db *gorm.DB) error {
+	m := db.Migrator()
+	if m.HasTable("subscription_orders") && (!m.HasColumn("subscription_orders", "paid_at") || !m.HasColumn("subscription_orders", "terms")) {
+		return errors.New("subscription orders require scripts/migrate-subscription-groups before startup")
+	}
+	if m.HasTable("user_subscriptions") && !m.HasColumn("users", "subscription_group") {
+		return errors.New("user subscription groups require scripts/migrate-subscription-groups before startup")
+	}
+	for _, table := range []string{"subscription_plans", "user_subscriptions"} {
+		m := db.Migrator()
+		if m.HasTable(table) && (!m.HasColumn(table, "quota_scope") || m.HasColumn(table, "entitlement_group") ||
+			(table == "user_subscriptions" && !m.HasColumn(table, "quota_reset_period"))) {
+			return errors.New("subscription schema requires scripts/migrate-subscription-groups before startup")
+		}
+	}
+	return nil
 }
 
 // migrateTokenModelLimitsToText migrates model_limits column from varchar(1024) to text

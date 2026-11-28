@@ -32,7 +32,7 @@ func TestBuildAdminUserOverviewClassifiesAndSanitizesSubscriptions(t *testing.T)
 		AffHistoryQuota: 90,
 	}
 	subscriptions := []model.SubscriptionSummary{
-		{Subscription: &model.UserSubscription{Id: 2, PlanId: 10, Status: "active", StartTime: now - 10, EndTime: now + 200, EntitlementGroup: "vip", GrantGroups: model.GroupNames{"extra", "vip"}, AllowWalletOverflow: true}},
+		{Subscription: &model.UserSubscription{Id: 2, PlanId: 10, Status: "active", StartTime: now - 10, EndTime: now + 200, QuotaScope: model.SubscriptionQuotaGroups, GrantGroups: model.GroupNames{"extra", "vip"}, AllowWalletOverflow: true}},
 		{Subscription: &model.UserSubscription{Id: 1, PlanId: 10, Status: "active", StartTime: now - 20, EndTime: now + 100}},
 		{Subscription: &model.UserSubscription{Id: 4, PlanId: 11, Status: "scheduled", StartTime: now + 300, EndTime: now + 600}},
 		{Subscription: &model.UserSubscription{Id: 3, PlanId: 11, Status: "scheduled", StartTime: now + 200, EndTime: now + 500}},

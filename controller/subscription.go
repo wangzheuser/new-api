@@ -39,7 +39,7 @@ type PublicSubscriptionPlan struct {
 	AllowWalletOverflow     bool             `json:"allow_wallet_overflow"`
 	MaxPurchasePerUser      int              `json:"max_purchase_per_user"`
 	RepeatPurchaseMode      string           `json:"repeat_purchase_mode"`
-	EntitlementGroup        string           `json:"entitlement_group"`
+	QuotaScope              string           `json:"quota_scope"`
 	GrantGroups             model.GroupNames `json:"grant_groups"`
 	UpgradeGroup            string           `json:"upgrade_group"`
 	DowngradeGroup          string           `json:"downgrade_group"`
@@ -59,18 +59,12 @@ type SubscriptionBalancePayRequest struct {
 
 // normalizeSubscriptionPlanGroups validates mutually exclusive group grant modes.
 func normalizeSubscriptionPlanGroups(plan *model.SubscriptionPlan) error {
-	plan.EntitlementGroup = strings.TrimSpace(plan.EntitlementGroup)
 	plan.UpgradeGroup = strings.TrimSpace(plan.UpgradeGroup)
 	plan.DowngradeGroup = strings.TrimSpace(plan.DowngradeGroup)
 	plan.GrantGroups = model.NormalizeGroupNames(plan.GrantGroups)
 	groups := ratio_setting.GetGroupRatioCopy()
-	if plan.EntitlementGroup != "" {
-		if _, ok := groups[plan.EntitlementGroup]; !ok {
-			return fmt.Errorf("权益分组不存在")
-		}
-		if plan.UpgradeGroup != "" || plan.DowngradeGroup != "" {
-			return fmt.Errorf("权益分组不能与升级或降级分组同时配置")
-		}
+	if !model.ValidSubscriptionQuotaScope(plan.QuotaScope, plan.GrantGroups) {
+		return fmt.Errorf("订阅额度适用范围与权益分组不匹配")
 	}
 	if plan.UpgradeGroup != "" {
 		if _, ok := groups[plan.UpgradeGroup]; !ok {
@@ -116,19 +110,20 @@ func GetSubscriptionPlans(c *gin.Context) {
 
 func GetSubscriptionSelf(c *gin.Context) {
 	userId := c.GetInt("id")
-	settingMap, _ := model.GetUserSetting(userId, false)
+	if err := model.ReconcileDueUserSubscriptions(userId); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	settingMap, err := model.GetUserSetting(userId, false)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	pref := common.NormalizeBillingPreference(settingMap.BillingPreference)
-
-	// Get all subscriptions (including expired)
 	allSubscriptions, err := model.GetAllPublicUserSubscriptions(userId)
 	if err != nil {
-		allSubscriptions = []model.PublicSubscriptionSummary{}
-	}
-
-	// Get active subscriptions for backward compatibility
-	activeSubscriptions, err := model.GetAllActivePublicUserSubscriptions(userId)
-	if err != nil {
-		activeSubscriptions = []model.PublicSubscriptionSummary{}
+		common.ApiError(c, err)
+		return
 	}
 	planIds := make([]int, 0, len(allSubscriptions))
 	for _, item := range allSubscriptions {
@@ -138,13 +133,12 @@ func GetSubscriptionSelf(c *gin.Context) {
 	}
 	planTitles, err := model.GetSubscriptionPlanTitles(planIds)
 	if err != nil {
-		planTitles = map[int]string{}
+		common.ApiError(c, err)
+		return
 	}
-
 	common.ApiSuccess(c, gin.H{
 		"billing_preference": pref,
-		"subscriptions":      activeSubscriptions, // all active subscriptions
-		"all_subscriptions":  allSubscriptions,    // all subscriptions including expired
+		"subscriptions":      allSubscriptions,
 		"plan_titles":        planTitles,
 	})
 }
@@ -179,7 +173,7 @@ func publicSubscriptionPlanDTO(plan model.SubscriptionPlan) PublicSubscriptionPl
 		AllowWalletOverflow:     allowWalletOverflow,
 		MaxPurchasePerUser:      plan.MaxPurchasePerUser,
 		RepeatPurchaseMode:      plan.RepeatPurchaseMode,
-		EntitlementGroup:        plan.EntitlementGroup,
+		QuotaScope:              plan.QuotaScope,
 		GrantGroups:             plan.GrantGroups,
 		UpgradeGroup:            plan.UpgradeGroup,
 		DowngradeGroup:          plan.DowngradeGroup,
@@ -410,7 +404,7 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 			"max_purchase_per_user":      req.Plan.MaxPurchasePerUser,
 			"repeat_purchase_mode":       req.Plan.RepeatPurchaseMode,
 			"total_amount":               req.Plan.TotalAmount,
-			"entitlement_group":          req.Plan.EntitlementGroup,
+			"quota_scope":                req.Plan.QuotaScope,
 			"upgrade_group":              req.Plan.UpgradeGroup,
 			"downgrade_group":            req.Plan.DowngradeGroup,
 			"quota_reset_period":         req.Plan.QuotaResetPeriod,
@@ -467,6 +461,7 @@ func AdminUpdateSubscriptionPlanStatus(c *gin.Context) {
 }
 
 type AdminBindSubscriptionRequest struct {
+	Revision       string `json:"revision"`
 	UserId         int    `json:"user_id"`
 	PlanId         int    `json:"plan_id"`
 	ApplyMode      string `json:"apply_mode"`
@@ -480,22 +475,22 @@ func subscriptionAuditSnapshot(sub *model.UserSubscription) map[string]interface
 		return nil
 	}
 	return map[string]interface{}{
-		"subscription_id":   sub.Id,
-		"status":            sub.Status,
-		"start_time":        sub.StartTime,
-		"end_time":          sub.EndTime,
-		"amount_total":      sub.AmountTotal,
-		"amount_used":       sub.AmountUsed,
-		"next_reset_time":   sub.NextResetTime,
-		"allocation_count":  sub.AllocationCount,
-		"entitlement_group": sub.EntitlementGroup,
-		"grant_groups":      sub.GrantGroups,
+		"subscription_id":  sub.Id,
+		"status":           sub.Status,
+		"start_time":       sub.StartTime,
+		"end_time":         sub.EndTime,
+		"amount_total":     sub.AmountTotal,
+		"amount_used":      sub.AmountUsed,
+		"next_reset_time":  sub.NextResetTime,
+		"allocation_count": sub.AllocationCount,
+		"quota_scope":      sub.QuotaScope,
+		"grant_groups":     sub.GrantGroups,
 	}
 }
 
 // handleAdminSubscriptionApply applies one admin grant and records both user and management audit logs.
-func handleAdminSubscriptionApply(c *gin.Context, userId int, planId int, applyMode string, activationMode string, quantity int) {
-	result, err := model.AdminBindSubscriptionWithOptions(userId, planId, applyMode, activationMode, quantity)
+func handleAdminSubscriptionApply(c *gin.Context, userId int, planId int, applyMode string, activationMode string, quantity int, revision string) {
+	result, err := model.AdminBindSubscriptionWithOptions(userId, planId, applyMode, activationMode, quantity, false, revision)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -553,7 +548,7 @@ func AdminBindSubscription(c *gin.Context) {
 		common.ApiErrorMsg(c, err.Error())
 		return
 	}
-	handleAdminSubscriptionApply(c, req.UserId, req.PlanId, req.ApplyMode, req.ActivationMode, quantity)
+	handleAdminSubscriptionApply(c, req.UserId, req.PlanId, req.ApplyMode, req.ActivationMode, quantity, req.Revision)
 }
 
 // ---- Admin: user subscription management ----
@@ -577,6 +572,7 @@ func AdminListUserSubscriptions(c *gin.Context) {
 }
 
 type AdminCreateUserSubscriptionRequest struct {
+	Revision       string `json:"revision"`
 	PlanId         int    `json:"plan_id"`
 	ApplyMode      string `json:"apply_mode"`
 	ActivationMode string `json:"activation_mode"`
@@ -643,7 +639,7 @@ func AdminCreateUserSubscription(c *gin.Context) {
 		common.ApiErrorMsg(c, err.Error())
 		return
 	}
-	handleAdminSubscriptionApply(c, userId, req.PlanId, req.ApplyMode, req.ActivationMode, quantity)
+	handleAdminSubscriptionApply(c, userId, req.PlanId, req.ApplyMode, req.ActivationMode, quantity, req.Revision)
 }
 
 // AdminUpdateUserSubscription updates one user subscription and records its before/after state.
@@ -786,4 +782,69 @@ func AdminDeleteUserSubscription(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, nil)
+}
+
+// AdminListUnfulfilledSubscriptionOrders lists confirmed payments needing attention.
+func AdminListUnfulfilledSubscriptionOrders(c *gin.Context) {
+	page := common.GetPageQuery(c)
+	query := model.DB.Model(&model.SubscriptionOrder{}).
+		Where("status IN ?", []string{model.SubscriptionOrderPaid, model.SubscriptionOrderReview, model.SubscriptionOrderUnverified})
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	orders := make([]model.SubscriptionOrder, 0)
+	if err := query.Omit("provider_payload", "terms").Order("paid_at desc, id desc").
+		Offset(page.GetStartIdx()).Limit(page.GetPageSize()).Find(&orders).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	page.SetTotal(int(total))
+	page.SetItems(orders)
+	common.ApiSuccess(c, page)
+}
+
+func AdminRetrySubscriptionOrder(c *gin.Context) {
+	tradeNo := strings.TrimSpace(c.Param("trade_no"))
+	order := model.GetSubscriptionOrderByTradeNo(tradeNo)
+	if order == nil || order.Status != model.SubscriptionOrderPaid {
+		common.ApiErrorMsg(c, "没有可重新发放的已付款订阅订单")
+		return
+	}
+	if _, ok := getManagedUser(c, order.UserId); !ok {
+		return
+	}
+	if err := model.FulfillPaidSubscriptionOrder(tradeNo); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAuditFor(c, order.UserId, "subscription.order_retry", map[string]any{"trade_no": tradeNo})
+	common.ApiSuccess(c, nil)
+}
+
+func AdminPreviewUserSubscription(c *gin.Context) {
+	if !requirePaymentCompliance(c) {
+		return
+	}
+	userId, _ := strconv.Atoi(c.Param("id"))
+	if _, ok := getManagedUser(c, userId); !ok {
+		return
+	}
+	var req AdminCreateUserSubscriptionRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.PlanId <= 0 {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	quantity, err := resolveAdminSubscriptionQuantity(req.Quantity)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	result, err := model.AdminBindSubscriptionWithOptions(userId, req.PlanId, req.ApplyMode, req.ActivationMode, quantity, true, "")
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, result)
 }
