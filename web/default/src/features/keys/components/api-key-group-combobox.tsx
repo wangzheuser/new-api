@@ -181,7 +181,7 @@ export function ApiKeyGroupCombobox({
               {filteredOptions.map((option) => (
                 <CommandItem
                   key={option.value}
-                  value={option.value}
+                  value={option.value || option.label}
                   onSelect={() => handleSelect(option.value)}
                   className='data-[selected=true]:bg-muted items-start gap-3 rounded-lg px-3 py-3 transition-colors'
                 >

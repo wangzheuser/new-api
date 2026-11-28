@@ -617,9 +617,24 @@ export function UserSubscriptionsDialog(props: Props) {
                           {t('Allocation count')}:{' '}
                           {Math.max(1, Number(sub.allocation_count || 1))}
                         </div>
-                        {sub.grant_groups.filter(Boolean).map((group) => (
-                          <GroupBadge key={group} group={group} />
-                        ))}
+                        {sub.upgrade_group && (
+                          <div className='mt-1 flex flex-wrap items-center gap-1.5 text-xs'>
+                            <span className='text-muted-foreground'>
+                              {t('Upgrade Group')}
+                            </span>
+                            <GroupBadge group={sub.upgrade_group} />
+                          </div>
+                        )}
+                        {sub.grant_groups.length > 0 && (
+                          <div className='mt-1 flex flex-wrap items-center gap-1.5 text-xs'>
+                            <span className='text-muted-foreground'>
+                              {t('Benefit Groups')}
+                            </span>
+                            {sub.grant_groups.filter(Boolean).map((group) => (
+                              <GroupBadge key={group} group={group} />
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )
                   },

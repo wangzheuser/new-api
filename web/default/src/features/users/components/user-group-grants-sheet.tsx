@@ -140,8 +140,11 @@ export function UserGroupGrantsSheet(props: Props) {
   }, [props.open, loadData, invalidateLoad])
 
   const selectableGroups = useMemo(
-    () => groupOptions.filter((group) => group !== data?.base_group),
-    [data?.base_group, groupOptions]
+    () =>
+      groupOptions.filter(
+        (group) => group !== data?.base_group && group !== data?.current_group
+      ),
+    [data?.base_group, data?.current_group, groupOptions]
   )
 
   /** Adds the first group not already present in the editable list. */
@@ -218,49 +221,41 @@ export function UserGroupGrantsSheet(props: Props) {
           <SideDrawerSection>
             <SideDrawerSectionHeader
               title={t('Current access')}
-              description={t(
-                'The base group, system-inherited groups, and active benefits can all be selected when creating an API key.'
-              )}
               icon={<Gift className='size-4' />}
               iconTone='info'
             />
-            {loading ? (
+            {loading && (
               <p className='text-muted-foreground text-sm'>{t('Loading...')}</p>
-            ) : (
+            )}
+            {ready && (
               <div className='grid gap-3 sm:grid-cols-2'>
                 <div className='border-border/60 rounded-lg border p-3'>
                   <div className='text-muted-foreground mb-2 text-xs'>
-                    {t('Base Group')}
+                    {t('Current User Group')}
                   </div>
-                  <GroupBadge group={data?.base_group} />
-                  {data?.current_group &&
+                  <GroupBadge group={data.current_group ?? data.base_group} />
+                  {data.current_group &&
                     data.current_group !== data.base_group && (
-                      <div className='mt-2 flex items-center gap-2 text-xs'>
-                        {t('Upgrade Group')}{' '}
-                        <GroupBadge group={data.current_group} />
+                      <div className='text-muted-foreground mt-1 text-xs'>
+                        {t('Subscription Upgrade')}
                       </div>
                     )}
                 </div>
                 <div className='border-border/60 rounded-lg border p-3'>
                   <div className='text-muted-foreground mb-2 text-xs'>
-                    {t('Effective Groups')}
+                    {t('Benefit Groups')}
                   </div>
                   <div className='flex flex-wrap gap-1.5'>
-                    {(data?.effective_groups || []).map((group) => (
+                    {(data.benefit_groups || []).map((group) => (
                       <GroupBadge key={group} group={group} />
                     ))}
+                    {!data.benefit_groups?.length && (
+                      <span className='text-muted-foreground text-sm'>
+                        {t('None')}
+                      </span>
+                    )}
                   </div>
                 </div>
-              </div>
-            )}
-            {ready && data.system_groups.length > 0 && (
-              <div className='mt-3 flex flex-wrap items-center gap-1.5'>
-                <span className='text-muted-foreground text-xs'>
-                  {t('System-inherited groups')}
-                </span>
-                {data.system_groups.map((group) => (
-                  <GroupBadge key={group} group={group} />
-                ))}
               </div>
             )}
             {!loading && !ready && (
@@ -398,7 +393,8 @@ export function UserGroupGrantsSheet(props: Props) {
                         type='button'
                         variant='ghost'
                         size='icon'
-                        aria-label={t('Delete')}
+                        aria-label={t('Remove manual grant')}
+                        title={t('Remove manual grant')}
                         onClick={() =>
                           setGrants((current) =>
                             current.filter(
@@ -434,9 +430,9 @@ export function UserGroupGrantsSheet(props: Props) {
                     key={subscription.subscription_id}
                     className='border-border/60 rounded-lg border p-3'
                   >
-                    <div className='mb-2 flex items-center justify-between gap-3 text-sm'>
+                    <div className='mb-2 flex flex-wrap items-center justify-between gap-2 text-sm'>
                       <span className='font-medium'>
-                        {t('Plan')} #{subscription.plan_id}
+                        {t('Subscription')} #{subscription.subscription_id}
                       </span>
                       <span className='text-muted-foreground text-xs'>
                         {formatTimestamp(subscription.start_time)} –{' '}

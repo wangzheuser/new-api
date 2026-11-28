@@ -493,6 +493,7 @@ export interface UserSubscriptionOverview {
   allocation_count: number
   next_reset_time: number
   benefit_groups: string[]
+  upgrade_group?: string
   allow_wallet_overflow: boolean
 }
 
@@ -504,6 +505,8 @@ export interface AdminUserOverview {
   role: number
   status: number
   base_group: string
+  current_group?: string
+  benefit_groups?: string[]
   effective_groups: string[]
   quota: number
   used_quota: number

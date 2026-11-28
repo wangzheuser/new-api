@@ -47,6 +47,7 @@ export const userSchema = z.object({
   used_quota: z.number(),
   request_count: z.number(),
   group: z.string(),
+  current_group: z.string().optional(),
   aff_code: z.string().optional(),
   aff_count: z.number().optional(),
   aff_quota: z.number().optional(),
@@ -170,6 +171,7 @@ export interface UserGroupGrantData {
   manual_grants: UserGroupGrant[]
   subscription_grants: SubscriptionGroupGrant[]
   effective_groups: string[]
+  benefit_groups?: string[]
 }
 
 export interface ReplaceUserGroupGrantsPayload {

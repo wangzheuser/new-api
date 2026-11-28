@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,6 +33,7 @@ type adminUserSubscriptionOverview struct {
 	AllocationCount     int64            `json:"allocation_count"`
 	NextResetTime       int64            `json:"next_reset_time"`
 	BenefitGroups       model.GroupNames `json:"benefit_groups"`
+	UpgradeGroup        string           `json:"upgrade_group"`
 	AllowWalletOverflow bool             `json:"allow_wallet_overflow"`
 }
 
@@ -43,6 +45,8 @@ type adminUserOverview struct {
 	Role                   int                             `json:"role"`
 	Status                 int                             `json:"status"`
 	BaseGroup              string                          `json:"base_group"`
+	CurrentGroup           string                          `json:"current_group"`
+	BenefitGroups          model.GroupNames                `json:"benefit_groups"`
 	EffectiveGroups        []string                        `json:"effective_groups"`
 	Quota                  int                             `json:"quota"`
 	UsedQuota              int                             `json:"used_quota"`
@@ -57,12 +61,13 @@ type adminUserOverview struct {
 }
 
 // buildAdminUserOverview creates the explicit, read-only response used by the log user dialog.
-func buildAdminUserOverview(user *model.User, subscriptions []model.SubscriptionSummary, planTitles map[int]string, effectiveGroups []string, now int64) adminUserOverview {
+func buildAdminUserOverview(user *model.User, subscriptions []model.SubscriptionSummary, planTitles map[int]string, effectiveGroups []string, manualGroups []string, now int64) adminUserOverview {
 	activeSubscriptions := make([]adminUserSubscriptionOverview, 0)
 	scheduledSubscriptions := make([]adminUserSubscriptionOverview, 0)
 	if effectiveGroups == nil {
 		effectiveGroups = make([]string, 0)
 	}
+	grantedGroups := slices.Clone(manualGroups)
 	for _, summary := range subscriptions {
 		if summary.Subscription == nil {
 			continue
@@ -81,10 +86,12 @@ func buildAdminUserOverview(user *model.User, subscriptions []model.Subscription
 			AllocationCount:     subscription.AllocationCount,
 			NextResetTime:       subscription.NextResetTime,
 			BenefitGroups:       subscription.GrantGroups,
+			UpgradeGroup:        subscription.UpgradeGroup,
 			AllowWalletOverflow: subscription.AllowWalletOverflow,
 		}
 		if subscription.Status == "active" && subscription.StartTime <= now && subscription.EndTime > now {
 			activeSubscriptions = append(activeSubscriptions, view)
+			grantedGroups = append(grantedGroups, subscription.GrantGroups...)
 			continue
 		}
 		if subscription.Status == "scheduled" && subscription.StartTime > now && subscription.EndTime > now {
@@ -113,6 +120,8 @@ func buildAdminUserOverview(user *model.User, subscriptions []model.Subscription
 		Role:              user.Role,
 		Status:            user.Status,
 		BaseGroup:         user.Group,
+		CurrentGroup:      user.EffectiveBaseGroup(),
+		BenefitGroups:     availableBenefitGroups(grantedGroups, effectiveGroups),
 		EffectiveGroups:   effectiveGroups,
 		Quota:             user.Quota,
 		UsedQuota:         user.UsedQuota,
@@ -188,5 +197,10 @@ func GetAdminUserOverview(c *gin.Context) {
 			effectiveGroups = append(effectiveGroups, group)
 		}
 	}
-	common.ApiSuccess(c, buildAdminUserOverview(user, subscriptions, planTitles, effectiveGroups, now))
+	manualGroups, err := model.GetActiveUserManualGrantGroups(userId, now)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, buildAdminUserOverview(user, subscriptions, planTitles, effectiveGroups, manualGroups, now))
 }

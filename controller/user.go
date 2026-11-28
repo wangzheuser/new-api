@@ -345,6 +345,19 @@ func Register(c *gin.Context) {
 	return
 }
 
+type adminUserWithCurrentGroup struct {
+	*model.User
+	CurrentGroup string `json:"current_group"`
+}
+
+func adminUsersWithCurrentGroup(users []*model.User) []adminUserWithCurrentGroup {
+	items := make([]adminUserWithCurrentGroup, 0, len(users))
+	for _, user := range users {
+		items = append(items, adminUserWithCurrentGroup{User: user, CurrentGroup: user.EffectiveBaseGroup()})
+	}
+	return items
+}
+
 func GetAllUsers(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
 	sortOptions := model.NewUserSortOptions(c.Query("sort_by"), c.Query("sort_order"))
@@ -355,7 +368,7 @@ func GetAllUsers(c *gin.Context) {
 	}
 
 	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(users)
+	pageInfo.SetItems(adminUsersWithCurrentGroup(users))
 
 	common.ApiSuccess(c, pageInfo)
 	return
@@ -421,7 +434,7 @@ func SearchUsers(c *gin.Context) {
 	}
 
 	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(users)
+	pageInfo.SetItems(adminUsersWithCurrentGroup(users))
 	common.ApiSuccess(c, pageInfo)
 	return
 }
@@ -450,7 +463,7 @@ func GetUser(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    user,
+		"data":    adminUserWithCurrentGroup{User: user, CurrentGroup: user.EffectiveBaseGroup()},
 	})
 	return
 }

@@ -231,20 +231,24 @@ export function useUsersColumns(): ColumnDef<User>[] {
     },
     {
       accessorKey: 'group',
-      header: t('Group'),
+      header: t('Current User Group'),
       cell: ({ row }) => {
-        const group = row.getValue('group') as string
+        const user = row.original
+        const group = user.current_group ?? user.group
         return (
-          <BadgeCell>
-            <GroupBadge group={group} />
-          </BadgeCell>
+          <div className='flex min-w-0 flex-col items-start gap-0.5'>
+            <BadgeCell>
+              <GroupBadge group={group} />
+            </BadgeCell>
+            {group !== user.group && (
+              <span className='text-muted-foreground text-xs'>
+                {t('Subscription Upgrade')}
+              </span>
+            )}
+          </div>
         )
       },
-      filterFn: (row, id, value) => {
-        const group = String(row.getValue(id) || t('User Group')).toLowerCase()
-        const searchValue = String(value).toLowerCase()
-        return group.includes(searchValue)
-      },
+      enableSorting: false,
       size: 140,
       meta: { mobileOrder: 30 },
     },

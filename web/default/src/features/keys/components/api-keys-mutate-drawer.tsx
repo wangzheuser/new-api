@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, KeyRound, Settings2, WalletCards } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useForm, type SubmitErrorHandler } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -119,14 +119,17 @@ export function ApiKeysMutateDrawer({
   })
 
   const models = modelsData?.data || []
-  const groupsRaw = groupsData?.data || {}
-  const groups: ApiKeyGroupOption[] = Object.entries(groupsRaw).map(
-    ([key, info]) => ({
-      value: key,
-      label: key,
-      desc: info.desc || key,
-      ratio: info.ratio,
-    })
+  const groups = useMemo<ApiKeyGroupOption[]>(
+    () => [
+      { value: '', label: t('Follow Current User Group') },
+      ...Object.entries(groupsData?.data || {}).map(([key, info]) => ({
+        value: key,
+        label: key === 'auto' ? t('Auto') : key,
+        desc: info.desc || key,
+        ratio: info.ratio,
+      })),
+    ],
+    [groupsData?.data, t]
   )
   const backendHasAuto = groups.some((g) => g.value === 'auto')
   const schema = getApiKeyFormSchema(t)
@@ -162,19 +165,19 @@ export function ApiKeysMutateDrawer({
   // New keys need a valid initial group; existing keys retain a revoked group so
   // the operator can see why the key stopped working and choose a replacement.
   useEffect(() => {
-    if (isUpdate || groups.length === 0) return
+    if (isUpdate || !groupsData?.success) return
     const currentGroup = form.getValues('group')
     if (currentGroup && !groups.some((g) => g.value === currentGroup)) {
       const fallback =
         groups.find((g) => g.value === 'default')?.value ??
-        groups[0]?.value ??
+        groups.find((g) => g.value !== '')?.value ??
         ''
       form.setValue('group', fallback)
       if (currentGroup === 'auto') {
         form.setValue('cross_group_retry', false)
       }
     }
-  }, [groups, form, isUpdate])
+  }, [groups, groupsData?.success, form, isUpdate])
 
   const onSubmit = async (data: ApiKeyFormValues) => {
     setIsSubmitting(true)

@@ -31,6 +31,7 @@ import {
   sideDrawerFormClassName,
   sideDrawerHeaderClassName,
 } from '@/components/drawer-layout'
+import { GroupBadge } from '@/components/group-badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -71,6 +72,7 @@ import {
 } from '@/lib/admin-permissions'
 import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
 import { formatQuota, parseQuotaFromDollars } from '@/lib/format'
+import { handleServerError } from '@/lib/handle-server-error'
 import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -89,7 +91,7 @@ import {
   transformFormDataToPayload,
   transformUserToFormDefaults,
 } from '../lib'
-import { type User } from '../types'
+import type { User } from '../types'
 import { UserQuotaDialog } from './user-quota-dialog'
 import { useUsers } from './users-provider'
 
@@ -110,6 +112,9 @@ export function UsersMutateDrawer({
   const currentUser = useAuthStore((s) => s.auth.user)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [quotaDialogOpen, setQuotaDialogOpen] = useState(false)
+  const [loadedUser, setLoadedUser] = useState<User>()
+  const groupSnapshot =
+    loadedUser?.id === currentRow?.id ? loadedUser : currentRow
 
   // Fetch groups
   const { data: groupsData } = useQuery({
@@ -134,16 +139,24 @@ export function UsersMutateDrawer({
 
   // Load existing data when updating
   useEffect(() => {
+    let active = true
     if (open && isUpdate && currentRow) {
-      // For update, fetch fresh data
-      getUser(currentRow.id).then((result) => {
-        if (result.success && result.data) {
-          form.reset(transformUserToFormDefaults(result.data))
-        }
-      })
+      void getUser(currentRow.id)
+        .then((result) => {
+          if (active && result.success && result.data) {
+            setLoadedUser(result.data)
+            form.reset(transformUserToFormDefaults(result.data))
+          }
+        })
+        .catch((error: unknown) => {
+          if (active) handleServerError(error)
+        })
     } else if (open && !isUpdate) {
       // For create, reset to defaults
       form.reset(USER_FORM_DEFAULT_VALUES)
+    }
+    return () => {
+      active = false
     }
   }, [open, isUpdate, currentRow, form])
 
@@ -195,7 +208,7 @@ export function UsersMutateDrawer({
               : t(ERROR_MESSAGES.CREATE_FAILED))
         )
       }
-    } catch (_error) {
+    } catch {
       toast.error(t(ERROR_MESSAGES.UNEXPECTED))
     } finally {
       setIsSubmitting(false)
@@ -206,6 +219,7 @@ export function UsersMutateDrawer({
     if (!currentRow) return
     const result = await getUser(currentRow.id)
     if (result.success && result.data) {
+      setLoadedUser(result.data)
       form.reset(transformUserToFormDefaults(result.data))
     }
     triggerRefresh()
@@ -358,14 +372,12 @@ export function UsersMutateDrawer({
                     name='group'
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>{t('Group')}</FormLabel>
+                        <FormLabel>{t('Base Group')}</FormLabel>
                         <Select
-                          items={[
-                            ...groups.map((group) => ({
-                              value: group,
-                              label: group,
-                            })),
-                          ]}
+                          items={groups.map((group) => ({
+                            value: group,
+                            label: group,
+                          }))}
                           onValueChange={field.onChange}
                           value={field.value}
                         >
@@ -384,6 +396,19 @@ export function UsersMutateDrawer({
                             </SelectGroup>
                           </SelectContent>
                         </Select>
+                        <FormDescription>
+                          {t('Applies when no subscription upgrade is active.')}
+                        </FormDescription>
+                        {groupSnapshot?.current_group &&
+                          groupSnapshot.current_group !==
+                            groupSnapshot.group && (
+                            <div className='flex flex-wrap items-center gap-1.5 text-sm'>
+                              <span className='text-muted-foreground'>
+                                {t('Current User Group')}
+                              </span>
+                              <GroupBadge group={groupSnapshot.current_group} />
+                            </div>
+                          )}
                         <FormMessage />
                       </FormItem>
                     )}

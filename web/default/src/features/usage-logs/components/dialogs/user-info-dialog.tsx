@@ -97,8 +97,9 @@ function getSubscriptionSourceLabel(source: string, t: TFunction): string {
 
 /** Renders group badges while respecting the log page privacy switch. */
 function BenefitGroups(props: { groups: string[]; sensitiveVisible: boolean }) {
+  const { t } = useTranslation()
   if (props.groups.length === 0) {
-    return <span className='text-muted-foreground'>-</span>
+    return <span className='text-muted-foreground'>{t('None')}</span>
   }
   if (!props.sensitiveVisible) {
     return (
@@ -111,6 +112,47 @@ function BenefitGroups(props: { groups: string[]; sensitiveVisible: boolean }) {
         <GroupBadge key={group} group={group} />
       ))}
     </div>
+  )
+}
+
+export function UserOverviewGroupFields(props: {
+  overview: Pick<
+    AdminUserOverview,
+    'base_group' | 'current_group' | 'benefit_groups'
+  >
+  sensitiveVisible: boolean
+}) {
+  const { t } = useTranslation()
+  const currentGroup = props.overview.current_group || props.overview.base_group
+  return (
+    <>
+      <InfoItem
+        label={t('Current User Group')}
+        value={
+          <div className='space-y-1'>
+            <BenefitGroups
+              groups={currentGroup ? [currentGroup] : []}
+              sensitiveVisible={props.sensitiveVisible}
+            />
+            {currentGroup !== props.overview.base_group && (
+              <p className='text-muted-foreground text-xs'>
+                {t('Subscription Upgrade')}
+              </p>
+            )}
+          </div>
+        }
+      />
+      <InfoItem
+        label={t('Benefit Groups')}
+        className='sm:col-span-2'
+        value={
+          <BenefitGroups
+            groups={props.overview.benefit_groups || []}
+            sensitiveVisible={props.sensitiveVisible}
+          />
+        }
+      />
+    </>
   )
 }
 
@@ -188,6 +230,17 @@ function SubscriptionCard(props: {
       </div>
 
       <div className='grid gap-3 sm:grid-cols-2'>
+        {subscription.upgrade_group && (
+          <InfoItem
+            label={props.t('Upgrade Group')}
+            value={
+              <BenefitGroups
+                groups={[subscription.upgrade_group]}
+                sensitiveVisible={props.sensitiveVisible}
+              />
+            }
+          />
+        )}
         <InfoItem
           label={props.t('Benefit Groups')}
           value={
@@ -475,24 +528,9 @@ export function UserInfoDialog(props: UserInfoDialogProps) {
                   label={t('Last Login')}
                   value={formatTimestamp(overview.last_login_at)}
                 />
-                <InfoItem
-                  label={t('Base Group')}
-                  value={
-                    <BenefitGroups
-                      groups={overview.base_group ? [overview.base_group] : []}
-                      sensitiveVisible={sensitiveVisible}
-                    />
-                  }
-                />
-                <InfoItem
-                  label={t('Effective Groups')}
-                  className='sm:col-span-2'
-                  value={
-                    <BenefitGroups
-                      groups={overview.effective_groups}
-                      sensitiveVisible={sensitiveVisible}
-                    />
-                  }
+                <UserOverviewGroupFields
+                  overview={overview}
+                  sensitiveVisible={sensitiveVisible}
                 />
               </div>
               {overview.remark && (

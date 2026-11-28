@@ -268,7 +268,7 @@ export function UsersTable() {
           },
           {
             columnId: 'effectiveGroup',
-            title: t('Group'),
+            title: t('Usable Group'),
             description: t(
               'Matches all groups currently available to the user, including inherited, manually granted, and subscription groups.'
             ),

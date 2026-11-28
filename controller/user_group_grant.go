@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -43,6 +44,14 @@ type adminUserGroupGrantResponse struct {
 	ManualGrants       []adminUserGroupGrantView    `json:"manual_grants"`
 	SubscriptionGrants []subscriptionGroupGrantView `json:"subscription_grants"`
 	EffectiveGroups    []string                     `json:"effective_groups"`
+	BenefitGroups      model.GroupNames             `json:"benefit_groups"`
+}
+
+func availableBenefitGroups(grantedGroups, effectiveGroups []string) model.GroupNames {
+	benefits := model.NormalizeGroupNames(grantedGroups)
+	return slices.DeleteFunc(benefits, func(group string) bool {
+		return group == "auto" || !slices.Contains(effectiveGroups, group)
+	})
 }
 
 // getManagedUser validates the target user against the operator's role.
@@ -71,11 +80,16 @@ func buildAdminUserGroupGrantResponse(user *model.User) (*adminUserGroupGrantRes
 		return nil, err
 	}
 	manualViews := make([]adminUserGroupGrantView, 0, len(manualGrants))
+	grantedGroups := make([]string, 0, len(manualGrants))
 	for _, grant := range manualGrants {
+		active := grant.ExpiresAt == 0 || grant.ExpiresAt > now
 		manualViews = append(manualViews, adminUserGroupGrantView{
 			UserGroupGrant: grant,
-			Active:         grant.ExpiresAt == 0 || grant.ExpiresAt > now,
+			Active:         active,
 		})
+		if active {
+			grantedGroups = append(grantedGroups, grant.GroupName)
+		}
 	}
 
 	subscriptions, err := model.GetAllActiveUserSubscriptions(user.Id)
@@ -92,6 +106,7 @@ func buildAdminUserGroupGrantResponse(user *model.User) (*adminUserGroupGrantRes
 		if len(groups) == 0 {
 			continue
 		}
+		grantedGroups = append(grantedGroups, groups...)
 		subscriptionViews = append(subscriptionViews, subscriptionGroupGrantView{
 			SubscriptionId: subscription.Id,
 			PlanId:         subscription.PlanId,
@@ -128,6 +143,7 @@ func buildAdminUserGroupGrantResponse(user *model.User) (*adminUserGroupGrantRes
 		ManualGrants:       manualViews,
 		SubscriptionGrants: subscriptionViews,
 		EffectiveGroups:    effectiveGroups,
+		BenefitGroups:      availableBenefitGroups(grantedGroups, effectiveGroups),
 	}, nil
 }
 
